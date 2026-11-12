@@ -8,7 +8,6 @@ using System.Linq;
 using System.Net.WebSockets;
 using System.Reflection;
 using System.Reflection.Emit;
-using System.Text;
 using Unity.VisualScripting;
 using UnityEngine;
 using static GunScript;
@@ -73,13 +72,6 @@ public static class Body_UseItemInHand_MultiplayerPatch {
         return true;
     }
 
-    // empty charge / condition won. drop the predicted ON so ApplyData can keep state 0.
-    internal static void ClearHeldState(ushort id) {
-        if (id == 0)
-            return;
-        StateHolds.Remove(id);
-    }
-
     // the click already ran. tell the host, and hold this copy until that round trip lands.
     internal static void AnnouncePredictedUse(ushort itemId, knetid bodyNet) {
         if (Net.IsServer || (itemId == 0)) {
@@ -107,11 +99,6 @@ public static class Body_UseItemInHand_MultiplayerPatch {
 
             //OG: Body.UseItemInHand
             if (body.conscious && body.GetItem(body.handSlot) is var item && item != null && item.Stats != null && item.Stats.usable && item.Stats.usableWithLMB) {
-                // spent destroyAtZero food stays in the slot until the host frees the id.
-                // stock useAction does not check condition, so a second click would Eat again.
-                if (ItemSync.TooSpentToUse(item)) {
-                    return false;
-                }
                 // guns still skip the next health snapshot. their shots already go out on their own.
                 if (CombatStuff.ItemIsUsedForAttacking(item) && NetObjectRegistry.TryGetSyncInfoOrRegister(item.gameObject, out var si))
                     si.SetIgnoreTimeForRoundTrip();
@@ -173,15 +160,8 @@ public static class Body_UseItem_MultiplayerPatch {
         current_used_item = item;
         __state = null;
 
-        if (!Util.IsWorldGenerated()) {
-            return false;
-        }
-        if (!Net.IsRunning) {
-            return true;
-        }
-        if (item != null && item.Stats != null && item.Stats.usable && ItemSync.TooSpentToUse(item)) {
-            return false;
-        }
+        if (!Util.IsWorldGenerated()) return false;
+        if (!Net.IsRunning) return true;
 
         if (item && __instance.TryGetNetBody(out var pb) && pb.IsLocal) { // check if its local
             if (ItemSync.TryGetSyncInfo(item, out var si)) {
@@ -235,9 +215,7 @@ public static class Body_UseItem_MultiplayerPatch {
                 && KM.DistanceCheck(giver, target_nb.body, SharedMain.max_player_interaction_distance * 1.6f) 
                 && (si.item.Stats.usable || si.item.Stats.wearable) 
                 && ItemSync.CheckIfBodyReachThisItem(si, giver.body) 
-                && !CombatStuff.ItemIsUsedForAttacking(si.item)
-                // queued use requests can arrive after a one-bite food already hit 0.
-                && (si.item.Stats.wearable || !ItemSync.TooSpentToUse(si.item))
+                && !CombatStuff.ItemIsUsedForAttacking(si.item) 
             ) {
                 var useItemFunc = () => {
                     if (giver == target_nb && giver.IsLocal) {
@@ -571,6 +549,9 @@ public static class Body_Attack_MultiplayerPatch {
         var building_dmg = (be.animal ? atk.damage : atk.structuralDamage) * armstrength * ((atk.metalMoreDamage && be.metallic) ? 10f : 1f);
 
         float healthBefore = be.GetHealth();
+#if FULLGAME
+        if (be.animal) EndingGuardSync.PlayerHit(be, attacker);
+#endif
         be.SetHealth(be.GetHealth() - building_dmg);
 
         if (Net.IsRunning && be != null) {
@@ -635,13 +616,13 @@ public static class Body_Attack_MultiplayerPatch {
         }
         if (atk.unarmed) {
 
-            attacker.clawHealth -= 0.3f;
-            if (attacker.clawHealth < 20f && UnityEngine.Random.value < 0.1f) {
-                attacker.slots[slot].limb.skinHealth -= 3f;
-                attacker.slots[slot].limb.muscleHealth -= 2f;
-                attacker.slots[slot].limb.pain += 12f;
-                attacker.slots[slot].limb.bleedAmount += UnityEngine.Random.Range(0.35f, 0.85f);
-            }
+			attacker.clawHealth -= 0.3f;
+			if (attacker.clawHealth < 20f && UnityEngine.Random.value < 0.1f) {
+				attacker.slots[slot].limb.skinHealth -= 3f;
+				attacker.slots[slot].limb.muscleHealth -= 2f;
+				attacker.slots[slot].limb.pain += 12f;
+				attacker.slots[slot].limb.bleedAmount += UnityEngine.Random.Range(0.35f, 0.85f);
+			}
 
         }
         if (atk.physicalSwing) {
@@ -662,11 +643,6 @@ public static class Body_Attack_MultiplayerPatch {
     static Limb _LastHitLimb;
     static BuildingEntity _LastHitBuilding;
     static Vector2 _LastHitPos;
-    static bool _LastHitWasBlock;
-
-    // vanilla pickaxe AttackInfo.distance (Item.SetupItems). 2x so lag/lerp don't reject real hits.
-    public const float BlockHitReachReference = 5.2f;
-    public const float BlockHitMaxReach = BlockHitReachReference * 2f;
 
     class _MyAttackState {
         public float PlayerCamera_main_lastAttackCool = 0;
@@ -758,12 +734,6 @@ public static class Body_Attack_MultiplayerPatch {
         if (BodyAttack_CheckIfItWasABuilding(hit)) {
             return true;
         }
-
-        // client still lets vanilla DamageBlock run; we only latch the cell for the host packet.
-        if (hit.collider != null && hit.collider.CompareTag("BlockGround")) {
-            _LastHitPos = hit.point;
-            _LastHitWasBlock = true;
-        }
             
         // let it apply all the damages and allat
 
@@ -771,139 +741,9 @@ public static class Body_Attack_MultiplayerPatch {
     }
 
 
-    static int LabelTargetIndex(List<CodeInstruction> codes, Label label) {
-        for (int k = 0; k < codes.Count; k++) {
-            if (codes[k].labels.Contains(label))
-                return k;
-        }
-        return -1;
-    }
-
     public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator il) {
-
-        var codes = new List<CodeInstruction>(instructions);
-
-        int firstCloudCall = -1;
-        for (int k = 0; k < codes.Count; k++) {
-            if ((codes[k].opcode == OpCodes.Call || codes[k].opcode == OpCodes.Callvirt) &&
-                codes[k].operand is MethodInfo cloud && cloud.Name == "CreateCloudSmall" && cloud.DeclaringType == typeof(Body)) {
-                firstCloudCall = k;
-                break;
-            }
-        }
-
-        // Sorry, I sent moffee this code
-        // Basically, the fullgame now does another raycast and aims your attack (auto-aim) towards the closest enemy in range
-        // So, the ILCode gets a bit scrambled here
-        int loop_entry = -1; // the br to the head
-        int loop_head = -1;
-        int loop_backedge = -1;
-        int found_loops = 0;
-        for (int k = 2; k < codes.Count && loop_head < 0; k++) {
-            if (codes[k].opcode == OpCodes.Br && codes[k].operand is Label && codes[k - 1].opcode == OpCodes.Stloc_S &&
-                (codes[k - 2].opcode == OpCodes.Ldc_I4_0 || codes[k - 2].opcode == OpCodes.Ldc_I4_S || codes[k - 2].opcode == OpCodes.Ldc_I4)) {
-                int head = LabelTargetIndex(codes, (Label)codes[k].operand);
-                if (head < 0 || head > k)
-                    continue;
-
-                // i.e., does this raycast hit, and where does it jump back from?
-                bool raycastLoop = false;
-                int backedge = -1;
-                for (int b = head; b < codes.Count; b++) {
-                    if (codes[b].opcode == OpCodes.Stloc_S && codes[b].operand is LocalBuilder hl && hl.LocalType == typeof(RaycastHit2D))
-                        raycastLoop = true;
-                    if ((codes[b].opcode == OpCodes.Blt || codes[b].opcode == OpCodes.Blt_S || codes[b].opcode == OpCodes.Blt_Un || codes[b].opcode == OpCodes.Blt_Un_S) &&
-                        codes[b].operand is Label back && LabelTargetIndex(codes, back) == head) {
-                        backedge = b;
-                        break;
-                    }
-                }
-                if (!raycastLoop || backedge < 0)
-                    continue;
-
-                found_loops++;
-                if (found_loops == 2) {
-                    loop_entry = k;
-                    loop_head = head;
-                    loop_backedge = backedge;
-                }
-            }
-        }
-
-        int realhit_check_pos = -1; // Loop storage
-        for (int k = loop_head; k > 0 && loop_head >= 0 && k < loop_backedge && realhit_check_pos < 0; k++) {
-            if (codes[k].opcode == OpCodes.Stloc_S && codes[k].operand is LocalBuilder hl && hl.LocalType == typeof(RaycastHit2D))
-                realhit_check_pos = k;
-        }
-        int rayhitresult_pos = -1; // First use of the current hit (first hit)
-        for (int k = realhit_check_pos + 1; k < loop_backedge && realhit_check_pos >= 0 && rayhitresult_pos < 0; k++) {
-            if (codes[k].opcode == OpCodes.Ldloca_S && Equals(codes[k].operand, codes[realhit_check_pos].operand))
-                rayhitresult_pos = k;
-        }
-
-        // Skip rest
-        int current_hit_skip_target = -1;
-        for (int m = realhit_check_pos + 1; m < loop_backedge && current_hit_skip_target < 0; m++) {
-            if (codes[m].operand is Label l2 && LabelTargetIndex(codes, l2) > m && LabelTargetIndex(codes, l2) <= loop_backedge &&
-                (codes[m].opcode == OpCodes.Brfalse || codes[m].opcode == OpCodes.Brfalse_S || codes[m].opcode == OpCodes.Brtrue ||
-                 codes[m].opcode == OpCodes.Brtrue_S || codes[m].opcode == OpCodes.Br || codes[m].opcode == OpCodes.Br_S)) {
-                current_hit_skip_target = m;
-            }
-        }
-
-        // Finish loop
-        int continuejump_pos = -1;
-        for (int k = loop_backedge + 1; k < codes.Count && continuejump_pos < 0; k++) {
-            if (codes[k].opcode == OpCodes.Brfalse || codes[k].opcode == OpCodes.Brfalse_S ||
-                codes[k].opcode == OpCodes.Brtrue || codes[k].opcode == OpCodes.Brtrue_S ||
-                codes[k].opcode == OpCodes.Br || codes[k].opcode == OpCodes.Br_S) {
-                continuejump_pos = k;
-            }
-        }
-
-        if (realhit_check_pos < 0 || rayhitresult_pos < 0 || loop_head < 0 || current_hit_skip_target < 0 || continuejump_pos < 0) {
-            // Loop markers not found
-            return codes;
-        }
-
-        if (log.verbose) log.l($"Body.Attack TRANSPILER found the thing check {realhit_check_pos}");
-
-        {
-            //ldloc hit ; dup ; call DidHitSomething ; brfalse <end>
-            //pop          ; ldsfld breakTheAttackLoop ; brfalse <skip hit> ; br <stop loop>
-
-            var skipHitLabel = (Label)codes[current_hit_skip_target].operand; 
-            var stopLoopLabel = (Label)codes[continuejump_pos].operand; 
-
-            var injected = new List<CodeInstruction>();
-
-            var loadHit = new CodeInstruction(OpCodes.Ldloc_S, codes[realhit_check_pos].operand);
-            loadHit.MoveLabelsFrom(codes[rayhitresult_pos]);
-            injected.Add(loadHit);
-            injected.Add(new CodeInstruction(OpCodes.Dup));
-
-            injected.Add(new CodeInstruction(OpCodes.Call,
-                AccessTools.Method(typeof(Body_Attack_MultiplayerPatch), nameof(Body_Attack_MultiplayerPatch.BodyAttack_DidHitSomething))));
-
-            var endofpatch_label = il.DefineLabel();
-            injected.Add(new CodeInstruction(OpCodes.Brfalse_S, endofpatch_label));
-            injected.Add(new CodeInstruction(OpCodes.Pop));
-            injected.Add(new CodeInstruction(OpCodes.Ldsfld, AccessTools.Field(typeof(Body_Attack_MultiplayerPatch), nameof(breakTheAttackLoop))));
-            injected.Add(new CodeInstruction(OpCodes.Brfalse, skipHitLabel));
-            injected.Add(new CodeInstruction(OpCodes.Br, stopLoopLabel));
-
-            codes.InsertRange(rayhitresult_pos, injected);
-            codes[rayhitresult_pos + injected.Count].labels.Add(endofpatch_label);
-        }
-
-        if (log.verbose) {
-            log.l($"Body.Attack patched at {rayhitresult_pos}, hit load {realhit_check_pos}, continue {continuejump_pos}");
-        }
-
-        log.l($"TRANSPILER: Body.Attack TRANSPILER SUCCESS :) ");
-        return codes;
+        return PatternTranspilers.BodyAttack(instructions, il);
     }
-
 
 
 
@@ -1009,7 +849,7 @@ public static class Body_Attack_MultiplayerPatch {
                         
                     } else if (_LastHitBuilding != null) {
 
-                        float totaldmg = DamageBuilding(__instance, __state.atk, _LastHitBuilding, __state.atkpwr, true, _LastHitPos);
+                        var totaldmg = DamageBuilding(__instance, __state.atk, _LastHitBuilding, __state.atkpwr, true, _LastHitPos);
                         WorldGeneration.CreateDamageNumber((Vector2)_LastHitBuilding.transform.position + Vector2.up * 2, (int)totaldmg);
 
                         if (Net.IsClient && NetObjectRegistry.TryGetSyncInfo(_LastHitBuilding, out  var b_si)) {
@@ -1035,8 +875,6 @@ public static class Body_Attack_MultiplayerPatch {
                                 victim_si.relaxed_combat_sync = true; 
                                 victim_si.SetIgnoreTimeForRoundTrip();
                             }
-                        } else if (_LastHitWasBlock) {
-                            victim_netid = AnyObjectNetId.ForBlockHit();
                         }
                     }
 
@@ -1085,7 +923,6 @@ public static class Body_Attack_MultiplayerPatch {
         }
         _LastHitBuilding = null;
         _LastHitLimb = null;
-        _LastHitWasBlock = false;
     }
     
     
@@ -1174,33 +1011,7 @@ public static class Body_Attack_MultiplayerPatch {
 
             bool didhitconfirmed = false;
 
-            if (hitobj.IsBlockHit()) {
-                // client reported the block cell via hitPos. don't re-raycast (chunk sleep / pose lag miss).
-                Body_Attack_MultiplayerPatch.ForceOnlyStaminaUse = true;
-                Vector2 applyAt = hitPos;
-                if (applyAt.IsFinite()
-                    && (KM.DistanceCheck(limb1pos, applyAt, BlockHitMaxReach)
-                        || KM.DistanceCheck((Vector2)plr.body.transform.position, applyAt, BlockHitMaxReach))
-                ) {
-                    // vanilla offsets the hit a hair along the swing so edge hits land in the right cell
-                    var blockPos = WorldGeneration.world.WorldToBlockPos(applyAt + atkdir * 0.05f);
-                    if (WorldGeneration.world.GetBlock(blockPos) == 0)
-                        blockPos = WorldGeneration.world.WorldToBlockPos(applyAt);
-                    if (WorldGeneration.world.GetBlock(blockPos) != 0) {
-                        float blockDmg = atkinfo.structuralDamage * attackpower;
-                        WorldGenerationDamageBlockAnnouncePatch.cur_damaging_netbody = pb;
-                        try {
-                            WorldGeneration.world.DamageBlock(blockPos, blockDmg, true, atkinfo.metalMoreDamage);
-                        } finally {
-                            WorldGenerationDamageBlockAnnouncePatch.cur_damaging_netbody = null;
-                        }
-                        WorldGeneration.CreateDamageNumber(
-                            (Vector2)WorldGeneration.world.BlockToWorldPos(blockPos) + Vector2.up * 2f,
-                            (int)blockDmg);
-                        didhitconfirmed = true;
-                    }
-                }
-            } else if (hitobj.IsNothing()) { // legacy: static buildings/blocks without a block id
+            if (hitobj.IsNothing()) { // At most we hit something static
                 Body_Attack_MultiplayerPatch.StaticHitValidation = true; // client doesnt tell if they hit static buildings or blocks, server can figure it out on their own
             } else if (hitobj.TryGetLimb(out var victimlimb)) {
                 Body_Attack_MultiplayerPatch.ForceOnlyStaminaUse = true; // we know the hit
@@ -1252,7 +1063,7 @@ public static class Body_Attack_MultiplayerPatch {
                         hitPos = rb2d.ClosestPoint(hitPos);
                     }
 
-                    float totaldmg = DamageBuilding(plr.body, atkinfo, building_si.building, attackpower, true, hitPos);
+                    var totaldmg = DamageBuilding(plr.body, atkinfo, building_si.building, attackpower, true, hitPos);
                     didhitconfirmed = true;
 
 
@@ -1445,10 +1256,10 @@ public class TrackerGunScript : BaseComponentTracker<GunScript> {
     public Body body {
         get {
             return bgo.GetBody();
-        }
+		}
         set {
             bgo.body = value;
-        }
+		}
     }
 
     public bool isEquipped {
@@ -2230,6 +2041,9 @@ public static class TurretScript_Shoot_MultiplayerPatch {
         log.l($"Shoot_DidHitABody limb: {limb}  rayhit:{hit2D.collider.name}");
 #endif
         if (LastActiveShooter == null) { // a turret is the shooter
+#if FULLGAME
+            if (EndingGuardSync.ServerShotHit(body)) return false;
+#endif
 #if DEBUG
             Plugin.log.LogDebug($"Turret hit {limb}");
 #endif
@@ -2296,49 +2110,49 @@ public static class TurretScript_Shoot_MultiplayerPatch {
         
         var hitLimbsDuplicateCount = hitLimbs.GroupBy(x => x, ReferenceEqualityComparer.Instance).ToDictionary(a => (Limb)a.Key, b => b.Count());
 
-        Dictionary<NetBody, float> plrdamages = new();
-        foreach (var limb in hitLimbs) {
-            var dmg = TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(limb, gst, true);
+		Dictionary<NetBody, float> plrdamages = new();
+		foreach (var limb in hitLimbs) {
+			var dmg = TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(limb, gst, true);
 
-            if (limb.TryGetNetBody(out var nb)) {
-                if (!plrdamages.ContainsKey(nb)) {
-                    plrdamages[nb] = 0;
-                }
-                plrdamages[nb] += dmg;
-            }
-        }
-        {
-            List<Body> amputatedonplrs = new();
-            foreach (var limbcount in hitLimbsDuplicateCount) {
-                var limb = limbcount.Key;
+			if (limb.TryGetNetBody(out var nb)) {
+				if (!plrdamages.ContainsKey(nb)) {
+					plrdamages[nb] = 0;
+				}
+				plrdamages[nb] += dmg;
+			}
+		}
+		{
+			List<Body> amputatedonplrs = new();
+			foreach (var limbcount in hitLimbsDuplicateCount) {
+				var limb = limbcount.Key;
 
 #if !RELEASE
-                if (log.verbose) log.l($"{limb} WAS HIT {hitLimbsDuplicateCount[limb]} TIMES ");
+				if (log.verbose) log.l($"{limb} WAS HIT {hitLimbsDuplicateCount[limb]} TIMES ");
 #endif
 
-                if (amputatedonplrs.Contains(limb.body) || (!Multiplayer.rules.PVPCombatDismember && limb.body.alive)) {
-                    continue;
-                }
+				if (amputatedonplrs.Contains(limb.body) || (!Multiplayer.rules.PVPCombatDismember && limb.body.alive)) {
+					continue;
+				}
 
-                {
-                    if (
+				{
+					if (
                         limbcount.Value >= 3  // all three max bullets hit the limb
-                    ) {
-                        if (
-                            KM.DistanceCheck(gst.transform.position, limb.transform.position, 16) // check if actually close
-                        ) {
-                            CombatStuff.BetterDismember(limb, !limb.isHead);
-                            if (limb.dismembered) {
-                                amputatedonplrs.Add(limb.body);
-                            }
-                        } 
-                    }
-                }
-            }
-        }
+					) {
+						if (
+						    KM.DistanceCheck(gst.transform.position, limb.transform.position, 16) // check if actually close
+						) {
+							CombatStuff.BetterDismember(limb, !limb.isHead);
+							if (limb.dismembered) {
+								amputatedonplrs.Add(limb.body);
+							}
+						} 
+					}
+				}
+			}
+		}
 
 
-        foreach (var dmg in plrdamages) { // visualize the damage
+		foreach (var dmg in plrdamages) { // visualize the damage
             var p = dmg.Key.GetHeadPos() + Vector2.up;
             WorldGeneration.CreateDamageNumber(p, (int)dmg.Value);
             if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(p, $"Shoot: Damaged body {dmg.Key}", Color.red);
@@ -2397,6 +2211,9 @@ public static class TurretScript_Shoot_MultiplayerPatch {
 
         var damage = (b.animal ? (gst.og.animalDamage * num) : (gst.og.structureDamage * num));
 
+#if FULLGAME
+        if (b.animal) EndingGuardSync.PlayerHit(b, gst.body);
+#endif
         b.SetHealth(b.GetHealth() - damage);
         if (b.animal) {
             b.gameObject.SendMessage("AnimalHit", damage);
@@ -2581,12 +2398,12 @@ public static class TurretScript_Shoot_MultiplayerPatch {
 
 
 
-        {
-            //ldloc.s body(7)
-            //call    bool[KrokoshaCasualtiesMP] KrokoshaCasualtiesMP.TurretScript_Shoot_MultiplayerPatch::Shoot_DidHitABody(class Body)
-            //brtrue  404 (0547) ldloc.3 
+		{
+			//ldloc.s body(7)
+			//call    bool[KrokoshaCasualtiesMP] KrokoshaCasualtiesMP.TurretScript_Shoot_MultiplayerPatch::Shoot_DidHitABody(class Body)
+			//brtrue  404 (0547) ldloc.3 
 
-            var newInstructions = new List<CodeInstruction>();
+			var newInstructions = new List<CodeInstruction>();
             
 
             var bodyoperandindex = body_check_location - 1;
@@ -2595,12 +2412,12 @@ public static class TurretScript_Shoot_MultiplayerPatch {
             }
 
 
-            var rayhitoperandindex = body_check_location - 1;
+			var rayhitoperandindex = body_check_location - 1;
             while (!(codes[rayhitoperandindex].operand is LocalBuilder lb && lb.LocalType == typeof(RaycastHit2D))) {
                 rayhitoperandindex--;
             }
 
-            newInstructions.Add(new CodeInstruction(OpCodes.Call,
+			newInstructions.Add(new CodeInstruction(OpCodes.Call,
                 AccessTools.Method(typeof(TurretScript_Shoot_MultiplayerPatch), nameof(TurretScript_Shoot_MultiplayerPatch.Shoot_DidHitABody))));
 
             newInstructions.Add(new CodeInstruction(OpCodes.Brtrue, codes[continuejumpoperandindex].operand));
@@ -2610,11 +2427,11 @@ public static class TurretScript_Shoot_MultiplayerPatch {
             codes[body_check_location].operand = codes[rayhitoperandindex].operand;
             codes.InsertRange(body_check_location+1, newInstructions);
 
-        }
+		}
 
 
 
-        {
+		{
             //call    bool[KrokoshaCasualtiesMP] KrokoshaCasualtiesMP.TurretScript_Shoot_MultiplayerPatch::Shoot_DidHitABuilding(class BuildingEntity)
             //brtrue  404 (0547) ldloc.3 
             //ldloc.s buildingEntity(5)
@@ -2625,11 +2442,11 @@ public static class TurretScript_Shoot_MultiplayerPatch {
             newInstructions.Add(new CodeInstruction(OpCodes.Brtrue, codes[continuejumpoperandindex].operand));
             newInstructions.Add(new CodeInstruction(OpCodes.Ldloc_S, codes[building_check_location].operand));
             codes.InsertRange(building_check_location + 1, newInstructions);
-        }
+		}
 
 
 
-        if (log.verbose) {
+		if (log.verbose) {
             Plugin.log.LogWarning($"TRANSPILER: TurretScript Shoot TRANSPILER SUCCESS :) ");
         }
         return codes;
@@ -2722,6 +2539,7 @@ public static class GunScript_Start_MultiplayerPatch {
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.GunRack))]
 public static class PlayerCamera_GunRack_MultiplayerPatch {
     static void Postfix(PlayerCamera __instance) {
+        if (UIInGame.SpectatorModeActive) return;
         if (Multiplayer.IsNetworkActiveAndIsClient()) {
             if (ScavPlayer.LocalPlayer.HasGunEquipped(out var gun)) {
                 var tracker = gun.GetComponent<SyncInfoGameObjectTracker>();
@@ -2741,6 +2559,7 @@ public static class PlayerCamera_GunRack_MultiplayerPatch {
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.GunEjectMag))]
 public static class PlayerCamera_GunEjectMag_MultiplayerPatch {
      static void Postfix(PlayerCamera __instance) {
+        if (UIInGame.SpectatorModeActive) return;
         if (Multiplayer.IsNetworkActiveAndIsClient()) {
             if (ScavPlayer.LocalPlayer.HasGunEquipped(out var gun)) {
                 var tracker = gun.GetComponent<SyncInfoGameObjectTracker>();
@@ -2759,6 +2578,7 @@ public static class PlayerCamera_GunEjectMag_MultiplayerPatch {
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.GunToggleSafety))]
 public static class PlayerCamera_GunToggleSafety_MultiplayerPatch {
     static void Postfix(PlayerCamera __instance) {
+        if (UIInGame.SpectatorModeActive) return;
         if (Multiplayer.IsNetworkActiveAndIsClient()) {
 
             if (ScavPlayer.LocalPlayer.HasGunEquipped(out var gun)) {

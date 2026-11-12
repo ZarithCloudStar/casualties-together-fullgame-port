@@ -120,6 +120,9 @@ public static class SettingsMenu_Start_MultiplayerPatch {
 
         contentHeight = 0;
         ref float num = ref contentHeight;
+#if FULLGAME
+        if (Util.GameIsFull()) LobbyCharacterSelection.Build(ref num);
+#endif
         {
 
             var handler = new GameObject("MpSetHandler", typeof(MultiplayerSettingsHandler));

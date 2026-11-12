@@ -34,7 +34,11 @@ public class StreamedAudioOutput : MonoBehaviour {
 
 
     public const float PREBUFFER_LATENCY = 0.1f;
-    public int MIN_SAMPLECOUNT_PREBUFFERED => (int)(PREBUFFER_LATENCY * (float)clip.frequency);
+    protected virtual float PrebufferLatency => PREBUFFER_LATENCY;
+    protected virtual bool RequireBufferedSamples => false;
+    public int MIN_SAMPLECOUNT_PREBUFFERED => (int)(PrebufferLatency * (float)clip.frequency);
+    internal int PlaybackUnderruns { get; private set; }
+    internal int BufferedSamples => audioSource.isPlaying ? vc_buffered_amount : vc_buffer.Count;
 
     internal int SAMPLE_RATE => clip.frequency;
     internal int FRAME_SIZE => Voicechat.CalculateFrameSizeForSamplerate(SAMPLE_RATE);
@@ -335,9 +339,8 @@ public class StreamedAudioOutput : MonoBehaviour {
 
         SetSamplerate(Voicechat.DEFAULT_SAMPLE_RATE);
     }
-    void Start() {
-        vc_buffer.Clear();
-    }
+    // Awake initializes the queue. Start can follow the first network burst;
+    // clearing here discarded the audio received in that frame.
 
 
     protected void SetSamplerate(ushort newrate) {
@@ -472,7 +475,7 @@ public class StreamedAudioOutput : MonoBehaviour {
 
         if (vc_buffer.Count > 0) {
             TimeTheBufferFirstReceivedBlob += Time.unscaledDeltaTime;
-            if (TimeTheBufferFirstReceivedBlob > PREBUFFER_LATENCY) { // ah make it not wait for the buffer to fill and play immidietly
+            if (RequireBufferedSamples ? vc_buffer.Count >= MIN_SAMPLECOUNT_PREBUFFERED : TimeTheBufferFirstReceivedBlob > PrebufferLatency) {
                 if (!audioSource.isPlaying) {
                     StartPlayback();
                 }
@@ -495,10 +498,7 @@ public class StreamedAudioOutput : MonoBehaviour {
 
             // create silence in the data i already played
             if (travelled_distance > 0 ) {
-                var difflastsaaa = _last_timeSamples - 6;
-                if (difflastsaaa < 0) {
-                    difflastsaaa += audioSource.timeSamples;
-                }
+                var difflastsaaa = (_last_timeSamples - 6 + clip.samples) % clip.samples;
                 
                 // SetData writes the whole array. the private write takes a count, so one zero buffer can cover a shorter frame.
                 WriteSilence(travelled_distance, difflastsaaa);
@@ -509,6 +509,7 @@ public class StreamedAudioOutput : MonoBehaviour {
             _last_timeSamples = audioSource.timeSamples;
 
             if (vc_buffered_amount <= 0) {
+                PlaybackUnderruns++;
                 StopPlayback();
                 //} else if (vc_buffered_amount <= MIN_SAMPLECOUNT_PREBUFFERED) {
                 // i want to add silence because speech sounds kinda broken  with enough silence times
@@ -586,7 +587,7 @@ public class StreamedAudioOutput : MonoBehaviour {
 
 #if true
                 // make a fade out incase it unintentionally tresspasses on unbuffered territory, so that the sound is somewhat predictable
-                left_distance = Math.Min(clip.samples - vc_buffered_amount, quarter_sample_rate);
+                left_distance = is_voice ? Math.Min(clip.samples - vc_buffered_amount, quarter_sample_rate) : 0;
                 if (left_distance > 10) {
                     var data2 = new float[left_distance];
                     for (int i = 0; i < left_distance; i++) {
@@ -1250,11 +1251,11 @@ public class Voicechat :  CasualtiesTogetherSingleton {
         return current_microphone;
     }
 
-    public static void StopRecording() {
+    public static void StopRecording(bool flush = true) {
         my_output_volume = 0f;
         if (IS_RECORDING) {
 
-            SendAllAvailableMicData(true);
+            if (flush) SendAllAvailableMicData(true);
 
             my_mic_data_buffer.Clear();
 
@@ -1640,8 +1641,8 @@ public class Voicechat :  CasualtiesTogetherSingleton {
 
 
     private void OnApplicationQuit() {
-        StopRecording();
         current_microphone_mode = 0; // so that it wouldnt accidentally restart (even tho i didnt test if this would ever happen  )
+        StopRecording(false); // audio/network owners may already be shutting down
     }
 
 }

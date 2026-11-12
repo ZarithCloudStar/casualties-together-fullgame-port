@@ -477,11 +477,7 @@ public class SyncBody : PredictableEntityLogic {
         CreateCharacter();
 #if !RELEASE 
         log.l($"CREATED SyncBody: {nb} owner:{OwnerId}");
-#endif
-        // les reuses ids and bumps Version. force container triples so clients aren't stuck on a stale ver.
-        if (Net.IsServer) {
-            KrokV5Optimization.FixInvSync.NoteContainerVersion(Id, Version);
-        }
+#endif 
     }
 
     private bool CreateCharacter() {
@@ -553,6 +549,7 @@ public class SyncBody : PredictableEntityLogic {
         }
 
         nb.SetBodyPosition(data.Position);
+        if (nb.IsBodyLocal() && ConsoleScript.instance != null) ConsoleScript.instance.noClipPos = data.Position;
         nb.body.SetVelocity(data.Velocity);
         nb.body.shock = data.RagdollTime;
 
@@ -824,6 +821,9 @@ public class SyncInfo : PredictableEntityLogic {
     float _poseDur;
 
 
+#if FULLGAME
+    public SyncVar<int> checkpointKey;
+#endif
     public readonly SyncString resourceId = new();
 
     [SyncVarFlags(SyncFlags.Interpolated | SyncFlags.AlwaysRollback)]
@@ -867,6 +867,7 @@ public class SyncInfo : PredictableEntityLogic {
     public float wetTime { get { return compressedwetTime.Value / 255f * 125f; } set { compressedwetTime.Value = (byte)(Mathf.Clamp(value, 0, 125f) / 125f * 255f); } }  // cuz its 0 to 120 
 
     public SyncVar<bool> freshitemdrop;
+    public SyncVar<byte> freshDropTenths;
     // the gold slot. save already writes item.favourited. this is what other machines see.
     public SyncVar<bool> favourited;
 
@@ -899,6 +900,14 @@ public class SyncInfo : PredictableEntityLogic {
     public SyncVar<bool> gun_roundInChamber;
     public SyncVar<bool> gun_roundInChamber_is_casing;
 
+    // NonDescCanSyncPacket
+    public SyncVar<float> nondesc_water;
+    public SyncVar<float> nondesc_fat;
+    public SyncVar<float> nondesc_food;
+    public SyncVar<float> nondesc_happiness;
+    public SyncVar<float> nondesc_sickness;
+    private readonly SyncList<LiquidStackPart> nondesc_liquids = new();
+    
     // BuildingSyncPacket:  
     public SyncVar<bool> building_backgroundified;
 
@@ -935,13 +944,14 @@ public class SyncInfo : PredictableEntityLogic {
         }
         lastUpdateTick = (ushort)(Net.ServerTick - 1);
         useIgnoreArmed = false;
-        // bag/chest Version bump: republish children that still name this id.
-        if (Net.IsServer && go != null && container != null) {
-            KrokV5Optimization.FixInvSync.NoteContainerVersion(Id, Version);
-        }
     }
 
     public bool CreateObject() {
+#if FULLGAME
+        if (WorldSnapshotTransfer.BlockClientObjects) return false;
+        WorldSnapshotTransfer.Adopt(this);
+        if (Net.IsClient && go != null) WorldSnapshotTransfer.MarkNetworkInstance(go, checkpointKey.Value);
+#endif
         // the slot mesh can still be registered after go was cleared. returning here
         // used to leave go null, so the container byte and the destroy never touched it.
         if (go == null)
@@ -1020,13 +1030,30 @@ public class SyncInfo : PredictableEntityLogic {
 
     static HashSet<string> UnfoundResourceIds = new HashSet<string>();
     GameObject InstantiateResource(string resourceId, in Vector2 pos) {
+#if FULLGAME
+        var checkpointObject = WorldSnapshotTransfer.Take(checkpointKey.Value, resourceId);
+        if (checkpointObject != null) return checkpointObject;
+        var laboratoryObject = EndingLabObjects.Bind(resourceId, pos);
+        if (laboratoryObject != null) return laboratoryObject;
+#endif
         bool isBackground = false;
-        GameObject resource = Resources.Load<GameObject>(resourceId);
+        GameObject resource =
+#if FULLGAME
+            SnapshotPrefabCatalog.Resolve(resourceId);
+#else
+            Resources.Load<GameObject>(resourceId);
+#endif
 
         if (resource == null) {
             if (condition.Value <= 0) { // Don't create it
                 return null;
             }
+#if FULLGAME
+            if (Util.GameIsFull() && BackgroundSnapshot.IsResourceId(resourceId)) {
+                if (!BackgroundSnapshot.TryResolveNetworkResource(resourceId, out resource)) return null;
+                isBackground = true;
+            } else
+#endif
             if (resourceId.StartsWith(BuildingEntity_Start_MultiplayerPatch.identified_bg_prefix)) {
                 if (ScavMPBuildingSynchronizer.known_entities_with_nonunique_id.TryGetValue(resourceId, out var bgstuff)) {
                     resource = bgstuff;
@@ -1067,6 +1094,10 @@ public class SyncInfo : PredictableEntityLogic {
 
         // create the object 
 		var instantiatedObject = ((GameObject)UnityEngine.Object.Instantiate(resource, (Vector3)pos, Quaternion.identity));
+#if FULLGAME
+        if (Net.IsClient) WorldSnapshotTransfer.MarkNetworkInstance(instantiatedObject, checkpointKey.Value);
+        if (Util.GameIsFull() && BackgroundSnapshot.IsResourceId(resourceId)) BackgroundSnapshot.StripNestedBackgrounds(instantiatedObject);
+#endif
         if (isBackground) {
             instantiatedObject.transform.SetParent(WorldGeneration.world.worldGrid.transform);
         }
@@ -1121,6 +1152,14 @@ public class SyncInfo : PredictableEntityLogic {
             RebindMesh();
         if (go == null)
             return;
+#if FULLGAME
+        if (Net.IsClient && EndingLabObjects.SceneCritical(go)) {
+            NetObjectRegistry.SyncRegistry.Remove(go);
+            if (tracker != null) tracker.syncInfo = null;
+            go = null;
+            return;
+        }
+#endif
 
         GameObject mesh = go;
         // null the tracker first. its OnDestroy would otherwise free this id again.
@@ -1169,6 +1208,12 @@ public class SyncInfo : PredictableEntityLogic {
 
         try {
             if (IsServer) {
+                // Lifetime changes must leave the server even when a settled
+                // rigidbody/disabled tracker is no longer writing snapshots.
+                if (freshitemdrop.Value && go != null) {
+                    EnsureParts();
+                    WriteFreshDrop();
+                }
                 //if (tracker != null) {
                 //    WriteObjectIntoPacket();
                 //}
@@ -1239,6 +1284,7 @@ public class SyncInfo : PredictableEntityLogic {
     private bool _gunLive;
     private bool _ammoLive;
     private bool _waterLive;
+    private bool _nondescLive;
     private bool _customLive;
     private bool _plushLive;
     private bool _freshLive;
@@ -1250,9 +1296,13 @@ public class SyncInfo : PredictableEntityLogic {
     private GunScript _gun;
     private AmmoScript _ammo;
     private WaterContainerItem _water;
+    private NonDescriptCan _nondesc;
     private CustomItemBehaviour _custom;
     private PlushScript _plush;
     private FreshItemDrop _fresh;
+    private int _clientFreshMesh;
+    private bool _clientFreshAttempted;
+    private byte _clientFreshTenths;
     private BoughtItem _bought;
     private ItemLock _lock;
     private Transform _linkParent;
@@ -1270,6 +1320,7 @@ public class SyncInfo : PredictableEntityLogic {
         _gunLive = false;
         _ammoLive = false;
         _waterLive = false;
+        _nondescLive = false;
         _customLive = false;
         _plushLive = false;
         _freshLive = false;
@@ -1301,6 +1352,7 @@ public class SyncInfo : PredictableEntityLogic {
             || (_gunLive && _gun == null)
             || (_ammoLive && _ammo == null)
             || (_waterLive && _water == null)
+            || (_nondescLive && _nondesc == null)
             || (_customLive && _custom == null)
             || (_plushLive && _plush == null)
             || (_freshLive && _fresh == null)
@@ -1317,6 +1369,7 @@ public class SyncInfo : PredictableEntityLogic {
         _gunLive = go.TryGetComponent(out _gun);
         _ammoLive = go.TryGetComponent(out _ammo);
         _waterLive = go.TryGetComponent(out _water);
+        _nondescLive = go.TryGetComponent(out _nondesc);
         _customLive = go.TryGetComponent(out _custom);
         _plushLive = go.TryGetComponent(out _plush);
         _freshLive = go.TryGetComponent(out _fresh);
@@ -1383,8 +1436,9 @@ public class SyncInfo : PredictableEntityLogic {
         if (ContainerDirty(item)) {
             return true;
         }
-        bool fresh = _freshLive && _fresh != null && _fresh.timeLeft > 5f;
-        if (freshitemdrop.Value != fresh) {
+        bool fresh = FreshDropIsLive;
+        byte remaining = fresh ? (byte)Mathf.Clamp(Mathf.CeilToInt(_fresh.timeLeft * 10f), 1, 100) : (byte)0;
+        if (freshitemdrop.Value != fresh || freshDropTenths.Value != remaining) {
             return true;
         }
         if (_boughtLive && _bought != null) {
@@ -1562,6 +1616,9 @@ public class SyncInfo : PredictableEntityLogic {
 
     internal void WriteObjectIntoPacket() {
         EnsureParts();
+#if FULLGAME
+        checkpointKey.Value = go != null ? (go.GetComponent<WorldSnapshotRestored>()?.networkKey ?? 0) : 0;
+#endif
         FixSyringeHold.Begin(this, out var syringe);
 
         {
@@ -1609,13 +1666,7 @@ public class SyncInfo : PredictableEntityLogic {
             WriteContainerInfo();
 
             {
-                if (_freshLive && _fresh != null) {
-                    if (_fresh.timeLeft > 5.0f) {
-                        freshitemdrop.Value = true;
-                    }
-                } else {
-                    freshitemdrop.Value = false;
-                }
+                WriteFreshDrop();
             }
 
             if (_boughtLive && _bought != null) {
@@ -1660,6 +1711,18 @@ public class SyncInfo : PredictableEntityLogic {
             {
                 if (_waterLive && _water != null)
                     SyncLiquidStack(_water);
+            }
+
+
+            {
+                if (_nondescLive && _nondesc != null) {
+                    nondesc_water.Value = _nondesc.waterValue;
+                    nondesc_fat.Value = _nondesc.fatValue;
+                    nondesc_food.Value = _nondesc.foodValue;
+                    nondesc_happiness.Value = _nondesc.happinessValue;
+                    nondesc_sickness.Value = _nondesc.sicknessValue;
+                    SyncNonDesc(_nondesc);
+                }
             }
 
         } else if (_buildLive && _build != null) {
@@ -1734,6 +1797,34 @@ public class SyncInfo : PredictableEntityLogic {
                 LiquidId = id,
                 LiquidMl = amount
             });
+        }
+    }
+
+    // functions for syncing nondesc liquids across the network
+    // might be messy and not ideal, but this should only run once. i think
+    private void SyncNonDesc(NonDescriptCan can) {
+        var ids = can.liquidIds;
+        var weights = can.liquidWeights;
+        var reg = Item_SetupItems_Listener.LiquidIdRegistry;
+
+        nondesc_liquids.Clear(); // yes, this is necessary
+
+        for (int i = 0; i < ids.Count; i++) {
+            byte id = (byte)reg[ids[i]];
+            nondesc_liquids.Add(new LiquidStackPart {
+            LiquidId = id,
+            LiquidMl = weights[i]
+            });
+        }
+    }
+
+    private void UpdateNonDesc(NonDescriptCan can) {
+        can.liquidIds.Clear();
+        can.liquidWeights.Clear();
+
+        for (int i = 0; i < nondesc_liquids.Count; i++) {
+            can.liquidIds.Add(Item_SetupItems_Listener.LiquidNetIdToId[nondesc_liquids[i].LiquidId]);
+            can.liquidWeights.Add(nondesc_liquids[i].LiquidMl);
         }
     }
 
@@ -2149,6 +2240,58 @@ public class SyncInfo : PredictableEntityLogic {
         return false;
     }
 
+    private bool FreshDropIsLive => _freshLive && _fresh != null && _fresh.timeLeft > 0f
+        && (_fresh.forceOn || _fresh.transform.parent == null);
+
+    private void WriteFreshDrop() {
+        bool live = FreshDropIsLive;
+        freshitemdrop.Value = live;
+        freshDropTenths.Value = live ? (byte)Mathf.Clamp(Mathf.CeilToInt(_fresh.timeLeft * 10f), 1, 100) : (byte)0;
+    }
+
+    internal void EndFreshDrop() {
+        if (!Net.IsServer) return;
+        freshitemdrop.Value = false;
+        freshDropTenths.Value = 0;
+    }
+
+    private void ApplyFreshDrop(Item item) {
+        int mesh = item.gameObject.GetInstanceID();
+        if (_clientFreshMesh != mesh) {
+            _clientFreshMesh = mesh;
+            _clientFreshAttempted = false;
+            _clientFreshTenths = 0;
+        }
+        var fresh = item.GetComponent<FreshItemDrop>();
+        byte remaining = freshDropTenths.Value;
+        if (!freshitemdrop.Value || remaining == 0) {
+            _clientFreshAttempted = false;
+            _clientFreshTenths = 0;
+            if (fresh != null) UnityEngine.Object.Destroy(fresh);
+            return;
+        }
+        // One attempt per authoritative false -> true edge (and per mesh).
+        // Unity's deferred Destroy must never turn a stale true/1 into a new
+        // component every frame after the native timer has expired.
+        if (!_clientFreshAttempted) {
+            _clientFreshAttempted = true;
+            if (fresh == null) {
+                fresh = item.gameObject.AddComponent<FreshItemDrop>();
+                if (log.verbose) log.l($"[drop] client restored fresh drop sync={syncId} id={item.id} remaining={remaining * .1f:0.0}s");
+            }
+        }
+        if (fresh == null) return;
+        fresh.forceOn = true;
+        // Repeated snapshots are not additional lifetime. Native Update keeps
+        // counting down between changed bytes; a delayed byte cannot rewind it.
+        if (_clientFreshTenths != remaining) {
+            fresh.timeLeft = Mathf.Min(fresh.timeLeft, remaining * .1f);
+            _clientFreshTenths = remaining;
+        }
+        if (fresh.rb == null) fresh.rb = item.GetComponent<Rigidbody2D>();
+        if (fresh.rb != null) fresh.rb.gravityScale = Mathf.Clamp01(1f - fresh.timeLeft * .5f);
+    }
+
     void UpdateItem() {
         var si = this;
         if (CraftCommit.EatDestroyed(si))
@@ -2175,8 +2318,8 @@ public class SyncInfo : PredictableEntityLogic {
 
         UpdateItemContainer();
 
-        if (freshitemdrop) {
-            item.GetOrAddComponent<FreshItemDrop>();
+        if (Net.IsClient) {
+            ApplyFreshDrop(item);
         }
         if (compressedboughtitemtime > 0) {
             var bi = item.GetOrAddComponent<BoughtItem>();
@@ -2215,6 +2358,15 @@ public class SyncInfo : PredictableEntityLogic {
             } else if (item.TryGetComponent(out AmmoScript ammo)) {
                 ammo.rounds = rounds;
             }
+        }
+
+        if (item.TryGetComponent(out NonDescriptCan nondesc)) {
+            nondesc.waterValue = nondesc_water;
+            nondesc.fatValue = nondesc_fat;
+            nondesc.foodValue = nondesc_food;
+            nondesc.happinessValue = nondesc_happiness;
+            nondesc.sicknessValue = nondesc_sickness;
+            UpdateNonDesc(nondesc);
         }
     }
 
@@ -2322,6 +2474,9 @@ public class SyncInfo : PredictableEntityLogic {
         return resourceId.Value;
     }
     public static string GetItemID(GameObject go) {
+#if FULLGAME
+        if (go.TryGetComponent<SnapshotPrefabReference>(out var reference)) return reference.resource;
+#endif
         if ( go.TryGetComponent(out Item item) ) {
             return item.id;
         }
@@ -2661,6 +2816,10 @@ public class BasePlayerController : HumanControllerLogic<PlayerInputPacket, Base
 
 [EntityFlags(EntityFlags.UpdateOnClient)]
 public class BasePlayer : PawnLogic {
+#if FULLGAME
+    public SyncVar<byte> lobbyCharacterSelected;
+    public SyncVar<bool> characterChosen;
+#endif
 
     public SyncVar<ulong> playerSteamId;
     public readonly SyncString playerName = new();
@@ -2692,6 +2851,9 @@ public class BasePlayer : PawnLogic {
 
     public SyncVar<bool> MuteVC;
     public SyncVar<bool> MuteTC;
+#if FULLGAME
+    public SyncVar<bool> modUnchipped;
+#endif
 
     //public SyncVar<int> testCounter;
 
@@ -2721,6 +2883,13 @@ public class BasePlayer : PawnLogic {
 
         r.BindOnChange(this, ref playerColor, (e) => { OnNameChange(); }, BindOnChangeFlags.ExecuteOnSync);
         r.BindOnChange(this, ref CursorPos, (e) => { OnCursorMove(); }, BindOnChangeFlags.ExecuteOnSync);
+#if FULLGAME
+        if (Util.GameIsFull()) {
+            r.BindOnChange(this, ref lobbyCharacterSelected, e => CharacterLobby.ApplySynced(this), BindOnChangeFlags.ExecuteOnSync);
+            r.BindOnChange(this, ref characterChosen, e => CharacterLobby.ApplySynced(this), BindOnChangeFlags.ExecuteOnSync);
+            r.BindOnChange(this, ref modUnchipped, e => CharacterLobby.ApplySynced(this), BindOnChangeFlags.ExecuteOnSync);
+        }
+#endif
     }
     void OnCursorMove() {
         if (player != null && player.ServerPlayerState != null) {
@@ -2733,6 +2902,9 @@ public class BasePlayer : PawnLogic {
 #endif
         if (player != null) {
             player.ApplyNameAndColor(playerName.Value, playerColor.Value);
+#if FULLGAME
+            if (Util.GameIsFull()) CharacterLobby.LogRoster(player);
+#endif
         }
     }
 
@@ -2784,13 +2956,24 @@ public class BasePlayer : PawnLogic {
         player.playerColor = playerColor;
         player.BasePlayer = playerEntity;
         player.SteamId = playerEntity.playerSteamId.Value;
+#if FULLGAME
+        if (Util.GameIsFull()) {
+            player.characterSelected = playerEntity.lobbyCharacterSelected.Value;
+            player.characterChosen = playerEntity.characterChosen.Value;
+            player.modUnchipped = playerEntity.modUnchipped.Value;
+        }
+#endif
         
 
         player.ApplyNameAndColor(player.playerName, player.playerColor);
 
         return player;
     }
-    internal static BasePlayer ServerCreatePlayer(string playerName, ulong steamId, Color24 playerColor, bool isHost) {
+    internal static BasePlayer ServerCreatePlayer(string playerName, ulong steamId, Color24 playerColor, bool isHost, byte characterSelected = 0
+#if FULLGAME
+        , bool characterChosen = false, bool modUnchipped = false
+#endif
+    ) {
 
         NetPlayer serverPlayer = null;
         if (!isHost) {
@@ -2802,6 +2985,13 @@ public class BasePlayer : PawnLogic {
             e.playerSteamId.Value = steamId;
             e.playerName.Value = playerName;
             e.playerColor.Value = playerColor;
+#if FULLGAME
+            if (Util.GameIsFull()) {
+                e.lobbyCharacterSelected.Value = characterSelected;
+                e.characterChosen.Value = characterChosen;
+                e.modUnchipped.Value = isHost ? ChipState.LocalUnchipped : modUnchipped;
+            }
+#endif
         });
         playerEntity.serverNetPlayer = serverPlayer;
         if (!isHost) {
@@ -2811,6 +3001,14 @@ public class BasePlayer : PawnLogic {
 
 
         var plr = CreatePlayerPrefab( playerEntity , playerName, playerColor);
+
+        if (Util.GameIsFull() && plr != null) plr.characterSelected = characterSelected;
+#if FULLGAME
+        if (Util.GameIsFull() && plr != null) {
+            CharacterLobby.Publish(plr);
+            log.l($"sync-create kind=player id={playerEntity.Id} owner={playerEntity.OwnerId} name={plr.playerName}");
+        }
+#endif
 
 #if !RELEASE
         log.l($"LiteEntitySystem: Player joined: \"{playerEntity}\" - {playerEntity.player}");
@@ -2866,6 +3064,9 @@ public class BasePlayer : PawnLogic {
             serverNetPlayer = null;
 
             player.BasePlayer = null;
+#if FULLGAME
+            if (Util.GameIsFull()) CharacterLobby.Forget(player);
+#endif
             ScavPlayer.Destroy(player.gameObject);
             player = null;
         }

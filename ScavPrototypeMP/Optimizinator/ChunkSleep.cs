@@ -35,6 +35,11 @@ public static class ChunkSleep {
     static readonly HashSet<long> HotPrev = new HashSet<long>();
     static int _cursor;
 
+    // SetActive(false) here is a transient simulation optimisation, not save state.
+    internal static bool IsSleeping(GameObject go) => go != null && ById.TryGetValue(go.GetInstanceID(), out var entry) && entry.Asleep;
+
+    internal static bool SnapshotActive(GameObject go) => go.activeSelf || IsSleeping(go) || BagSleep.IsSleeping(go);
+
     // every object with this component stays on, even past the 3x3.
     public static void Ignore(Type componentType) {
         if (componentType != null)

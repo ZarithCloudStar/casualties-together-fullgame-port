@@ -264,11 +264,17 @@ public class UIManager : CasualtiesTogetherSingleton {
                 if (spr == null) {
                     spr = sprites.FirstOrDefault((Sprite f) => f.name.Contains(spritename));
 
+                    if (spr == null && Util.GameIsFull()) {
+                        spr = FullgameUISprites.Resolve(spritename, sprites);
+                        if (spr != null && log.verbose)
+                            Plugin.Logger.LogInfo($"SPRITE SEARCH: fullgame fallback \"{spritename}\" -> \"{spr.name}\"");
+                    }
+
                     if (spr == null) {
                         if (log.verbose) Plugin.Logger.LogWarning($"\"{spritename}\" wasnt found !!!!!!!!!!!!");
                         continue;
                     } else {
-                        if (log.verbose) Plugin.Logger.LogWarning($"\"{spritename}\" was found through Contains: \"{spr.name}\"");
+                        if (log.verbose) Plugin.Logger.LogInfo($"SPRITE SEARCH: \"{spritename}\" resolved as \"{spr.name}\"");
                     }
                 } else {
                     if (log.verbose) Plugin.Logger.LogInfo($"SPRITE SEARCH: \"{spritename}\" was found.");

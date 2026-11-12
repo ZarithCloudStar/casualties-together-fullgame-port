@@ -74,6 +74,10 @@ public static class PlayerCamera_TryCraft_MultiplayerPatch
 						if (item.TryGetComponent<WaterContainerItem>(out var component) && component.stack.Count == 1 && component.stack[0].liquidId == rres.id && component.SpaceLeft >= rres.resultCondition * num2)
 						{
 							component.AddLiquid(rres.id, rres.resultCondition * num2);
+							// 1.0.1: filling can push the carried bottle/container over weight.
+							if (item.TryGetParentContainer(out var cont) &&
+								(cont.AboveHoldingWeight() || item.totalWeight > cont.maxWeightPerItem))
+								cont.UnloadItem(item);
 							filled = true;
 							return CraftSpawn.Made(item);
 						}

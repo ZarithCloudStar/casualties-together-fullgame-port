@@ -28,7 +28,7 @@ public static class MP3Menu_LoadAllMusic_MultiplayerPatch {
 
     public static IEnumerator Patched_LoadAllMusic(MP3Menu __instance, string folderPath) {
 
-        if (!Multiplayer.IsNetworkActiveAndIsClient()) {
+        if (!MP3MultiLibrary.SyncEnabled || !Net.IsClient) {
             if (Net.IsServer) {
                 Multiplayer.DoMultiplayerStatusMessageLog("SERVER: Loading custom music.");
             } else {
@@ -42,8 +42,8 @@ public static class MP3Menu_LoadAllMusic_MultiplayerPatch {
             MP3PlayerServerAudioStreamer.temp_loader_mp3menu_instance = null;
         }
 
-        if (!Multiplayer.IsNetworkActiveAndIsClient()) {
-            if (Multiplayer.IsNetworkActiveAndIsServer()) {
+        if (!MP3MultiLibrary.SyncEnabled || !Net.IsClient) {
+            if (MP3MultiLibrary.SyncEnabled && Net.IsServer) {
                 Multiplayer.DoMultiplayerStatusMessageLog("SERVER: Sending custom music list to players.");
                 MP3PlayerServerAudioStreamer.Server_SendMusicList();
             } else {
@@ -64,36 +64,14 @@ public static class MP3Menu_UpdateList_MultiplayerPatch {
     public static Item last_locally_used_mp3_player = null;
 
     public static bool Prefix(MP3Menu __instance) {
-        if (!Net.IsRunning) {
-            return true;
-        }
-        if (Net.IsServer) {
-            return true;
-        }
-        if (!Multiplayer.rules.EnableMP3Sync) {
-            return true;
-        }
-        // now here im totally a client
-
-        if (MP3Menu.dropdownList == null) {
-            // it must load the list
-
-            Multiplayer.DoMultiplayerStatusMessageLog("CLIENT: Requesting server for the music list.");
-
-            var writer = Net.CreateWriter(NetmsgId.SERVER_MP3RequestMusicList);
-
-            writer.Put((int)1);
-
-            Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
-
-            //let it temporarily just create the default sound list, otherwise it errors
-
-            return true;
-        }
+        if (!MP3MultiLibrary.SyncEnabled || Net.IsServer) return true;
+        MP3Menu.dropdownList ??= new List<TMP_Dropdown.OptionData>();
+        var writer = Net.CreateWriter(NetmsgId.SERVER_MP3RequestMusicList);
+        writer.Put(1);
+        Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
         return false;
     }
 }
-
 [HarmonyPatch(typeof(MP3Menu), nameof(MP3Menu.Play))]
 public static class MP3Menu_Play_MultiplayerPatch {
 
@@ -105,58 +83,56 @@ public static class MP3Menu_Play_MultiplayerPatch {
     }
 
     public static bool Prefix(MP3Menu __instance) {
-        if (!Net.IsRunning || !Multiplayer.rules.EnableMP3Sync) {
-            return true;
-        }
-        if (MP3Menu_UpdateList_MultiplayerPatch.last_locally_used_mp3_player != null) {
-            var val = __instance.dropdown.value;
-
-            if (Net.IsClient) {
-
-                if (NetObjectRegistry.TryGetSyncInfoOrRegister(MP3Menu_UpdateList_MultiplayerPatch.last_locally_used_mp3_player, out var si)) {
-
-                    var writer = Net.CreateWriter(NetmsgId.SERVER_MP3PlayCustomMusic);
-
-                    writer.Put((int)val);
-                    writer.Put(si.syncId);
-
-                    Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
-
-                    // WRITER END;
-                } else {
-                    NetObjectRegistry.AlertObjectNotRegistered(true);
-                }
-
-            } else {
-
-                var clip = MP3Menu.clips[val];
-
-                Server_PlayThisSongOnThisMp3Player(clip, MP3Menu_UpdateList_MultiplayerPatch.last_locally_used_mp3_player);
-
-            }
-
+        if (!MP3MultiLibrary.SyncEnabled) return true;
+        if (MP3Menu_UpdateList_MultiplayerPatch.last_locally_used_mp3_player == null) return true;
+        if (MP3MultiLibrary.Enabled) {
+            var multi = __instance.GetComponent<MP3MultiMenu>();
+            if (multi != null) multi.PlaySelected();
             return false;
         }
-        //if (Util.IsInMainMenu()) return true;//idk
-
-#if DEBUG || RELEASETEST || true
-        Multiplayer.DoMultiplayerStatusMessageError("MP3Menu.Play -> Failed to play a song? Unknown mp3player item?????");
-#endif
-        //return false;
-        return true; // let them replace background music with commands 
+        var closingMultiMenu = __instance.GetComponent<MP3MultiMenu>();
+        if (closingMultiMenu != null) { closingMultiMenu.RestoreHostNow(); return false; }
+        var item = MP3Menu_UpdateList_MultiplayerPatch.last_locally_used_mp3_player;
+        if (item == null) return true;
+        if (Net.IsClient) {
+            if (NetObjectRegistry.TryGetSyncInfoOrRegister(item, out var si)) {
+                var writer = Net.CreateWriter(NetmsgId.SERVER_MP3PlayCustomMusic);
+                writer.Put(__instance.dropdown.value); writer.Put(si.syncId);
+                Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
+            }
+        } else if (NetObjectRegistry.TryGetSyncInfoOrRegister(item, out var si)) {
+            MP3MultiLibrary.LegacyHostRequest((ushort)0, si.syncId, __instance.dropdown.value);
+        }
+        return false;
     }
 }
 [HarmonyPatch(typeof(MP3Menu), nameof(MP3Menu.Exit))]
 public static class MP3Menu_Exit_MultiplayerPatch {
     public static bool Prefix(MP3Menu __instance) {
-        MP3Menu_UpdateList_MultiplayerPatch.last_locally_used_mp3_player = null;
+        if (!MP3PlayerServerAudioStreamer.unprivated_MP3Menu_loadingMusic)
+            MP3Menu_UpdateList_MultiplayerPatch.last_locally_used_mp3_player = null;
         return true;
     }
 }
 
 
 public abstract class MP3PlayerAudioStreamPlayerBase : StreamedAudioOutput {
-    new void Awake() {
+    protected override float PrebufferLatency => 0.3f;
+    protected override bool RequireBufferedSamples => true;
+    public void Silence() {
+        if (audioSource != null) StopPlayback();
+        vc_buffer.Clear();
+        if (clip != null) clip.SetData(new float[clip.samples * clip.channels], 0);
+    }
+    protected void CleanupMP3Output() {
+        Silence();
+        if (audioSource != null) Destroy(audioSource);
+        if (lowpass != null) Destroy(lowpass);
+        if (clip != null) Destroy(clip);
+        var decoder = Traverse.Create(this).Field("opus_decoder").GetValue<IDisposable>();
+        decoder?.Dispose();
+    }
+    protected override void Awake() {
         max_hear_distance = 82;
         is_voice = false;
         base.Awake();
@@ -164,9 +140,35 @@ public abstract class MP3PlayerAudioStreamPlayerBase : StreamedAudioOutput {
 }
 
 
-public class MP3PlayerAudioStreamPlayer_ClientOnly : MP3PlayerAudioStreamPlayerBase {
+// Host is the server: it must hear client-owned music without using the
+// client-only component (that path needs the item GO and crashes in Awake).
+public class MP3HostAudioMonitor : MP3PlayerAudioStreamPlayerBase {
+    public Item Item;
+    internal int ReceivedFrames;
+    internal double MaxFrameGap;
+    double lastFrame, reportAt;
+    internal void NoteFrame() {
+        double now = Time.realtimeSinceStartupAsDouble;
+        if (lastFrame > 0) MaxFrameGap = Math.Max(MaxFrameGap, now - lastFrame);
+        lastFrame = now;
+        ReceivedFrames++;
+    }
     void LateUpdate() {
-        if (TimeTheBufferEnded > 30) {
+        if (!MP3MultiLibrary.SyncEnabled || Item == null) { Silence(); Destroy(this); return; }
+        transform.position = Item.transform.position;
+        if (Time.realtimeSinceStartupAsDouble >= reportAt) {
+            reportAt = Time.realtimeSinceStartupAsDouble + 10;
+            log.l($"[mp3-host] frames={ReceivedFrames} maxGapMs={MaxFrameGap * 1000:0} bufferedMs={BufferedSamples * 1000 / Math.Max(1, sample_rate)} underruns={PlaybackUnderruns}");
+        }
+    }
+    void OnDestroy() { CleanupMP3Output(); }
+}
+
+public class MP3PlayerAudioStreamPlayer_ClientOnly : MP3PlayerAudioStreamPlayerBase {
+    void OnDestroy() { CleanupMP3Output(); }
+    void LateUpdate() {
+        if (!MP3MultiLibrary.SyncEnabled || !MP3MultiLibrary.Near(GetComponent<Item>(), ScavPlayer.LocalPlayer) || TimeTheBufferEnded > 3) {
+            Silence();
             TimeTheBufferEnded = 20;
             Destroy(this);
         }
@@ -179,6 +181,13 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
 
     public Item item => GetComponent<Item>();
     AudioSource musicplayersource;
+    internal bool IsPlaying => musicplayersource != null && musicplayersource.isPlaying;
+    internal void StopMusic() {
+        if (musicplayersource != null) musicplayersource.Stop();
+        queued_resampled_samples.Clear();
+        lock (pcm_buffer_from_the_filter_thing) pcm_buffer_from_the_filter_thing.Clear();
+        Silence();
+    }
 
 
     public List<float> pcm_buffer_from_the_filter_thing = new List<float>(4096);    // should be always mono, its in sample rate AudioSettings.outputSampleRate
@@ -204,7 +213,7 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
         musicplayersource.clip = audio;
 
         queued_resampled_samples.Clear();
-        pcm_buffer_from_the_filter_thing.Clear();
+        lock (pcm_buffer_from_the_filter_thing) pcm_buffer_from_the_filter_thing.Clear();
 
         //last_timeSamples = 0;
         musicplayersource.Play();
@@ -221,7 +230,7 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
         if (musicplayersource.isPlaying) {
             if ( SharedMain.LocalWorldIsGenerating ) {
                 queued_resampled_samples.Clear();
-                pcm_buffer_from_the_filter_thing.Clear();
+                lock (pcm_buffer_from_the_filter_thing) pcm_buffer_from_the_filter_thing.Clear();
                 return;
             }
 
@@ -242,18 +251,14 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
 
 
 
-            if (pcm_buffer_from_the_filter_thing.Count >= Voicechat.system_framesize) {
-
-                var resampleddata = Voicechat.ResampleVoiceBlob(pcm_buffer_from_the_filter_thing, AudioSettings.outputSampleRate, target_samplerate);
-                pcm_buffer_from_the_filter_thing.Clear();
-
-                foreach (var item in resampleddata) {
-                    queued_resampled_samples.Enqueue(item);
+            float[] resampleddata = null;
+            lock (pcm_buffer_from_the_filter_thing) {
+                if (pcm_buffer_from_the_filter_thing.Count >= Voicechat.system_framesize) {
+                    resampleddata = Voicechat.ResampleVoiceBlob(pcm_buffer_from_the_filter_thing, AudioSettings.outputSampleRate, target_samplerate);
+                    pcm_buffer_from_the_filter_thing.Clear();
                 }
-
             }
-
-
+            if (resampleddata != null) foreach (var sample in resampleddata) queued_resampled_samples.Enqueue(sample);
             var required_frame_size = Voicechat.CalculateFrameSizeForSamplerate(target_samplerate);
             if (queued_resampled_samples.Count > required_frame_size) {
                 var frame = new float[required_frame_size];
@@ -292,6 +297,8 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
                             writer.Put(si.syncId);
                             writer.Put(freq_index);
                             writer.PutBytesWithLength(voiceblob);
+                            writer.Put(MP3MultiLibrary.Token(si.syncId));
+                            writer.Put(false);
 
                             Net.Server_SendToClients(DeliveryMethod.Unreliable, writer, clientIds: target_client_ids);
 
@@ -319,9 +326,10 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
             Destroy(musicplayersource.gameObject);
 
         encoder?.Dispose();
+        CleanupMP3Output();
     }
 
-    new void Awake() {
+    protected override void Awake() {
         if (Net.IsClient) {
             Destroy(this);
 #if DEBUG || RELEASETEST
@@ -355,54 +363,26 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
         public MP3PlayerServerAudioStreamer owner;
         void OnAudioFilterRead(float[] data, int channels) {
             try {
-                if (!owner.musicplayersource.isPlaying) {
-                    return;
-                }
-
-                if (owner.pcm_buffer_from_the_filter_thing.Count > Voicechat.system_framesize * 25) {
-#if TESTING
-                    if (log.verbose)
-                        log.l("pcm_buffer_from_the_filter_thing is overflowing!!!!!!!!!!!!!");
-#endif
-                    return;
-                }
-
-                reader_volume = Voicechat.GetFrameMaxVol(data);
-
-                float inv_volgetter = 1f / (AudioListener.volume == 0 ? 1f : AudioListener.volume);
-                float inv_chan = 1f / (float)channels;
-
-                int chan_count = 0;
-                float cur_sample = 0;
-
-                for (int i = 0; i < data.Length; i++) {
-
-                    cur_sample += data[i];
-                    chan_count++;
-                    if (chan_count >= channels) {
-                        owner.pcm_buffer_from_the_filter_thing.Add((cur_sample * inv_chan) * inv_volgetter);
-                        chan_count = 0;
-                        cur_sample = 0;
+                if (owner == null || owner.musicplayersource == null || !owner.musicplayersource.isPlaying || channels <= 0) return;
+                lock (owner.pcm_buffer_from_the_filter_thing) {
+                    if (owner.pcm_buffer_from_the_filter_thing.Count > Voicechat.system_framesize * 25) return;
+                    reader_volume = Voicechat.GetFrameMaxVol(data);
+                    float invVolume = 1f / (AudioListener.volume == 0 ? 1f : AudioListener.volume);
+                    for (int i = 0; i + channels <= data.Length; i += channels) {
+                        float sample = 0;
+                        for (int channel = 0; channel < channels; channel++) sample += data[i + channel];
+                        owner.pcm_buffer_from_the_filter_thing.Add(sample / channels * invVolume);
                     }
-
-                    // and set it to 0 so that this audiosource doesnt do any sound
-                    data[i] = 0;
                 }
+            } catch (Exception) {
+                // Destroy/stop may coincide with an audio callback; always silence the reader.
+            } finally {
+                Array.Clear(data, 0, data.Length);
             }
-            catch (Exception e) {
-#if TESTING
-                if (log.verbose)
-                    Plugin.log.LogError("MP3 PLAYER OnAudioFilterRead:\n"+e.ToString());
-#endif
-            }
-
-
         }
     }
-
-
-    
     internal static void Server_SendMusicList(IReadOnlyList<ScavPlayer> targets = null) {
+        if (!MP3MultiLibrary.SyncEnabled || MP3Menu.dropdownList == null) return;
         targets ??= ServerMain.AllPlayersExceptHost.ToList();
 
         var target_client_ids = targets.Select(x => x.playerId).ToList();
@@ -437,7 +417,7 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
     }
 
     public static void Server_ForceLoadMusic() {
-        if (!unprivated_MP3Menu_loadingMusic) {
+        if (MP3MultiLibrary.SyncEnabled && Net.IsServer && temp_loader_mp3menu_instance == null && !unprivated_MP3Menu_loadingMusic) {
             MP3Menu.dropdownList = null; // reset it to reload the list again
 
             temp_loader_mp3menu_instance = Utils.Create("Special/MP3SongSelect", PlayerCamera.main?.mainCanvas?.transform ?? Plugin.s.transform);
@@ -452,11 +432,12 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
     [ServerReceiver((byte)NetmsgId.SERVER_MP3RequestMusicList)]
     static void Server_MP3RequestMusicList(knetid cid, LiteNetLib.Utils.NetDataReader reader) {
         reader.Get(out int val);
-
+        if (!MP3MultiLibrary.SyncEnabled) return;
+        MP3MultiLibrary.Broadcast();
         if (ScavPlayer.TryGetPlayerFromClientId(cid, out var plr) ) {
             if (MP3Menu.dropdownList == null) {
                 Server_ForceLoadMusic();
-            } else {
+            } else if (!unprivated_MP3Menu_loadingMusic) {
                 Server_SendMusicList(new List<ScavPlayer> { plr });
             }
         }
@@ -466,24 +447,14 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
         reader.Get(out int val);
         reader.Get(out knetid mp3plr_syncid);
 
-        if (ScavPlayer.TryGetPlayerFromClientId(cid, out var plr) && plr.IsConscious()) {
-            if (NetObjectRegistry.TryGetSyncInfo(mp3plr_syncid, out var si) && si.IsItem() && si.item.id == "mp3player" && ItemSync.CheckIfBodyReachThisItem(si,plr.body)) {
-                if (val >= MP3Menu.clips.Count) {
-                    return;// sus
-                }
-                var clip = MP3Menu.clips[val];  
-
-                MP3Menu_Play_MultiplayerPatch.Server_PlayThisSongOnThisMp3Player(clip,si.item);  
-            }
-        }
-
+        MP3MultiLibrary.LegacyHostRequest(cid, mp3plr_syncid, val);
     }
-
-
-
-
+    internal static bool client_host_list_ready;
     [ClientReceiver((byte)NetmsgId.CLIENT_MP3MenuServerIsSendingMusicList)]
     static void Client_MP3MenuServerIsSendingMusicList(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+        if (!MP3MultiLibrary.SyncEnabled || Net.IsServer) return;
+        client_host_list_ready = true;
+        MP3MultiLibrary.Revision++;
         log.l("CLIENT: Received Music list.");
         reader = reader.DecompressReader();
 
@@ -494,20 +465,17 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
             MP3Menu.dropdownList.Add(new TMP_Dropdown.OptionData(text));   
         }
 
-        var prs = FindObjectOfType<MP3Menu>();
-        if (prs != null) {
-            prs.dropdown.ClearOptions();
-            prs.dropdown.AddOptions(MP3Menu.dropdownList);
+        // With sharing disabled there is no extra menu component to refresh the host list.
+        foreach (var menu in FindObjectsOfType<MP3Menu>()) {
+            if (menu.GetComponent<MP3MultiMenu>() != null) continue;
+            menu.dropdown.ClearOptions(); menu.dropdown.AddOptions(MP3Menu.dropdownList);
         }
-
-        //reader.Dispose(); // because im using DecompressReader !! ( but fr i never tested without it and probably i dont wanna )
-
     }
 
 
-    [ClientReceiver((byte)NetmsgId.CLIENT_StreamedAudioToClients)]
+    [ClientReceiver((byte)NetmsgId.CLIENT_StreamedAudioToClients, false)]
     static void Client_StreamedAudioToClients(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-        if (Voicechat.mp3_listener_volume <= 0 || SharedMain.LocalWorldIsGenerating) {
+        if (!MP3MultiLibrary.SyncEnabled || Voicechat.mp3_listener_volume <= 0 || SharedMain.LocalWorldIsGenerating) {
             return;
         }
 
@@ -517,14 +485,36 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
         //var frame = data.Select(x => (float)((float)x / (float)sbyte.MaxValue)).ToArray();
 
         if (NetObjectRegistry.TryGetSyncInfo(source_syncid, out var si)) {
+            if (!si.IsItem() || si.item.id != "mp3player" || !MP3MultiLibrary.Near(si.item, ScavPlayer.LocalPlayer)) return;
             var go = si.go;
 
             reader.Get(out byte freq_index);
+            if (freq_index >= AudioOpusEncoding.STANDART_FREQUENCIES.Length) return;
             var freq = AudioOpusEncoding.STANDART_FREQUENCIES[freq_index];
 
             reader.Get(out byte[] data);
+            uint token = reader.AvailableBytes >= 4 ? reader.GetUInt() : 0;
+            bool clientSource = reader.AvailableBytes > 0 && reader.GetBool();
+            if (data.Length == 0 || data.Length > 1024 || !MP3MultiLibrary.AcceptFrame(source_syncid, token, clientSource)) return;
 
-            var streamoutput = go.GetOrAddComponent<MP3PlayerAudioStreamPlayer_ClientOnly>();
+            MP3PlayerAudioStreamPlayerBase streamoutput;
+            if (Net.IsServer) {
+                var monitorGo = go.transform.Find("mp3_host_monitor")?.gameObject;
+                if (monitorGo == null) {
+                    monitorGo = new GameObject("mp3_host_monitor");
+                    monitorGo.transform.SetParent(go.transform, false);
+                }
+                var monitor = monitorGo.GetComponent<MP3HostAudioMonitor>();
+                if (monitor == null) {
+                    try { monitor = monitorGo.AddComponent<MP3HostAudioMonitor>(); }
+                    catch (System.Exception e) { log.warn("[mp3] host monitor init failed: " + e); return; }
+                }
+                monitor.Item = si.item;
+                monitor.NoteFrame();
+                streamoutput = monitor;
+            } else {
+                streamoutput = go.GetOrAddComponent<MP3PlayerAudioStreamPlayer_ClientOnly>();
+            }
 
             if (!streamoutput.OpusDecode(freq, data, out var frame)) {
 #if DEBUG || RELEASETEST
@@ -533,7 +523,7 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
                 return;
             }
 
-            streamoutput.ReceiveVoiceBlob(freq, frame.ToArray(),true);
+            streamoutput.ReceiveVoiceBlob(freq, frame,true);
 
         }// else {
          //   NetObjectRegistry.Client_RequestObjectInfo(source_syncid);
@@ -553,6 +543,9 @@ public class MP3PlayerServerAudioStreamer : MP3PlayerAudioStreamPlayerBase {
 internal class MP3PlayerMPPatches : CasualtiesTogetherSingleton {
 
     void KrokoshaSingletonEvent_OnSceneChange() {
+        MP3PlayerServerAudioStreamer.unprivated_MP3Menu_loadingMusic = false;
+        MP3PlayerServerAudioStreamer.client_host_list_ready = false;
+        MP3Menu_UpdateList_MultiplayerPatch.last_locally_used_mp3_player = null;
         MP3Menu.clips?.Clear();
         MP3Menu.dropdownList?.Clear();
         MP3Menu.clips = null;
@@ -560,3 +553,7 @@ internal class MP3PlayerMPPatches : CasualtiesTogetherSingleton {
     }
 
 }
+
+
+
+

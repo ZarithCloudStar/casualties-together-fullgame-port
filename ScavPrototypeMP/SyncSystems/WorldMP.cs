@@ -172,6 +172,11 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
 
     static bool mainmenu_is_screen_darkening = false;
+    internal static bool IsMenuLoadPending => mainmenu_is_screen_darkening;
+
+    internal static void CancelPendingMenuLoad() {
+        if (!Util.IsInWorld()) mainmenu_is_screen_darkening = false;
+    }
 
     internal static byte[] aaaaaaaaaaaaaaaaaaaaaaaaaaa = null; // SAVELOAD_worldtiles
     internal static byte[] bbbbbbbbbbbbbbbbbbbbbbbbbbb = null; // SAVELOAD_worldobj
@@ -289,6 +294,15 @@ public class WorldMP : CasualtiesTogetherSingleton {
     }
 
     public static void LoadVanillaGeneratedWorld(bool loadsave = false) {
+        // Every world entry (host start, load, menu button) funnels through here,
+        // so the "everyone picked a character" gate lives at this choke point.
+        if (!CharacterReadyGate.Allow(loadsave ? "LoadVanillaGeneratedWorld(load)" : "LoadVanillaGeneratedWorld(new)")) return;
+        // A loaded save owns the character of everyone it already knows about:
+        // override whatever the lobby picked before the world is created.
+        if (loadsave) {
+            CharacterRunMemory.EnsureIdentityForLoad("loading the save");
+            CharacterRunMemory.ReapplyBindingsToPlayers("loading the save");
+        }
         _CheckIfCanLoadAWorld();
         SavesystemPatch.PreserveSave = false;
         ResetWorldParameters();
@@ -414,6 +428,12 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
 
     static internal IEnumerator Patched_GenerateWorld(WorldGeneration world) {
+#if FULLGAME
+        if (Net.IsServer) {
+            WorldSnapshotTransfer.Reset(aaaaaaaaaaaaaaaaaaaaaaaaaaa != null);
+            PlayerPlacementCheckpoint.BeginGeneration();
+        }
+#endif
         world.loadingObject.SetActive(value: true);
         world.generatingWorld = true;
         SharedMain.LocalWorldIsGenerating = true;
@@ -439,7 +459,11 @@ public class WorldMP : CasualtiesTogetherSingleton {
                 log.l("CLIENT: Waiting for worldgen params...");
 
                 // start a coroutine that checks if when is a seed
+                double paramsWaitStart = Time.realtimeSinceStartupAsDouble;
                 while (WorldGeneration_GenerateWorld_MultiplayerPatch.client_firstworldgenparams_are_used) {
+#if FULLGAME
+                    if (Time.realtimeSinceStartupAsDouble - paramsWaitStart > 120) { WorldSnapshotTransfer.Fail("Generation parameters timeout / host version mismatch."); yield break; }
+#endif
                     ClientMain.ServerIsGeneratingWorld = true;
                     if (!Net.IsRunning) {
                         yield break;
@@ -463,7 +487,7 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
 
 
-                if (Multiplayer.rules.LayerFinishKeepXOffset) { // move all players to center
+                if (Multiplayer.rules.LayerFinishKeepXOffset && !Util.GameIsFull()) { // fullgame uses the shared authoritative spawn
                     var leftx = 0f;
                     var rightx = 0f;
                     bool firstfound = false;
@@ -514,8 +538,13 @@ public class WorldMP : CasualtiesTogetherSingleton {
         Multiplayer._InvokeOnSceneChangeOrWorldStartGenerate();
 
 
-        //if (log.verbose)
-            log.l("WorldGeneration.GenerateWorld");
+#if FULLGAME
+        if (Net.IsClient && WorldSnapshotTransfer.SnapshotMode) {
+            yield return WorldSnapshotTransfer.ClientLoad();
+            yield break;
+        }
+#endif
+        log.l("WorldGeneration.GenerateWorld");
         yield return WorldGeneration_GenerateWorld_MultiplayerPatch.GenerateWorld(world);
 
 
@@ -526,6 +555,20 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
 
     static internal IEnumerator Patched_WorldPlacePlayer() {
+#if FULLGAME
+        if (WorldSnapshotTransfer.Failed) yield break;
+        if (Net.IsServer && WorldSnapshotTransfer.SnapshotMode && !WorldSnapshotTransfer.Applied) {
+            // Preserve the host's existing generated dynamic controllers (not in
+            // CTWO). Replace all supported records before admitting either player.
+            WorldSnapshotTransfer.BaselineEntities = true;
+            yield return world.WorldPlaceEntities();
+            WorldSnapshotTransfer.BaselineEntities = false;
+            yield return WorldSnapshotTransfer.Restore(new[] { aaaaaaaaaaaaaaaaaaaaaaaaaaa, ccccccccccccccccccccccccccc, bbbbbbbbbbbbbbbbbbbbbbbbbbb });
+            if (WorldSnapshotTransfer.Failed) yield break;
+            try { WorldSnapshotTransfer.Publish(); } catch (Exception ex) { WorldSnapshotTransfer.Fail(ex.Message); }
+            if (WorldSnapshotTransfer.Failed) yield break;
+        }
+#endif
 
         SharedMain.LastWorldgenFinishTime = Time.realtimeSinceStartupAsDouble;
         ServerMain._ded_server_switch_counter = -20;
@@ -567,6 +610,14 @@ public class WorldMP : CasualtiesTogetherSingleton {
             }
         }
 
+#if FULLGAME
+        if (WorldSnapshotTransfer.SnapshotMode) {
+            // Vanilla placement creates a fresh starting pod and carves terrain
+            // and fluids. A checkpoint owns those cells/objects already.
+            yield return null;
+            PlayerCamera.main.body.PlaceBody();
+        } else
+#endif
         yield return WorldGeneration_WorldPlacePlayer_MultiplayerPatch.WorldPlacePlayer(world); 
         log.l("WorldGeneration.WorldPlacePlayer");
     }
@@ -583,6 +634,9 @@ public class WorldMP : CasualtiesTogetherSingleton {
         var time = Time.realtimeSinceStartupAsDouble;
         for (int i = 0; i < aa.Count; i++) {
             var x = aa[i];
+#if FULLGAME
+            if (EndingLabObjects.Keep(x) || (x != null && x.GetComponent<WorldSnapshotRestored>() != null)) continue;
+#endif
             if (x == null || NetObjectRegistry.ObjectShouldNotBeSynced(x) || NetObjectRegistry.IsRegistered(x)) {
                 // dont destroy it
             } else { 
@@ -601,6 +655,12 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
     public static bool client_technically_finished_worldgen_now_just_waiting_for_server = false;
     static internal IEnumerator Patched_FinishWorldGeneration() {
+#if FULLGAME
+        if (WorldSnapshotTransfer.Failed || (WorldSnapshotTransfer.SnapshotMode && !WorldSnapshotTransfer.Applied)) yield break;
+#endif
+
+        // The world just finished generating, so this save now has its identity.
+        CharacterRunMemory.AdoptGeneratedSeed();
 
         SharedMain.LastWorldgenFinishTime = Time.realtimeSinceStartupAsDouble;
         ServerMain._ded_server_switch_counter = -20;
@@ -663,38 +723,7 @@ public class WorldMP : CasualtiesTogetherSingleton {
             } 
         }
 
-#if !RELEASE
-        if (aaaaaaaaaaaaaaaaaaaaaaaaaaa != null) {
-            world.loadingText.text = "Loading world tiles...";
-            yield return null;
-            if (aaaaaaaaaaaaaaaaaaaaaaaaaaa != null) {
-                SavesystemPatch.DeserializeWorldBlocks(aaaaaaaaaaaaaaaaaaaaaaaaaaa);
-            }
-            world.loadingText.text = "Loading world fluids...";
-            yield return null;
 
-            if (ccccccccccccccccccccccccccc != null) {
-                SavesystemPatch.DeserializeWorldFluids(ccccccccccccccccccccccccccc);
-            }
-            world.loadingText.text = "Loading world objects...";
-            yield return null;
-            if (bbbbbbbbbbbbbbbbbbbbbbbbbbb != null) {
-                try {
-                    var uncompressed = Util.Decompress(bbbbbbbbbbbbbbbbbbbbbbbbbbb);
-
-                    using var stream = new MemoryStream(uncompressed);
-                    using var reader = new BinaryReader(stream);
-
-
-                }
-                catch (Exception e) {
-                    log.error($"Failed to load objects: {e}");
-                }
-            }
-            yield return null;
-        }
-        
-#endif
 
         if (Net.IsRunning) {
 
@@ -710,6 +739,13 @@ public class WorldMP : CasualtiesTogetherSingleton {
         if (Util.TryGetLocalBody(out var LOCBODY) && !LOCBODY.alive) { UIInGame.StartSpectatorMode(); }
 
         yield return WorldGeneration_FinishWorldGeneration_MultiplayerPatch.FinishWorldGeneration(world);
+#if FULLGAME
+        if (WorldSnapshotTransfer.SnapshotMode) {
+            // Vanilla finish clears liquid above each local spawn. Retain the
+            // checkpoint on both peers; future deltas use the regular stream.
+            SavesystemPatch.DeserializeWorldFluids(ccccccccccccccccccccccccccc);
+        }
+#endif
         
         log.l("WorldGeneration.FinishWorldGeneration");
 
@@ -793,12 +829,20 @@ public class WorldMP : CasualtiesTogetherSingleton {
             }
             var locplrbody = ScavPlayer.LocalPlayer?.body;
             if (locplrbody != null) {
+#if FULLGAME
+                if (Util.GameIsFull()) ChipState.ApplyGameplay(ScavPlayer.LocalPlayer);
+                else
+#endif
                 ScavPlayer.LocalPlayer.SetUnchipped(WorldGeneration.unchipped);
             }
 
 
             try {
                 SharedMain.CreatePlayerCharacters();
+#if FULLGAME
+                if (Util.GameIsFull())
+                    foreach (var player in ScavPlayer.ClientIdToPlayerDict.Values) ChipState.ApplyGameplay(player);
+#endif
             } catch (Exception e) {
                 Plugin.log.LogFatal($"FAILED CREATING CHARACTERS WHAT  {e} ");
             }
@@ -839,6 +883,9 @@ public class WorldMP : CasualtiesTogetherSingleton {
     [ServerReceiver((byte)NetmsgId.SERVER_WorldPlacePlayer)]
     static void ServerReceiver_WorldPlacePlayer(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
         if (!Util.IsInWorld()) return;
+#if FULLGAME
+        if (!WorldSnapshotTransfer.SpawnAllowed(clientId)) { log.l($"WORLD-SNAPSHOT: denied early spawn client={clientId}"); return; }
+#endif
 
 #if !RELEASE
         Plugin.log.LogWarning($"ServerReceiver_WorldPlacePlayer for {DebugHelp.GetPlayerFullDebugString(clientId)} ");
@@ -853,6 +900,12 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
                 plr.ResetEntropy();
 
+#if FULLGAME
+                if (Util.GameIsFull()) {
+                    plr_is_unchipped = plr.modUnchipped;
+                    Multiplayer.rules.UnchippedIsIndividual = true;
+                }
+#endif
                 plr.unchipped = plr_is_unchipped;
                 if (plr.body != null) {
                     plr.SetUnchipped(plr_is_unchipped);
@@ -878,6 +931,9 @@ public class WorldMP : CasualtiesTogetherSingleton {
         KrokV5Optimization.FixRejoinBaseline.Mark(clientId, out bool queueBaseline);
         try {
             if (!Util.IsInWorld()) return;
+#if FULLGAME
+            if (!WorldSnapshotTransfer.SpawnAllowed(clientId)) return;
+#endif
 
     #if !RELEASE
             Plugin.log.LogWarning($"ServerReceiver_FinishedWorldgen for {DebugHelp.GetPlayerFullDebugString(clientId)} ");
@@ -891,6 +947,12 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
                 plr.ResetEntropy();
 
+#if FULLGAME
+                if (Util.GameIsFull()) {
+                    plr_is_unchipped = plr.modUnchipped;
+                    Multiplayer.rules.UnchippedIsIndividual = true;
+                }
+#endif
                 plr.unchipped = plr_is_unchipped;
                 if (plr.body != null) {
                     plr.SetUnchipped(plr_is_unchipped) ;

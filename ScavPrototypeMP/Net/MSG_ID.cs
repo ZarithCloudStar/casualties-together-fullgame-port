@@ -201,7 +201,7 @@ public enum NetmsgId : byte {
     ___7,
     ___8,
     ___9,
-    CLIENT_TraderSwing,
+    ___10,
     ___11,
     ___12,
     ___13,
@@ -224,6 +224,32 @@ public enum NetmsgId : byte {
     ___30,
 
     // the byte enum is full
+
+    // MP3 multi-owner protocol. Keep every existing byte unchanged.
+    SERVER_MP3Library = ___15,
+    CLIENT_MP3Libraries = ___16,
+    SERVER_MP3PlayTrack = ___17,
+    CLIENT_MP3PlayLocal = ___18,
+    SERVER_MP3AudioFrame = ___19,
+    CLIENT_MP3Stop = ___20,
+    SERVER_MP3SourceEnded = ___21,
+
+#if FULLGAME
+    // Use an existing reserved byte without renumbering any P8 message.
+    CLIENT_WorldSnapshot = ___22,
+    SERVER_WorldSnapshot = ___23,
+    SERVER_SetCharacter = ___5,
+    // ___6 remains reserved. Client-asserted keypad unlocks are not accepted.
+    CLIENT_EndingState = ___7,
+    SERVER_EndingRequest = ___8,
+    CLIENT_EndingEvent = ___9,
+    CLIENT_EndingGuards = ___10,
+    SERVER_CrystalContact = ___11,
+    SERVER_CrystalState = ___12,
+    CLIENT_CrystalState = ___13,
+    CLIENT_CrystalEffect = ___14,
+    SERVER_ProsthesisRepair = ___24,
+#endif
 
 }
 

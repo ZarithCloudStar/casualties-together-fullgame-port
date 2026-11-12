@@ -149,14 +149,14 @@ public class NetBody : MonoBehaviour {
     #region STATIC_NETBODY_GETTERS
 
     public static bool TryGetLocalNetBody(out NetBody nb) {
-        if (PlayerCamera.main != null && PlayerCamera.main.body != null && PlayerCamera.main.body.TryGetComponent(out nb))
+        if (Util.TryGetLocalBody(out var body) && body.TryGetComponent(out nb))
             return true;
         nb = null;
         return false;
     }
     public static NetBody GetLocalNetBodyNullable() {
-        if (PlayerCamera.main != null && PlayerCamera.main.body != null) {
-            return PlayerCamera.main.body.GetNetBody();
+        if (Util.TryGetLocalBody(out var body)) {
+            return body.GetNetBody();
         }
         return null;
     }
@@ -430,6 +430,9 @@ public class NetBody : MonoBehaviour {
         ApplyNameAndColor(playerName, plr.playerColor);
 
         unchipped = plr.unchipped;
+#if FULLGAME
+        ChipState.ApplyGameplay(plr);
+#endif
 
         ScavPlayer.BodyToPlayerDict[body] = plr;
     }
@@ -447,6 +450,7 @@ public class NetBody : MonoBehaviour {
 #endif
 
             OnFoundNetPlayerInitFinish();
+            if (Util.GameIsFull()) LogCharacter(plr.playerName, CharacterSelection.Local, ServerMain.GetCharacterPrefabPath(CharacterSelection.Local));
         }
 
     }
@@ -962,6 +966,9 @@ public class NetBody : MonoBehaviour {
             ScavPlayer.BodyToPlayerDict.Add(plr.body, plr);
             ApplyNameAndColor(plr.playerName, plr.playerColor);
             SetUnchipped(plr.unchipped);
+#if FULLGAME
+            ChipState.ApplyGameplay(plr);
+#endif
         }
     }
 
@@ -1042,9 +1049,22 @@ public class NetBody : MonoBehaviour {
             if (sb.nb == null) {
                 sb.nb = _Internal_CreateNetBody(sb, Body_PlaceBody_MultiplayerPatch.SpawnLocation, plr.playerName);
             }
+            if (Util.GameIsFull()) {
+                // Keep a resource-load fallback authoritative on subsequent registrations.
+                plr.characterSelected = sb.characterSelected.Value;
+            }
             var nb = sb.nb;
 
             nb.SetPlayer(plr);
+#if FULLGAME
+            // Vanilla's amputee setup runs only on PlayerCamera.main.body.
+            // A fresh server mirror needs the same starting limbs before any
+            // health packet is sent. Subsequent save restoration wins as usual.
+            if (Net.IsServer && !plr.IsLocal && WorldGeneration.GetRunSettingBool("amputee")) {
+                foreach (int root in new[] { 3, 6, 9, 12 })
+                    nb.body.limbs[root].AttachProsthetic(Item.PegLimbInfo(), isLoad: true);
+            }
+#endif
 
             if (Net.IsServer && had_sb) {
                 var pid = plr.GetPersistentId();
@@ -1103,6 +1123,14 @@ public class NetBody : MonoBehaviour {
                 sb = Net.ServerEntityManager.AddEntity<SyncBody>(e => {
                     e.nb = nb;
                     if (plr != null) {
+                        if (Util.GameIsFull()) {
+                            // Set before OnConstructed creates the body and before
+                            // the initial entity snapshot is sent to clients.
+                            e.characterSelected.Value = plr.IsLocal ? CharacterSelection.Local : plr.characterSelected;
+#if FULLGAME
+                            e.Unchipped.Value = plr.modUnchipped;
+#endif
+                        }
                         e.SetParent(plr.BasePlayer);
                     }
                 });
@@ -1110,10 +1138,17 @@ public class NetBody : MonoBehaviour {
                 throw new Exception("Server Only.");
             }
         }
+        if (Util.GameIsFull() && plr != null) {
+            if (Net.IsServer) {
+                sb.characterSelected.Value = plr.IsLocal ? CharacterSelection.Local : plr.characterSelected;
+            }
+            plr.characterSelected = sb.characterSelected.Value;
+        }
         if (nb != null) {
             if (sb != null) { 
                 nb.syncBody = sb;
                 NetBody._PRIV_NetIdToNetBody[sb.Id] = nb;
+                if (Util.GameIsFull()) nb.LogCharacter(plr?.playerName ?? nb.bodyName, sb.characterSelected.Value, ServerMain.GetCharacterPrefabPath(sb.characterSelected.Value));
             }
         }
 #if !RELEASE 
@@ -1130,8 +1165,16 @@ public class NetBody : MonoBehaviour {
             name = "bot_" + sb.Id.ToString();
         }
 
-        //TODO sb.characterSelected
-        var chara = UnityEngine.Object.Instantiate(ServerMain.CHARACTER_PREFAB, Vector3.zero, Quaternion.identity);
+        // Fullgame uses the player's authoritative choice from the existing
+        // SyncBody field; unowned bodies and older intros default to Experiment.
+        var prefab = ServerMain.CHARACTER_PREFAB;
+        byte chr = 0;
+        if (Util.GameIsFull()) {
+            prefab = ServerMain.GetCharacterPrefab(sb != null ? sb.characterSelected.Value : 0, out chr);
+            if (prefab == null) throw new InvalidOperationException("CHARACTER: Experiment prefab is unavailable.");
+            if (Net.IsServer && sb != null) sb.characterSelected.Value = chr;
+        }
+        var chara = UnityEngine.Object.Instantiate(prefab, Vector3.zero, Quaternion.identity);
         chara.name = "Character_" + name;
         chara.SetActive(true);
 
@@ -1142,6 +1185,7 @@ public class NetBody : MonoBehaviour {
         body.transform.position = pos;
 
         var nb = body.GetOrAddComponent<NetBody>();
+        if (Util.GameIsFull()) nb.LogCharacter(name, chr, ServerMain.GetCharacterPrefabPath(chr));
         sb.nb = nb;
         //nb.netId = sb.Id;
         if (sb != null) {
@@ -1152,6 +1196,13 @@ public class NetBody : MonoBehaviour {
 
 
         return nb;
+    }
+
+    bool characterLogged;
+    void LogCharacter(string name, byte chr, string prefab) {
+        if (characterLogged) return;
+        characterLogged = true;
+        log.l($"CHARACTER: player={name} chr={chr} prefab={prefab}");
     }
 
     public static void DestroyNPC(NetBody npc) {

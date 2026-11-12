@@ -139,15 +139,10 @@ static class PlayerCamera_HandleBlockHover_MultiplayerPatch {
 internal static class GlobalDark_Awake_MultiplayerPatch {
     internal static void SetBetaBuildMPText() {
         if (GlobalDark.main != null && Plugin.SUCCESFULLY_INITIALIZED) {
-            
-            var betaBuild = GlobalDark.main.GetComponentsInChildren<TextMeshProUGUI>(true)
-                .FirstOrDefault(text => text != null &&
-                    (text.text?.StartsWith("This is a beta build (", StringComparison.Ordinal) == true ||
-                     text.text?.StartsWith("This is a modded beta build (", StringComparison.Ordinal) == true)); // <3, based qol/rshlib support btw
+            var betaBuild = Traverse.Create(GlobalDark.main).Field("betaBuild").GetValue<TextMeshProUGUI>();
             if (betaBuild != null) {
                 //betaBuild.text = "This is a beta build (" + Application.version + "); Things are subject to change.";
                 //betaBuild.text += " (Demo)";
-                // Not needed and won't ever show >>
                 betaBuild.text = "This is a beta build (" + Application.version + "); ";
                 betaBuild.text += $" (Modified) (MP V{Plugin.FULL_MOD_VERSION})";
             }
@@ -393,6 +388,7 @@ static class PlayerCamera_UIOverrideTryPickupFromWorld_MultiplayerPatch {
         __state = __instance.dragItem;
     }
     static void Postfix(PlayerCamera __instance, ref Item __state, UsableObject usableObject) {
+        if (UIInGame.SpectatorModeActive) return;
         if (Net.IsRunning) {
             var pc = __instance;
             var body = pc.body;
@@ -453,7 +449,13 @@ static class PlayerCamera_UIOverrideTryPickupFromWorld_MultiplayerPatch {
 
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.ToMainMenu))]
 static class PlayerCamera_ToMainMenu_MultiplayerPatch {
-    static void Prefix(WorldGeneration __instance) {
+    static bool Prefix() {
+#if FULLGAME
+        if (EndingFlow.IsFinished && Net.IsClient && !Multiplayer.showMultiplayerMenu) {
+            PlayerCamera.main.DoAlert(Lang.Get("ending_wait_host", true));
+            return false;
+        }
+#endif
         // dont carry someone elses health panel into the menu. it leaves the inventory hud off.
         PlayerCamera_ToggleWoundView_MultiplayerPatch.CloseHealthPanel(PlayerCamera.main);
 
@@ -487,6 +489,7 @@ static class PlayerCamera_ToMainMenu_MultiplayerPatch {
         }
 
         Multiplayer.showMultiplayerMenu = true;
+        return true;
     }
 
 }
@@ -807,6 +810,18 @@ static class PlayerCamera_TryPickupFromUI_MultiplayerPatch {
 public static class PlayerCamera_HandleInput_MultiplayerPatch {
     static bool Prefix() {
 
+        if (Net.IsRunning && UIInGame.SpectatorModeActive) {
+            Spectator.ClearLocalInput(PlayerCamera.main);
+            // Keep spectator UI/pause navigation without entering body controls.
+            if (!Chat.CHAT_textbox_input_focused && !Con.IsConsoleOpen()) {
+                if (Input.GetKeyDown(KeyBinds.GetBind("pause"))) {
+                    if (Util.IsInWoundView()) PlayerCamera.main.ToggleWoundView();
+                    else PauseHandler.TogglePause();
+                } else if (Input.GetKeyDown(KeyBinds.GetBind("woundview"))) PlayerCamera.main.ToggleWoundView();
+            }
+            return false;
+        }
+
         if (Net.IsRunning) {
             // always allow to move on the end cuz other players might not have still
             if (ServerMain.DidHeFinishTheLayer(PlayerCamera.main.body)) {
@@ -820,6 +835,7 @@ public static class PlayerCamera_HandleInput_MultiplayerPatch {
             ;
     }
     static void Postfix() {
+        if (UIInGame.SpectatorModeActive) return;
         if (Net.IsRunning) {
 
             var body = Util.GetLocalBody();
@@ -851,6 +867,7 @@ public static class PlayerCamera_HandleInput_MultiplayerPatch {
 public static class PlayerCamera_SwitchHands_MultiplayerPatch {
 
     public static void Postfix() {
+        if (UIInGame.SpectatorModeActive) return;
         if (Net.IsRunning) {
 
             Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerCamera_SwitchHands, (ushort)(PlayerCamera.main.body.handSlot), true);

@@ -246,8 +246,15 @@ public static class Vomiter_Vomit_MultiplayerPatch {
 
 
 
-[HarmonyPatch(typeof(Body), nameof(Body.Eat), new[] { typeof(float), typeof(float) })]
+[HarmonyPatch]
 static class Body_Eat_MultiplayerPatch {
+    static MethodBase TargetMethod() {
+        // Full 1.0's two-argument overload forwards to this food-type overload.
+        return Util.GameIsFull()
+            ? AccessTools.Method(typeof(Body), nameof(Body.Eat), new[] { typeof(float), typeof(float), typeof(int) })
+            : AccessTools.Method(typeof(Body), nameof(Body.Eat));
+    }
+
     static void Prefix(Body __instance) {
         if (__instance.IsBodyLocal() && __instance.TryGetNetBody(out var nb)) {
             nb.SetNetHealthSyncIgnoreTime();
@@ -902,7 +909,11 @@ public static class Body_Start_MultiplayerPatch{
         try {
 
             if (pb != null && pb.IsPlayer) {
-                if (Net.IsServer) {
+                if (Net.IsServer
+#if FULLGAME
+                    && !DeferredPlayerSaveRestore.InProgress
+#endif
+                    ) {
 
                     pid = pb.plr.GetPersistentId();
 
@@ -1106,7 +1117,11 @@ public static class ScavGameStartPatch {
     public static bool starting_game = false;
 
 
-    static bool Prefix(PreRunScript __instance, ref IEnumerator __result) {
+    static bool Prefix(PreRunScript __instance, ref IEnumerator __result, bool __runOriginal) {
+
+        // A higher-priority character gate can reject this invocation. Do not
+        // announce a start to already-admitted clients after that rejection.
+        if (!__runOriginal) return false;
 
         if (Net.IsRunning) {
 

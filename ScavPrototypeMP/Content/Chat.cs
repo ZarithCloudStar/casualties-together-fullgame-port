@@ -40,6 +40,9 @@ public class Chat : CasualtiesTogetherSingleton {
     public static bool _DEV_PREVIEW_ON_SIDE = false;
 
     public static bool ALLOW_ME = false;
+    // Disabling text input must never hide received messages/status history.
+    internal static bool InputDisabled => Util.IsWorldGenerated() && Util.IsLocalBodyAlive() &&
+        !Con._DEV_CHATSPY && !Multiplayer.rules.EnableChatbox;
 
 
 
@@ -93,6 +96,7 @@ public class Chat : CasualtiesTogetherSingleton {
                     }
 
                     focustime = Time.realtimeSinceStartupAsDouble;
+                    if (InputDisabled) return;
 
                     UpdateMessageDistortPreview();
                     CHAT_textbox_input_focused = true;
@@ -300,10 +304,11 @@ public class Chat : CasualtiesTogetherSingleton {
         // keep the typing face when the box is only popped up, or the console has taken focus
         bool pinnedfont = UIBullshit.PushFocusedChatFont(out var oglabelfont, out var ogboxfont, out var ogfieldfont);
         try {
-            var unchipped_hide_chat_history = Util.IsWorldGenerated() && (!(
-                Con._DEV_CHATSPY //&& KrokoshaScavMultiConsoleCommands.CanCheat()
-                )) && Util.IsLocalBodyAlive() && (//(WorldGeneration.unchipped && Multiplayer.rules.DisableChatboxIfUnchipped) || 
-                !Multiplayer.rules.EnableChatbox);
+            if (InputDisabled) {
+                CHATforceinputfocus = false;
+                CHAT_textbox_input_focused = false;
+                if (GUI.GetNameOfFocusedControl() == CHAT_TEXTFIELD_CONTROLNAME) GUI.FocusControl("");
+            }
 
             var real_chat_fontsize = _GUI_RealChatFontsize;
 
@@ -324,6 +329,8 @@ public class Chat : CasualtiesTogetherSingleton {
 
             var chathistory_area = new Rect(real_pos_X, real_pos_Y, areawidth, areaheight);
             var chatinputrect = new Rect(real_pos_X, real_pos_Y + areaheight, areawidth, textareaheight);
+            if (InputDisabled && Time.realtimeSinceStartupAsDouble - focustime < 5f)
+                GUI.Label(chatinputrect, "Text chat disabled. Host: krok rule EnableChatbox true");
 
 
             var chatareawidth = areawidth - UIBullshit.uiBlockNanoBorderSize;
@@ -341,7 +348,7 @@ public class Chat : CasualtiesTogetherSingleton {
             chatinputrectfocustest.yMin -= 50;
             chatinputrectfocustest.yMax += 50;
 
-            if (should_show_it_all || CHATforceinputfocus || CHAT_textbox_input_focused || mouse_is_in_chat_area || UIBullshit.IsCursorInGUIRect(chatinputrectfocustest)) {
+            if (!InputDisabled && (should_show_it_all || CHATforceinputfocus || CHAT_textbox_input_focused || mouse_is_in_chat_area || UIBullshit.IsCursorInGUIRect(chatinputrectfocustest))) {
 
                 if (CHATforceinputfocus) {
                     GUI.FocusControl(CHAT_TEXTFIELD_CONTROLNAME);
@@ -525,7 +532,7 @@ public class Chat : CasualtiesTogetherSingleton {
             }
 
             if (areaheight > 0 && areawidth > 0) {
-                if (Time.realtimeSinceStartupAsDouble - focustime < 2f && !unchipped_hide_chat_history) {
+                if (Time.realtimeSinceStartupAsDouble - focustime < 2f) {
                     //GUI.Box(chathistory_area, "");
                     UIBullshit._GUI_9SlicePanel(chathistory_area, 1, 0.65f, false, UIBullshit.unscaled_uiBlockNano);
                     
@@ -539,7 +546,7 @@ public class Chat : CasualtiesTogetherSingleton {
 
 
 
-            if (should_show_it_all && !unchipped_hide_chat_history && areaheight > 0) {
+            if (should_show_it_all && areaheight > 0) {
                 GUI.SetNextControlName("NONE");
 
                 GUI.skin.label.richText = true;
@@ -941,6 +948,7 @@ public class Chat : CasualtiesTogetherSingleton {
         }
 
         if (ScavPlayer.TryGetPlayerFromClientId(clientId, out var yapper) ) {
+            if (!Multiplayer.rules.EnableChatbox && Util.IsWorldGenerated() && yapper.body != null && yapper.body.alive) return;
             
             if (yapper.server_mute_tc) {
 

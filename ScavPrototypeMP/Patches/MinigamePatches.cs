@@ -1,4 +1,4 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using CasualtiesTogetherUtils;
 using KrokV5Optimization;
 using LiteNetLib;
@@ -392,6 +392,7 @@ public class MinigameMPManager : CasualtiesTogetherSingleton {
                 openable.code = KeypadMinigame.GenerateCode();
             }
             match = openable.code;
+            Note($"keypad init session={session_id} object={obj.name} codeLength={match.Length}");
 
         }
         public override void OnPlayerJoin(ScavPlayer plr) {
@@ -408,7 +409,7 @@ public class MinigameMPManager : CasualtiesTogetherSingleton {
 
             var writer = Net.CreateWriter(NetmsgId.CLIENT_MinigameKeypadCurrentInput);
             writer.Put(current_input, true);
-            Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: InvolvedPlayersClientIds());
+            Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, clientIds: InvolvedPlayersClientIds());
             // WRITER END;
         }
 
@@ -416,7 +417,6 @@ public class MinigameMPManager : CasualtiesTogetherSingleton {
         static void ClientReceiver_MinigameKeypadCurrentInput(knetid _, LiteNetLib.Utils.NetDataReader reader) {
 
             reader.Get(out string code, true);
-
             if (MinigameBase.main.currentMinigame is KeypadMinigame kp) {
                 kp.current = code;
             }
@@ -425,12 +425,10 @@ public class MinigameMPManager : CasualtiesTogetherSingleton {
         [ClientReceiver((byte)NetmsgId.CLIENT_MinigameKeypadCode)]
         static void ClientReceiver_MinigameKeypadCode(knetid _, LiteNetLib.Utils.NetDataReader reader) {
 
-            client_i_know_my_minigame_session = true;
-            
             reader.Get(out string code, true);
-           
-            if (MinigameBase.main.currentMinigame is KeypadMinigame kp) {
-
+            if (MinigameBase.main.currentMinigame is KeypadMinigame kp && kp.toDestroy != null) {
+                client_i_know_my_minigame_session = true;
+                Note($"keypad code received object={kp.toDestroy} codeLength={code.Length}");
                 kp.match = code;
                 if (kp.toDestroy.TryGetComponent<Openable>(out var openable)) {
                     openable.code = (code);
@@ -652,8 +650,14 @@ public class MinigameMPManager : CasualtiesTogetherSingleton {
         AnyObjectNetId objnet = new();
         if (limb != null && limb.TryGetNetBody(out var nb)) {
             objnet = new(limb);
-        } else if (building != null && building.TryGetTracker(out var tracker)) {
-            objnet = new(tracker);
+        } else if (building != null) {
+            if (Net.IsServer) {
+                var registered = NetObjectRegistry.Server_EnsureItemIsNetworkRegistered(building.gameObject);
+                if (registered != null) objnet = new(registered);
+            } else if (building.TryGetTracker(out var tracker)) {
+                objnet = new(tracker);
+            }
+            Note($"keypad target res={building.id} pos={(Vector2)building.transform.position} net={objnet}");
         }
         return objnet;
     }
@@ -1202,6 +1206,16 @@ public class MinigameMPManager : CasualtiesTogetherSingleton {
                 Server_DenyMinigame(plr);
                 return mgsess;
             }
+#if FULLGAME
+        } else if (realtype == typeof(ProsthesisRepairMinigame)) {
+            if (objnet.TryGetNetBodyAndLimb(out var target_pb, out var target_limb) &&
+                ProsthesisRepairAuthority.CanRepair(plr, target_limb, plr.minigame_currentItem, out _)) {
+                mgsess = Server_GetSessionForObject<ProsthesisRepairAuthority.Session>(target_limb.gameObject, realtype_id, plr);
+            } else {
+                Server_DenyMinigame(plr);
+                return null;
+            }
+#endif
         } else if (realtype == typeof(ShrapnelMinigame) || realtype == typeof(DislocationMinigame)) {
             if (objnet.TryGetNetBodyAndLimb(out var target_pb, out var target_limb) && KM.DistanceCheck(pb.body, target_pb.body, 20)) {
 
@@ -1219,10 +1233,22 @@ public class MinigameMPManager : CasualtiesTogetherSingleton {
                 return mgsess;
             }
         } else if (realtype == typeof(LockpingMinigame) || realtype == typeof(KeypadMinigame)) {
-            if (objnet.TryGetSyncInfo(out var si) && si.go.TryGetComponent(out Openable openable) && KM.DistanceCheck(pb.body, si.go.transform, 20)) {
+            SyncInfo si = null;
+            bool mapped = objnet.type == 3 && NetObjectRegistry.TryGetSyncInfoLive(objnet.netId, out si);
+            Note($"keypad start player={plr.playerId} target={objnet} mapped={mapped}");
+            if (mapped && si.go != null && si.go.TryGetComponent(out Openable openable) &&
+                si.go.TryGetComponent<BuildingEntity>(out var building) && building.GetHealth() > 0f &&
+                si.go.TryGetComponent<UsableObject>(out var usable) && pb.body.conscious &&
+                KeypadMinigame_CheckCasts_MultiplayerPatch.CheckIfCloseEnoughForMinigame(usable, pb)) {
                 if (realtype == typeof(LockpingMinigame) && !openable.isKeypad) {
                     
                 } else if (realtype == typeof(KeypadMinigame) && openable.isKeypad) {
+                    si = NetObjectRegistry.Server_EnsureItemIsNetworkRegistered(si.go);
+                    if (si == null) {
+                        Server_DenyMinigame(plr);
+                        return null;
+                    }
+                    objnet = new AnyObjectNetId(si);
                     mgsess = Server_GetSessionForObject<KeypadMinigameSession>(si.go, realtype_id, plr);
                 } else {
                     Server_DenyMinigame(plr);
@@ -1371,7 +1397,12 @@ public static class MinigameBase_StartMinigame_MultiplayerPatch {
 
     static bool Prefix(MinigameBase __instance, Minigame minigame, Item item, ref bool __state) {
 
+        if (Net.IsRunning && UIInGame.SpectatorModeActive) { __state = false; return false; }
+
         __state = __instance.currentMinigame == null;
+#if FULLGAME
+        if (EndingFlow.Active && minigame is CargoMinigame) { __state = false; return EndingFlow.AllowCargoMinigame(); }
+#endif
 
         AnyObjectNetId objnet = MinigameMPManager.GetMinigameTargetObjectNetId(minigame);
 		var is_medical_minigame = objnet.TryGetLimb(out var limb);
@@ -1447,6 +1478,9 @@ public static class MinigameBase_StartMinigame_MultiplayerPatch {
     }
 
     static void Postfix(MinigameBase __instance, Minigame minigame, Item item, ref bool __state) {
+#if FULLGAME
+        if (EndingFlow.Active && minigame is CargoMinigame) return;
+#endif
         if (!Net.IsRunning) return;
 
 #if !RELEASE
@@ -1485,7 +1519,6 @@ public static class MinigameBase_StartMinigame_MultiplayerPatch {
                 writer.Put(localsci.minigame_current_type);
                 writer.Put(currentitem_syncid);
                 writer.Put(objnet);
-
                 Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
                 // WRITER END;
             }
@@ -1498,6 +1531,9 @@ public static class MinigameBase_StartMinigame_MultiplayerPatch {
 [HarmonyPatch(typeof(MinigameBase), nameof(MinigameBase.EndMinigame))]
 public static class MinigameBase_EndMinigame_MultiplayerPatch {
     static bool Prefix(MinigameBase __instance) {
+#if FULLGAME
+        if (EndingFlow.Active && __instance.currentMinigame is CargoMinigame cargo) return EndingFlow.CargoMayEnd(cargo);
+#endif
 #if !RELEASE
         if (__instance.currentMinigame != null) {
             Plugin.log.LogInfo($"MinigameBase.EndMinigame: __instance.currentMinigame: {__instance.currentMinigame}\nSTACK: {new StackTrace()}");
@@ -2225,6 +2261,9 @@ public static class SyringeMinigame_Update_MultiplayerPatch {
             writer.Put(WaterContainerItem_Inject_MultiplayerPatch.listen_to_limb_amount);
 
             writer.Put(ScavPlayer.GetClientIdFromBody(limb.body));
+#if FULLGAME
+            if (EndingFlow.DuringEscape) log.l($"[anesth] syringe send helper={ScavPlayer.LocalPlayer.GetPersistentId()} targetBody={limb.body.GetNetBody().netId} limb={limb.name} ml={WaterContainerItem_Inject_MultiplayerPatch.listen_to_limb_amount:0.000}");
+#endif
             writer.Put((byte)Util.GetLimbIndex(limb));
 
 
@@ -2295,6 +2334,9 @@ public static class SyringeMinigame_Update_MultiplayerPatch {
         reader.Get(out byte limbId);
 
         reader.Get(out bool do_sound);
+#if FULLGAME
+        if (EndingFlow.DuringEscape) log.l($"[anesth] syringe receive helperClient={clientId} targetBody={target_clientId} limb={limbId} ml={ml:0.000}");
+#endif
 
         if (MedicalSync.Server_CheckCanHealerUseItemForLimb(clientId, target_clientId, limbId, syringe_syncid, out var healer, out var target, out var si) &&
             Util.IsFinite(ml) && 
@@ -2482,6 +2524,7 @@ public static class KeypadMinigame_CheckCasts_MultiplayerPatch {
     static bool Prefix(KeypadMinigame __instance, List<RaycastResult> uiCasts) {
         if (!Net.IsRunning) return true;
 
+        if (Net.IsClient && (!MinigameMPManager.client_i_know_my_minigame_session || __instance.match == "-- LOADING --")) return false;
         if (__instance.toDestroy == null || !CheckIfCloseEnoughForMinigame(__instance.toDestroy.GetComponent<UsableObject>(), ScavPlayer.LocalPlayer.netBody)) {
             // too far
             MinigameBase.main.EndMinigame();
@@ -2489,8 +2532,7 @@ public static class KeypadMinigame_CheckCasts_MultiplayerPatch {
         }
 
 
-        if (NetObjectRegistry.TryGetSyncInfo(__instance.toDestroy.gameObject, out var si)) { 
-
+        if (NetObjectRegistry.TryGetSyncInfo(__instance.toDestroy.gameObject, out var si)) {
             int numbernum = -1;
 
             foreach (RaycastResult uiCast in uiCasts) {
@@ -2513,17 +2555,13 @@ public static class KeypadMinigame_CheckCasts_MultiplayerPatch {
                 var writer = Net.CreateWriter(NetmsgId.SERVER_KeypadMinigame_Keypress);
                 writer.Put(si.syncId);
                 writer.Put((byte)numbernum);
-                Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
-                // WRITER END;
-
-
+                Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
+                Sound.Play("beep" + (numbernum == 10 ? 0 : numbernum), Vector2.zero,
+                    twoDimensional: true, pitchShift: false, null, 1f, 1f, noReverb: true);
+                Minigame.game.handVelocity *= 0.3f;
             }
-                
         }
-
-        
-
-        return true;
+        return false;
     }
     static void Postfix(KeypadMinigame __instance) {
 
@@ -2541,79 +2579,108 @@ public static class KeypadMinigame_CheckCasts_MultiplayerPatch {
 
     [ServerReceiver((byte)NetmsgId.SERVER_KeypadMinigame_Keypress)]
     static void Server_KeypadMinigame_Keypress(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-#if DEBUG
-        log.l($"KeypadMinigame_Keypress actually works lol {DebugHelp.GetPlayerFullDebugString(clientId)} ");
-#endif
 
         reader.Get(out knetid syncid);
         reader.Get(out byte keypadnum);
 
-        if (ScavPlayer.TryGetPlayerFromClientId(clientId, out var plr) && plr.body && plr.body.conscious &&
-            NetObjectRegistry.TryGetSyncInfo(syncid,out var si) && si.IsBuilding() && si.go.TryGetComponent<UsableObject>(out var uo) && 
-            si.go.TryGetComponent<Openable>(out var o) && o.isKeypad  // this is the only thing capable of triggering Keypad minigame in the game
-            
-        ) {
-            if (!(keypadnum >= 0 && keypadnum <= 10)) {
-                log.sus($"weirdass keypad number {plr} -> num: {keypadnum} ");
-                return;
-            }
-            var sess = (MinigameMPManager.GetSessionThisPlayerIsInvolvedIn(plr));
-
-            if (sess != null && sess is MinigameMPManager.KeypadMinigameSession kpses) {
-                if (CheckIfCloseEnoughForMinigame(uo,plr.netBody)) {
-
-                    if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(plr.body.transform.position, $"S: KeypadMinigame_Keypress {keypadnum} {si}");
-
-                    if (keypadnum == 10) { // 10 is clear button
-                        keypadnum = 0;
-
-                        kpses.current_input = "";
-                    } else {
-                        kpses.current_input += keypadnum.ToString();
-                    }
-
-                    if (kpses.current_input.Length > kpses.match.Length) {
-                        kpses.current_input = kpses.current_input.Substring(0, kpses.match.Length);
-                    } else {
-                        kpses.AnnounceCurrentInput();
-
-                        if (kpses.current_input == kpses.match) {
-                            kpses.building.SetHealth(0, false);
-                            EvidenceBag.Arm();
-                            EvidenceBag.Line("keypad server ok " + EvidenceBag.Building(kpses.building));
-                        }
-                    }
-
-                    // tell this to everyone including host
-                    ServerMain.Server_AnnounceSound(plr.body.transform.position, "beep" + keypadnum.ToString(), ServerMain.GetListOfClientIdsExceptThis(clientId));
-
-                    return;
-                } else {
-                    MinigameMPManager.Server_ForceEndMinigameForPlayer(plr); 
-                    return;
-                }
-            }
-            //SUS
+        if (!ScavPlayer.TryGetPlayerFromClientId(clientId, out var plr) || plr.body == null) {
+            log.warn($"[keypad] keypress rejected: player/body missing clientId={clientId}");
+            return;
         }
-    }
+        if (!plr.body.conscious) {
+            log.warn($"[keypad] keypress rejected: unconscious player={plr}");
+            return;
+        }
+        if (!NetObjectRegistry.TryGetSyncInfoLive(syncid, out var si) || si.go == null) {
+            log.warn($"[keypad] keypress rejected: no SyncInfo syncid={syncid}");
+            return;
+        }
+        if (!si.IsBuilding()) {
+            log.warn($"[keypad] keypress rejected: syncid={syncid} go={si.go.name} has no BuildingEntity");
+            return;
+        }
+        if (!si.go.TryGetComponent<UsableObject>(out var uo)) {
+            log.warn($"[keypad] keypress rejected: no UsableObject syncid={syncid}");
+            return;
+        }
+        if (!si.go.TryGetComponent<Openable>(out var o) || !o.isKeypad) {
+            log.warn($"[keypad] keypress rejected: not a keypad openable syncid={syncid}");
+            return;
+        }
+        if (!(keypadnum >= 0 && keypadnum <= 10)) {
+            log.sus($"weirdass keypad number {plr} -> num: {keypadnum} ");
+            return;
+        }
+        var sess = (MinigameMPManager.GetSessionThisPlayerIsInvolvedIn(plr));
+        if (sess == null) {
+            log.warn($"[keypad] keypress rejected: no minigame session player={plr} syncid={syncid}");
+            return;
+        }
+        if (sess is not MinigameMPManager.KeypadMinigameSession kpses) {
+            log.warn($"[keypad] keypress rejected: session type {sess.GetType().Name} player={plr}");
+            return;
+        }
+        if (kpses.obj != si.go || kpses.minigame_ended || kpses.building == null || kpses.building.GetHealth() <= 0f) {
+            log.warn($"[keypad] keypress rejected: target/session mismatch or already opened player={plr} syncid={syncid}");
+            return;
+        }
+        if (!CheckIfCloseEnoughForMinigame(uo,plr.netBody)) {
+            log.warn($"[keypad] keypress rejected: too far player={plr} syncid={syncid}");
+            MinigameMPManager.Server_ForceEndMinigameForPlayer(plr);
+            return;
+        }
 
+        if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(plr.body.transform.position, $"S: KeypadMinigame_Keypress {keypadnum} {si}");
+
+        MinigameMPManager.Note($"keypad keypress session={kpses.session_id} syncid={syncid} player={plr.playerId} inputLength={kpses.current_input.Length} codeLength={kpses.match.Length}");
+        if (keypadnum == 10) { // 10 is clear button
+            keypadnum = 0;
+
+            kpses.current_input = "";
+        } else {
+            kpses.current_input += keypadnum.ToString();
+        }
+
+        if (kpses.current_input.Length > kpses.match.Length) {
+            kpses.current_input = kpses.current_input.Substring(0, kpses.match.Length);
+        } else {
+            kpses.AnnounceCurrentInput();
+
+            if (kpses.current_input == kpses.match) {
+                // Mark completed before the health write; queued/replayed clicks cannot drop twice.
+                kpses.minigame_ended = true;
+                Note($"keypad unlock session={kpses.session_id} syncid={syncid} player={plr.playerId} checkDamage=true");
+                // Fullgame moved destruction from Update into CheckDamage. Writing _health alone
+                // leaves an intact pod forever unless a host UI later invokes the health setter.
+                kpses.building.SetHealth(0);
+                EvidenceBag.Arm();
+                EvidenceBag.Line("keypad server ok " + EvidenceBag.Building(kpses.building));
+            }
+        }
+
+        // tell this to everyone including host
+        ServerMain.Server_AnnounceSound(plr.body.transform.position, "beep" + keypadnum.ToString(), ServerMain.GetListOfClientIdsExceptThis(clientId));
+    }
 
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+// Fullgame's health setter invokes CheckDamage immediately. Never execute the stock
+// local success branch in multiplayer: the server opens it after validating the input.
+[HarmonyPatch(typeof(KeypadMinigame), nameof(KeypadMinigame.Update))]
+public static class KeypadMinigame_Update_MultiplayerPatch {
+    static bool Prefix(KeypadMinigame __instance, List<RaycastResult> uiCasts) {
+        if (!Net.IsRunning) return true;
+        if (!__instance.toDestroy) {
+            Minigame.game.EndMinigame();
+            return false;
+        }
+        if (Minigame.game.handStartedClicking) __instance.CheckCasts(uiCasts);
+        if (__instance.current.Length > __instance.match.Length)
+            __instance.current = __instance.current.Substring(0, __instance.match.Length);
+        Traverse.Create(__instance).Field("inputText").GetValue<TextMeshProUGUI>().text = KeypadMinigame.AddDashes(__instance.current);
+        return false;
+    }
+}
 
 // keep the og adrenaline because of how the stupid minigame is made
 [HarmonyPatch(typeof(AmputationMinigame), nameof(AmputationMinigame.Update))]

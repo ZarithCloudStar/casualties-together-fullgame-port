@@ -5,7 +5,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection.Emit;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using Unity.Collections;
 using Unity.VisualScripting;
@@ -887,61 +886,8 @@ public static class DamagingCrate_OnCollisionEnter2D_MultiplayerPatch {
 
 
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator il) {
-        var codes = new List<CodeInstruction>(instructions);
-
-        int limb_check = -1;
-        for (int k = 2; k < codes.Count - 1 && limb_check < 0; k++) {
-            if ((codes[k].opcode == OpCodes.Call || codes[k].opcode == OpCodes.Callvirt) && codes[k].operand is MethodInfo mi &&
-                mi.Name == "op_Implicit" && mi.DeclaringType == typeof(UnityEngine.Object) && codes[k + 1].opcode == OpCodes.Brfalse) {
-                limb_check = k;
-            }
-        }
-        if (limb_check < 0) {
-            return codes;
-        }
-
-        System.Reflection.FieldInfo prevFrameSpeed_field = null;
-        for (int k = limb_check; k < codes.Count && prevFrameSpeed_field == null; k++) {
-            if (codes[k].operand is System.Reflection.FieldInfo fi && fi.Name == "prevFrameSpeed" && fi.DeclaringType == typeof(DamagingCrate)) {
-                prevFrameSpeed_field = fi;
-            }
-        }
-        if (prevFrameSpeed_field == null) {
-            return codes;
-        }
-
-        int limb_load = limb_check - 1;
-        if (limb_load < 0 || (codes[limb_load].opcode != OpCodes.Ldloc_2 && codes[limb_load].opcode != OpCodes.Ldloc_S)) {
-            log.warn("Gunsaw genetics or other multi-limb mods were enabled? Guh.");
-            return codes;
-        }
-
-        // BEFORE: ldloc limb ; call op_Implicit ; brfalse
-        // AFTER:  call StolenWithFirstCheck(crate, limb, prevFrameSpeed) ; brfalse <vanilla validity check> ; ret
-        //        ldloc limb ; call op_Implicit ; brfalse   
-
-        // I dunno about this though
-
-        var injected = new List<CodeInstruction> {
-            new CodeInstruction(OpCodes.Ldarg_0),
-            new CodeInstruction(codes[limb_load].opcode, codes[limb_load].operand),
-            new CodeInstruction(OpCodes.Ldarg_0),
-            new CodeInstruction(OpCodes.Ldfld, prevFrameSpeed_field),
-            new CodeInstruction(OpCodes.Call,
-                AccessTools.Method(typeof(ScavTraps), nameof(ScavTraps.DamagingCrate_OnCollisionEnter2D_StolenWithFirstCheck))),
-        };
-
-        var continue_vanilla_label = il.DefineLabel();
-        injected.Add(new CodeInstruction(OpCodes.Brfalse_S, continue_vanilla_label));
-        injected.Add(new CodeInstruction(OpCodes.Ret));
-
-        codes.InsertRange(limb_load, injected);
-        codes[limb_load + injected.Count].labels.Add(continue_vanilla_label);
-
-        if (log.verbose) log.l($"DamagingCrate OnCollisionEnter2D TRANSPILER SUCCESS :)  ");
-        return codes;
+        return PatternTranspilers.CrateCollision(instructions, il);
     }
-
 
 }
 

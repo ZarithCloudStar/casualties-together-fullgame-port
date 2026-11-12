@@ -37,6 +37,9 @@ public class Server_PlayerState {
     public bool loaded_save = false;
     public bool did_give_spawn_location = false;
     public bool did_give_spawn_location_from_a_save = false;
+    // One admission's spawn request, unlike ScavPlayer.LateJoin which remains
+    // true after that player subsequently travels to another layer.
+    public bool late_join_spawn_pending = false;
     public bool finished_worldgen = false;
     public bool is_loaded_in = false; // this is determined by the type of packets that are sent by the client, that are guranteed to be sent only after world generated
     public bool[,] known_chunks;
@@ -96,11 +99,16 @@ public class Server_PlayerState {
 
     public void OnWorldgenStart() {
         ResetKnownChunks();
+        late_join_spawn_pending = false;
         did_give_spawn_location = false;
+#if FULLGAME
+        if (Util.GameIsFull()) did_give_spawn_location_from_a_save = false;
+#endif
         finished_worldgen = false;
     }
     // only called in OnSceneLoaded and WorldGeneration.GenerateWorld
     public void OnSceneChangeOrWorldStartGenerate() {
+        late_join_spawn_pending = false;
         did_give_spawn_location = false;
         is_loaded_in = false;
         loaded_save = false;
@@ -308,6 +316,14 @@ public class ScavPlayer : MonoBehaviour {
     #endregion
 
     public bool LateJoin = false;
+
+    // Server-owned choice from the existing connection intro. Clients receive
+    // the authoritative selection through their body's existing SyncVar.
+    public byte characterSelected;
+#if FULLGAME
+    public bool characterChosen;
+    public bool modUnchipped; // server-owned per-save choice, applied through SetUnchipped
+#endif
 
     public bool unchipped; 
 
@@ -544,16 +560,9 @@ public class ScavPlayer : MonoBehaviour {
         }
 
 
-        // check for weird characters 
-        {
-            if (s_retroGamingFontAsset == null) {
-                var ggggfd = GameObject.FindObjectsOfType<TextMeshProUGUI>().Select(x => x.font);
-                s_retroGamingFontAsset = ggggfd.FirstOrDefault(x => x != null && x.name == "Retro GamingPix");
-            }
-            if (s_retroGamingFontAsset != null) {
-                name = FontUtils.ReplaceMissingCharacters(s_retroGamingFontAsset, name);
-            }
-        }
+        // NOTE: vanilla replaces characters missing from the pixel font with '?' here,
+        // which corrupts non-latin names (e.g. 星云吖 -> "星??") in the stored and
+        // network-synced playerName. Keep the real name so rosters/chat show it correctly.
 
 
         var changed_name = nameIsCustom && playerName != name;
@@ -790,6 +799,8 @@ public class ScavPlayer : MonoBehaviour {
 
             if (Util.IsInWorld()) {
                 LateJoin = true;
+                if (Net.IsServer && ServerPlayerState != null)
+                    ServerPlayerState.late_join_spawn_pending = true;
             }
 
             if (IsLocal) {
@@ -811,6 +822,9 @@ public class ScavPlayer : MonoBehaviour {
                 obj.transform.SetParent(this.transform);
 
             }
+#if FULLGAME
+            if (Util.GameIsFull()) CharacterLobby.OnPlayerReady(this);
+#endif
             CreateCharacter();
 
 
@@ -1057,6 +1071,7 @@ public class ScavPlayer : MonoBehaviour {
 
             if (IsLocal) {
                 UIInGame._DEV_FREECAM_CURPOS = pos;
+                if (ConsoleScript.instance != null) ConsoleScript.instance.noClipPos = pos;
             }
 
             netBody.SetBodyPosition(pos);
@@ -1258,7 +1273,7 @@ public class ScavPlayer : MonoBehaviour {
 
     public void DestroyCharacterIfNoLocal() {
         if (body != null) {
-            if (body != PlayerCamera.main.body) {
+            if (!Util.IsBodyLocal(body)) {
                 if (body == InvButton_get_body_MultiplayerPatch.focused_body) {
                     InvButton_get_body_MultiplayerPatch.focused_body = null;
                 }
@@ -1267,9 +1282,7 @@ public class ScavPlayer : MonoBehaviour {
                 }
 
 
-                // Server_DropAllInventory();
-                // leave gear stays parked under SAVESTATE_ (or dies with the body).
-                // ground-dropping on disconnect never worked.
+                Server_DropAllInventory();
 
                 ScavPlayer.BodyToPlayerDict.Remove(body);
 
@@ -1282,9 +1295,7 @@ public class ScavPlayer : MonoBehaviour {
     public void OnDestroy() {
 
         try {
-            // host only. clients that also built PlayerSavedState parked gear under a local
-            // SAVESTATE_ without DetachSyncKeepMesh, then path5 fought a loose trashbag ghost.
-            if (Net.IsServer && Util.IsInWorld() && body != null && Multiplayer.rules.DisconnectShouldSaveAnything) {
+            if (Util.IsInWorld() && body != null && Multiplayer.rules.DisconnectShouldSaveAnything) {
 #if TESTING
                 log.l($"Saved player state of {this}");
 #endif

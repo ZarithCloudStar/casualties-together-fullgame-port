@@ -167,6 +167,7 @@ public partial struct MultiplayerGameRules : INetSerializeByMemcpy {
 
 
     public bool EnableMP3Sync = true;
+    public bool AllowClientMP3Sources = false;
     [MultiplayerRuleByte(4,"")]
     public byte VoicechatQuality = 4;
     public bool VoicechatEnabled = true; // DONE
@@ -301,6 +302,9 @@ public partial struct MultiplayerGameRules : INetSerializeByMemcpy {
 
 
 public class TagPlayerInfo {
+#if FULLGAME
+    public bool pendingCharacter;
+#endif
     public Multiplayer.IntroductionPlayerInfo intro;
     public knetid plrId;
     public NetPlayer netPlayer;
@@ -388,6 +392,7 @@ public class Multiplayer : MonoBehaviour {
 
 
     private void OnDestroy() {
+        if (MultiplayerQuit.Quitting) return;
 
         try {
             try {
@@ -413,6 +418,7 @@ public class Multiplayer : MonoBehaviour {
     }
 
     private void OnApplicationQuit() {
+        MultiplayerQuit.StopTransport();
         Application.runInBackground = Plugin.OG_RUNINGACKGROUND;
     }
 
@@ -790,13 +796,16 @@ S_LerpFactor: {_entityManager.LerpFactor}";
         float y = 20;
         const float elsize = 20f;
 
-        
+        var skibidi = Application.version;
+        if (skibidi.IsNullOrWhiteSpace()) {
+            skibidi = Plugin.TARGET_GAME_VERSION;
+        }
 
 #if TESTING
-        GUI.Label(new Rect(20, y, 1100, elsize), $"MULTIPLAYER CO-OP MOD v{Plugin.FULL_MOD_VERSION} FOR  CASUALTIES: UNKNOWN {Application.version} APPID: {KSteam.STEAM_APPID} \"TESTING BUILD\" \"TESTING BUILD\" 2" ); 
+        GUI.Label(new Rect(20, y, 1100, elsize), $"MULTIPLAYER CO-OP MOD v{Plugin.FULL_MOD_VERSION} FOR  CASUALTIES: UNKNOWN {skibidi} APPID: {KSteam.STEAM_APPID} \"TESTING BUILD\" \"TESTING BUILD\" 2" ); 
         y += elsize;
 #elif !RELEASE
-        GUI.Label(new Rect(20, y, 1100, elsize), $"MULTIPLAYER CO-OP MOD v{Plugin.FULL_MOD_VERSION} FOR  CASUALTIES: UNKNOWN {Application.version} APPID: {KSteam.STEAM_APPID} \"TESTING BUILD\" \"TESTING BUILD\" \"TESTING BUILD\" v");
+        GUI.Label(new Rect(20, y, 1100, elsize), $"MULTIPLAYER CO-OP MOD v{Plugin.FULL_MOD_VERSION} FOR  CASUALTIES: UNKNOWN {skibidi} APPID: {KSteam.STEAM_APPID} \"TESTING BUILD\" \"TESTING BUILD\" \"TESTING BUILD\" v");
         y += elsize;
 #endif
 
@@ -1014,7 +1023,8 @@ S_LerpFactor: {_entityManager.LerpFactor}";
                     }
                 }
             }
-            if ( !did_show_status_message && (
+            // Debug-only status overlay; RELEASE builds stay clean unless --mp-verbose.
+            if ( log.verbose && !did_show_status_message && (
                     Time.realtimeSinceStartupAsDouble - lastMultiplayerStatusMessageChangeTime < 10.0 // || !Util.IsInWorld()
             ) ) {
                 var ogwordwrap = GUI.skin.label.wordWrap;
@@ -1160,6 +1170,9 @@ S_LerpFactor: {_entityManager.LerpFactor}";
         credentials_buffer.Put(CLIENT_JOIN_SECRET, true);
         credentials_buffer.PutArray(GetModGUIDs());
 
+        // Optional tail in the existing intro payload; demo's wire layout is unchanged.
+        if (Util.GameIsFull()) credentials_buffer.Put(CharacterSelection.Local);
+
 
         credentials_buffer.CompressWriter(l);
 
@@ -1175,6 +1188,7 @@ S_LerpFactor: {_entityManager.LerpFactor}";
         public Color24 color;
         public string[] modlist;
         public HashSet<string> modlist_hashset;
+        public byte characterSelected;
     }
 
     public static bool ReadClientConnectIntroductionPacket(NetDataReader credentialsBuffer, ref IntroductionPlayerInfo userInfo) {
@@ -1183,6 +1197,7 @@ S_LerpFactor: {_entityManager.LerpFactor}";
         userInfo.userName = "NONAME";
         userInfo.secret = "0";
         userInfo.modlist = null;
+        userInfo.characterSelected = 0;
         bool aaaaaaaaaaa = true;
         try {
             credentialsBuffer.Get(out userInfo.fileHash);
@@ -1195,6 +1210,9 @@ S_LerpFactor: {_entityManager.LerpFactor}";
                 credentialsBuffer.Get(out userInfo.secret, true);
                 credentialsBuffer.TryGetStringArray(out userInfo.modlist);
             } 
+            if (Util.GameIsFull() && !credentialsBuffer.EndOfData) {
+                credentialsBuffer.Get(out userInfo.characterSelected);
+            }
         } catch (Exception e) {
             aaaaaaaaaaa = false;
         }
@@ -1212,6 +1230,18 @@ S_LerpFactor: {_entityManager.LerpFactor}";
                 return false;
             }
 
+            if (Util.GameIsFull() && userInfo.characterSelected > 2) {
+                log.warn($"CHARACTER: invalid intro selection {userInfo.characterSelected} from {userInfo.userName}; using Experiment (0).");
+                userInfo.characterSelected = 0;
+            }
+
+#if FULLGAME
+            // A master key cannot make an incompatible LES layout safe.
+            if (Util.GameIsFull() && userInfo.version != Multiplayer.FULL_VERSION_TAG) {
+                deny_reason = "Version mismatch: both peers require fix7 / WS1-SC1 checkpoint sync. 双方必须使用 fix7。";
+                return false;
+            }
+#endif
             if (!userHasMasterKey) {
                 if (userInfo.version != (Multiplayer.FULL_VERSION_TAG) || userInfo.modlist == null) {
 #if !RELEASE
@@ -1641,6 +1671,9 @@ S_LerpFactor: {_entityManager.LerpFactor}";
     // CALLED ONLY FROM PLUGIN ENTRY POINT
     internal static void _FIRST_INIT()  {
         FULL_VERSION_TAG = Application.version + "_MPv" + Plugin.MOD_VERSION;
+#if FULLGAME
+        FULL_VERSION_TAG += "_WS1_SC1"; // WS1 transport, exact structure prefab references
+#endif
 
 #if !RELEASE
         log.l("Mod list: " + String.Join(", ", GetBepinPlugins()));

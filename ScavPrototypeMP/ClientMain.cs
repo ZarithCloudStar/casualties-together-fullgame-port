@@ -500,6 +500,36 @@ public class ClientMain : MonoBehaviour {
 
         if (ServerMain.CHARACTER_PREFAB == null) {
 
+            if (Util.GameIsFull()) {
+                // Fullgame: match PlayerCamera.SpawnCharacter without creating a world instance.
+                var chr = PreRunScript.characterSelected;
+                var path = chr switch {
+                    0 => "Special/Characters/Experiment",
+                    1 => "Special/Characters/Milky",
+                    _ => "Special/Characters/Dune"
+                };
+                ServerMain.CHARACTER_PREFAB = Resources.Load<GameObject>(path);
+
+                if (ServerMain.CHARACTER_PREFAB == null) {
+                    var localBody = PlayerCamera.main != null ? PlayerCamera.main.body : null;
+                    if (localBody != null) {
+                        log.error($"FULLGAME CHARACTER TEMPLATE: Resources.Load failed for '{path}'; falling back to a copy of the local character root.");
+                        // Deactivate the copy, keeping the live local character playable.
+                        ServerMain.CHARACTER_PREFAB = GameObject.Instantiate(localBody.transform.root.gameObject);
+                        ServerMain.CHARACTER_PREFAB.SetActive(false);
+                    } else {
+                        log.error($"FULLGAME CHARACTER TEMPLATE: Resources.Load failed for '{path}' and PlayerCamera.main.body is missing.");
+                        if (Net.IsRunning) {
+                            Multiplayer.DoMultiplayerStatusMessageError("PLAYER CHARACTER NOT FOUND!!!!!!!!!!!!!!!! RESTART THE GAME! RESTART !!!!!!!!!!!!!!!!!!!!");
+                        }
+                        return;
+                    }
+                }
+
+                log.l($"FULLGAME CHARACTER TEMPLATE: character={chr} path='{path}' bodyFound={ServerMain.CHARACTER_PREFAB_BODY != null} localBodyFound={PlayerCamera.main != null && PlayerCamera.main.body != null}");
+                return;
+            }
+
             var og_char = GameObject.Find("Experiment"); // player character is stored only in the scene, i must get it
 
             if (og_char != null) {
@@ -526,46 +556,8 @@ public class ClientMain : MonoBehaviour {
 
                 ServerMain.CHARACTER_PREFAB.SetActive(false);
             } else {
-                // Spawn the run body from a prefab instead of keeping Experiment in the scene. We want to use the actual character here
-                Body fallback_body = PlayerCamera.main != null ? PlayerCamera.main.body : null;
-                var fallback_char = fallback_body != null ? fallback_body.gameObject : null;
-
-                if (fallback_char == null) {
-                    foreach (var b in UnityEngine.Object.FindObjectsOfType<Body>()) {
-                        if (b.GetComponent<NetBody>() == null && !b.CompareTag("Enemy") && b.transform.childCount > 0) {
-                            fallback_char = b.gameObject;
-                            break;
-                        }
-                    }
-                }
-
-                if (fallback_char != null) {
-                    {
-                        var a = fallback_char.GetComponentsInChildren<HingeJoint2D>();
-                        foreach (var hinge in a) {
-                            var ogggg = hinge.AddComponent<SavedHingeJointState>();
-                            ogggg.a = hinge.transform.localPosition;
-                            ogggg.b = hinge.transform.localRotation;
-                            ogggg.aa = hinge.connectedBody.transform.localPosition;
-                            ogggg.bb = hinge.connectedBody.transform.localRotation;
-                            ogggg.useLimits = hinge.useLimits;
-                            ogggg.limitsmax = hinge.limits.max;
-                            ogggg.limitsmin = hinge.limits.min;
-                            ogggg.referenceAngle = hinge.referenceAngle;
-
-                            ogggg.hinge = hinge;
-
-                            ogggg.connectedBody = hinge.connectedBody;
-                        }
-                    }
-
-                    ServerMain.CHARACTER_PREFAB = GameObject.Instantiate(fallback_char);
-
-                    ServerMain.CHARACTER_PREFAB.SetActive(false);
-                } else {
-                    if (Net.IsRunning) {
-                        Multiplayer.DoMultiplayerStatusMessageError("PLAYER CHARACTER NOT FOUND!!!!!!!!!!!!!!!! RESTART THE GAME! RESTART !!!!!!!!!!!!!!!!!!!!");
-                    }
+                if (Net.IsRunning) {
+                    Multiplayer.DoMultiplayerStatusMessageError("PLAYER CHARACTER NOT FOUND!!!!!!!!!!!!!!!! RESTART THE GAME! RESTART !!!!!!!!!!!!!!!!!!!!");
                 }
             }
         }
@@ -751,7 +743,16 @@ public class ClientMain : MonoBehaviour {
 		if (!TrapClaim.ReadBoom(reader, out var boomId, out var boom))
 			return;
 
-		WorldGeneration_CreateExplosion_MultiplayerPatch.ForceCreateExplosionEffect(boom);
+        bool crystalPresentation = false;
+#if FULLGAME
+        if (reader.AvailableBytes > 0) reader.Get(out crystalPresentation);
+        if (crystalPresentation) {
+            reader.Get(out knetid crystalId); byte crystalVersion = reader.GetByte();
+            CrystalSync.PrepareExplodedReplica(crystalId, crystalVersion);
+        }
+#endif
+        if (!crystalPresentation)
+		    WorldGeneration_CreateExplosion_MultiplayerPatch.ForceCreateExplosionEffect(boom);
 		TrapClaim.ClientSawBoom(boomId, boom);
 	}
 
@@ -895,6 +896,9 @@ public class ClientMain : MonoBehaviour {
 
 	[ClientReceiver((byte)NetmsgId.CLIENT_Announce_RegenerateWorld)]
 	static void ClientReceiver__Announce_RegenerateWorld(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+#if FULLGAME
+        WorldSnapshotTransfer.AwaitGenerationMode();
+#endif
 
 		reader.Get(out ushort doPod);
 
@@ -1050,6 +1054,14 @@ public class ClientMain : MonoBehaviour {
     static void ClientReceiver__GenerateWorld_SeedAnnounce(knetid _, LiteNetLib.Utils.NetDataReader reader) {
 
         reader.Get(out LastBeforeGenerationState rand);
+#if FULLGAME
+        try {
+            if (reader.GetInt() != WorldSnapshotTransfer.Protocol) throw new System.IO.InvalidDataException("Snapshot protocol mismatch / 请更新双方至 fix6。");
+            bool snapshot = reader.GetBool(); string token = reader.GetString();
+            if (snapshot && token.Length != 32) throw new System.IO.InvalidDataException("Invalid checkpoint generation token.");
+            WorldSnapshotTransfer.Reset(snapshot, token);
+        } catch (Exception ex) { WorldSnapshotTransfer.Fail(ex.Message); return; }
+#endif
 
         Multiplayer.DoMultiplayerStatusMessageLog("GenerateWorld_SeedAnnounce, received worldgen seed.");
 
@@ -1060,6 +1072,9 @@ public class ClientMain : MonoBehaviour {
 
     [ClientReceiver((byte)NetmsgId.StartGameAnnouncement)]
 	static void ClientReceiver_StartGameAnnouncement(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+#if FULLGAME
+        WorldSnapshotTransfer.AwaitGenerationMode();
+#endif
 
         reader.Get(out ServerMain.StartGameAnnouncementPacket sgap);
         reader.Get(out string runsettings, true);
@@ -1090,6 +1105,9 @@ public class ClientMain : MonoBehaviour {
         SaveSystem.loadedRun = false;
 		if (PreRunScript.instance != null) {
             Multiplayer.DoMultiplayerStatusMessageLog($"### STARTING GAME (RECEIVED ANNOUNCEMENT FROM SERVER) ###");
+#if FULLGAME
+            EndingFlow.ClientStartingRun();
+#endif
 
             ScavGameStartPatch.starting_game = true;
 			PreRunScript.instance.StartCoroutine(PreRunScript.instance.WaitLoad());

@@ -29,6 +29,10 @@ namespace Together {
 
 
     [BepInProcess("CasualtiesUnknown.exe")]
+#if FULLGAME && TESTING
+    [BepInProcess("CT_EndingTest_A.exe")]
+    [BepInProcess("CT_EndingTest_B.exe")]
+#endif
     [BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
     public class Plugin : BaseUnityPlugin {
         internal static ManualLogSource log;
@@ -40,10 +44,10 @@ namespace Together {
         internal Harmony harmony;
 
 
-        public static readonly string[] TARGET_GAME_VERSION = new string[] {
-            "7.0.1",
-            "1.0",
-        };
+        public static string TARGET_GAME_VERSION => Util.GameIsFull() ? "1.0.1" : "7.0.1";
+        internal static bool SupportsGameVersion(string version) => Util.GameIsFull()
+            ? version == "1.0" || version == "1.0.1"
+            : version == TARGET_GAME_VERSION;
         public static readonly string MOD_VERSION = BuildInfo.MOD_VERSION;
         public static string FULL_MOD_VERSION { get; internal set; }
 
@@ -189,6 +193,14 @@ namespace Together {
             //log = BepInEx.Logging.Logger.CreateLogSource("Krokosha_MP_CU");
             // Multiplayer Co-op Mod for Casualties: Unknown
 
+#if FULLGAME
+            try {
+                UnlockAllCharacters.Init();
+            } catch (Exception e) {
+                log.LogError("UNLOCK: init failed: " + e.ToString());
+            }
+#endif
+
 
 
 
@@ -277,7 +289,7 @@ namespace Together {
             harmony = new Harmony(MyPluginInfo.PLUGIN_GUID);
             OptimizerMain.Log = Logger;
 
-            if (!TARGET_GAME_VERSION.Contains(Application.version)) {
+            if (!SupportsGameVersion(Application.version)) {
                 LoadErrorNotifier.errorstr += $"Mismatching version detected: TARGET: {TARGET_GAME_VERSION} - CURRENT: {Application.version}";
 
                 Together.log.error(LoadErrorNotifier.errorstr);
@@ -335,6 +347,9 @@ namespace Together {
             }
 
             log.LogInfo($"Plugin {MyPluginInfo.PLUGIN_GUID} assets loaded!");
+#if FULLGAME
+            if (Util.GameIsFull()) CjkFontFallback.Ensure();
+#endif
 
             // MULTIPLAYER
             // also create my global object that will track everything
@@ -616,6 +631,31 @@ namespace Together {
                     UIMainMenu.USERINPUT_NAME = Multiplayer.SanitizeTextInput(arg);
                     plrname_override = true;
                     log.LogInfo($"CMD: set name to: {UIMainMenu.USERINPUT_NAME}");
+                }
+#if FULLGAME
+                if (Util.GameIsFull() && arg == "--mp-charsel-timeout") {
+                    PendingCharacterAdmission.ParseTimeout(i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal)
+                        ? args[++i] : null);
+                    continue;
+                }
+                if (Util.GameIsFull() && arg == "--mp-saveexit-after") {
+                    SaveCurrentLayerExit.ParseTestDelay(i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal)
+                        ? args[++i] : null);
+                    continue;
+                }
+                if (Util.GameIsFull() && arg == "--mp-loadrun-after") {
+                    SaveCurrentLayerExit.ParseLoadTestDelay(i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal)
+                        ? args[++i] : null);
+                    continue;
+                }
+#endif
+                if (arg == "--mp-setcharacter") {
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal)) {
+                        CharacterSelection.ParseOverride(args[++i]);
+                    } else {
+                        CharacterSelection.ParseOverride(null);
+                    }
+                    continue;
                 }
                 if (arg == ("--mp-setpass")) {
                     i++; if (i == args.Length) break; arg = args[i];
@@ -1166,6 +1206,15 @@ namespace Together {
         private void Update() {
             FrameBuckets.NoteFrame(Time.unscaledDeltaTime);
             long tick = FrameBuckets.Start();
+#if FULLGAME
+            CharacterReadyGate.Tick();
+            EndingFlow.Tick();
+#if TESTING
+            EndingFlowTests.Tick();
+#endif
+            SaveCurrentLayerExit.TickTestHook();
+            SaveCurrentLayerExit.TickLoadTestHook();
+#endif
             PlayerCheckpoint.Tick();
             CraftCommit.Tick();
             MoveCommit.Tick();

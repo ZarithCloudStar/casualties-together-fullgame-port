@@ -4,6 +4,7 @@ using System.Reflection.Emit;
 using HarmonyLib;
 using UnityEngine;
 using KrokV5Optimization;
+using CasualtiesTogetherUtils;
 
 namespace Together;
 
@@ -69,10 +70,17 @@ internal static class BodyCache
 	{
 		MethodInfo call = AccessTools.Method(typeof(BodyCache), method);
 		bool found = false;
+		bool fullgame = Util.GameIsFull();
 		foreach (CodeInstruction code in instructions)
 		{
-			if (!found && code.opcode == OpCodes.Callvirt && code.operand is MethodInfo site
-				&& site.IsGenericMethod && site.GetGenericArguments()[0] == component)
+			// Together and the optimizer both install this patch class. Harmony
+			// can supply the output of the earlier instance on a later pass.
+			if (fullgame && code.Calls(call))
+				found = true;
+			if (!found && (code.opcode == OpCodes.Callvirt || (fullgame && code.opcode == OpCodes.Call)) && code.operand is MethodInfo site
+				&& site.IsGenericMethod && site.GetGenericArguments().Length == 1 && site.GetGenericArguments()[0] == component
+				&& (!fullgame || (site.DeclaringType == typeof(Component) && site.Name == "GetComponent"
+					&& !site.IsStatic && site.GetParameters().Length == 0 && site.ReturnType == component)))
 			{
 				code.opcode = OpCodes.Call;
 				code.operand = call;
@@ -82,6 +90,8 @@ internal static class BodyCache
 		}
 		if (!found && OptimizerMain.Log != null)
 			OptimizerMain.Log.LogWarning("[KrokV5Opt] body cache missed " + component.Name);
+		else if (found && fullgame && OptimizerMain.Log != null && Together.log.verbose)
+			OptimizerMain.Log.LogInfo("[KrokV5Opt] body cache applied " + component.FullName + " (Component.GetComponent)");
 	}
 
 	static Slot SlotFor(Body body)

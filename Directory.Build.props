@@ -3,7 +3,7 @@
   
 	<PropertyGroup>
 
-		<ModVersion>5.4.1</ModVersion>
+		<ModVersion>5.5.0-cu-port</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 
 		<SlnRoot>$(SolutionDir)</SlnRoot>
@@ -40,7 +40,7 @@
 	<PropertyGroup Condition="'$(Configuration)'=='DebugFullgame'">
 		<BuildType>Debug</BuildType>
 		<GameType>Fullgame</GameType>
-		<DefineConstants>$(DefineConstants);FULLGAME;TESTING;DEBUG</DefineConstants>
+		<DefineConstants>$(DefineConstants);FULLGAME;TESTING</DefineConstants>
 	</PropertyGroup>
 	<PropertyGroup Condition="'$(Configuration)'=='PlaytestFullgame'">
 		<BuildType>Playtest</BuildType>
@@ -49,7 +49,14 @@
 	</PropertyGroup>
 	<PropertyGroup Condition="'$(Configuration)'=='ReleaseFullgame'">
 		<GameType>Fullgame</GameType>
-		<DefineConstants>$(DefineConstants);FULLGAME;RELEASE</DefineConstants>
+		<DefineConstants>$(DefineConstants);FULLGAME</DefineConstants>
+	</PropertyGroup>
+	<!-- CU-PORT: release build with RELEASE semantics (single-player-clean logs) but the
+	     fullgame port features. No TESTING/PLAYTEST/dev instrumentation. -->
+	<PropertyGroup Condition="'$(Configuration)'=='ShipFullgame'">
+		<BuildType>Playtest</BuildType>
+		<GameType>Fullgame</GameType>
+		<DefineConstants>$(DefineConstants);RELEASE;FULLGAME</DefineConstants>
 	</PropertyGroup>
 
 
@@ -91,7 +98,7 @@
 		<Optimize>True</Optimize>
 	</PropertyGroup>
 	<PropertyGroup Condition="'$(BuildType)'=='Playtest' and '$(PlaytestVersion)' == ''">
-		<FullModVersion>$(ModVersion)fork$(BuildIdShort)</FullModVersion>
+		<FullModVersion>$(ModVersion)</FullModVersion>
 	</PropertyGroup>
 	<PropertyGroup Condition="'$(BuildType)'=='Playtest' and '$(PlaytestVersion)' != ''">
 		<FullModVersion>$(ModVersion)$(PlaytestVersion)</FullModVersion>
@@ -100,7 +107,7 @@
 		<FullModVersion>$(ModVersion)dev</FullModVersion>
 	</PropertyGroup>
 	<PropertyGroup Condition="!Exists('$(SlnRoot)ScavPrototypeMP\Proprietary\file.cs')">
-		<FullModVersion>$(ModVersion)fork$(BuildIdShort)</FullModVersion>
+		<FullModVersion>$(ModVersion)</FullModVersion>
 	</PropertyGroup>
 
 	<Target Name="EnsureGamePathsResolved" BeforeTargets="PrepareForBuild">

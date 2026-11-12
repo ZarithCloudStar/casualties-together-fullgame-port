@@ -1283,7 +1283,11 @@ public class UIInGame : MonoBehaviour {
         sypos += hght;
 
 
-        if (dir != 0) {
+        if (dir != 0) Spectator_CycleTarget(dir);
+    }
+
+    internal static void Spectator_CycleTarget(int dir) {
+        if (SpectatorModeActive && dir != 0) {
 
             var plrs = ScavPlayer.BodyToPlayerDict.Values.AsReadOnlyList();
             var plramount = plrs.Count();
@@ -1315,7 +1319,7 @@ public class UIInGame : MonoBehaviour {
         float wdth2 = 340 * uisc;
 
         if (Util.TryGetLocalBody(out var locbody)) {
-            if (
+            if (!SpectatorModeActive &&
                 Spectator.GetCameraFollow() == SpectatorLastTarget
             ) {
                 Spectator.SetCameraFollow(null);
@@ -1435,23 +1439,19 @@ public class UIInGame : MonoBehaviour {
         Con._DEV_FREECAM = false;
 
         if (!SpectatorModeActive) {
+            // End noclip before rebinding the camera to a remote body.
+            Con.UnNoclip();
+            if (MinigameBase.main?.currentMinigame != null) MinigameBase.main.EndMinigame();
             SpectatorModeActive = true;
-
+            Spectator.ClearLocalInput(PlayerCamera.main);
+            StopPlayerInteractionMenu();
+            PlayerCamera_ToggleWoundView_MultiplayerPatch.CloseHealthPanel(PlayerCamera.main);
+            PlayerCamera.main.craftingPanel.SetActive(false);
+            PlayerCamera.main.tradeMenu.SetActive(false);
+            PlayerCamera.main.itemCustomizer.SetActive(false);
+            PlayerCamera.main.dragItem = null;
             PlayerCamera.main.endScreen.gameObject.SetActive(false);
-
-            if (ScavPlayer.LocalPlayer != null && ScavPlayer.LocalPlayer.body != null) {
-                var plr = ScavPlayer.LocalPlayer;
-                curspectatefolowingname = plr.playerName;
-
-                curspectatefolowing = ScavPlayer.BodyToPlayerDict.Values.AsReadOnlyList().IndexOf(plr);
-
-                if (Spectator.GetCameraFollow() == null)
-                    Spectator_SetTarget(plr.body);
-            } else {
-                curspectatefolowingname = "NOBODY";
-
-                curspectatefolowing = 0;
-            }
+            Spectator_SelectDefaultTarget();
         }
     }
 
@@ -1464,11 +1464,15 @@ public class UIInGame : MonoBehaviour {
         if (Util.IsInMainMenu()) {
             Con._DEV_FREECAM = false;
             SpectatorModeActive = false;
+            Spectator.SetCameraFollow(null);
+            SpectatorCurrentTarget = SpectatorLastTarget = null;
             return;
         }
 
         Con._DEV_FREECAM = false;
         if (SpectatorModeActive && !Net.IsDedicatedServer) {
+            Spectator.ClearLocalInput(PlayerCamera.main);
+            PlayerCamera_ToggleWoundView_MultiplayerPatch.CloseHealthPanel(PlayerCamera.main);
             SpectatorModeActive = false;
 
             if (PlayerCamera.main.didDeathScreen) {
@@ -1476,6 +1480,7 @@ public class UIInGame : MonoBehaviour {
             }
 
             Spectator.SetCameraFollow(null);
+            SpectatorCurrentTarget = SpectatorLastTarget = null;
 
             
             MoodleManager.main.body = (Util.GetLocalBody());
@@ -1484,6 +1489,9 @@ public class UIInGame : MonoBehaviour {
 
     public static void Spectator_SetTarget(Component obj, string custom_name = null) {
         if (SpectatorModeActive) {
+            var targetBody = Spectator.ResolveBody(obj);
+            if (targetBody == null) return;
+            obj = targetBody;
             NetBody pb;
             if (custom_name != null) {
                 curspectatefolowingname = custom_name;
@@ -1498,6 +1506,7 @@ public class UIInGame : MonoBehaviour {
             }
 
             Spectator.SetCameraFollow(obj.transform);
+            SpectatorCurrentTarget = obj.transform;
             SpectatorLastTarget = obj.transform;
 
             if (obj.TryGetComponent(out pb)) {
@@ -1512,6 +1521,18 @@ public class UIInGame : MonoBehaviour {
 
 
         }
+    }
+
+    internal static void Spectator_SelectDefaultTarget() {
+        var players = ScavPlayer.BodyToPlayerDict.Values;
+        // CLIENT_forcespectator can precede the local death health snapshot.
+        // Prefer another living player even if our stale local body says alive.
+        var target = players.FirstOrDefault(p => !p.IsLocal && p.body != null && p.body.gameObject.activeInHierarchy && p.body.alive);
+        if (target == null) target = players.FirstOrDefault(p => p.body != null && p.body.gameObject.activeInHierarchy && p.body.alive);
+        if (target == null) target = players.FirstOrDefault(p => p.body != null && p.body.gameObject.activeInHierarchy);
+        if (target != null) Spectator_SetTarget(target.body);
+        else if (ScavPlayer.LocalPlayer?.body != null && ScavPlayer.LocalPlayer.body.gameObject.activeInHierarchy) Spectator_SetTarget(ScavPlayer.LocalPlayer.body);
+        else { curspectatefolowingname = "NOBODY"; curspectatefolowing = 0; }
     }
 
 
@@ -2074,14 +2095,23 @@ public class UIInGame : MonoBehaviour {
                 }
             } else if (Con._DEV_GODMODE) {
 
-                locbody.ResetHealth(); // just heal em every frame 
+#if FULLGAME
+                EndingFlow.HealForGodmode(locbody, () => locbody.ResetHealth());
+#else
+                locbody.ResetHealth(); // just heal em every frame
+#endif
 
                 //if (MainNetwork.is_server)
                 //    foreach (var hgggg in NetPlayer.ClientIdToPlayerDict.Values)
                 if (Net.IsServer)
                     foreach (var hgggg in ScavPlayer.ClientIdToPlayerDict.Values)
-                        if (hgggg.body != null)
+                        if (hgggg.body != null) {
+#if FULLGAME
+                            EndingFlow.HealForGodmode(hgggg.body, () => hgggg.Server_HealCharacter());
+#else
                             hgggg.Server_HealCharacter(); // just heal em every frame 
+#endif
+                        }
 
             }
         }

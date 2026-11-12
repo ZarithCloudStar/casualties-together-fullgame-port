@@ -307,7 +307,7 @@ public static class LifepodButton_OnUse_MultiplayerPatch {
             }
         }
         
-        log.serverdeny($"LifepodButton DENIED, something seems sus: user:{user} si:{si}");
+        log.serverdeny($"LifepodButton DENIED: user:{user} body={body?.transform.position} si:{si} object={si?.go?.transform.position}");
 
     }
 

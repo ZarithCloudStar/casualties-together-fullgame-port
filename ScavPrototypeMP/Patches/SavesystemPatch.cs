@@ -155,6 +155,11 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
                         dict["RULES"] = Multiplayer.rules;
                         dict["MODIFIER"] = midlevel ? (WorldMP.GetLayerModifier()?.modifierIndex ?? -1) : -1;
                         dict["PLRPOS"] = ScavPlayer.BodyToPlayerDict.ToDictionary(x => x.Value.GetPersistentId(), x => (x.Key.transform.position.x, x.Key.transform.position.y));
+#if FULLGAME
+                        var poses = PlayerPlacementCheckpoint.Capture();
+                        dict["PLRPOS"] = poses.ToDictionary(p => p.Key, p => (p.Value.x, p.Value.y));
+                        dict["PLRPOSE"] = poses;
+#endif
 
                         string serialized = JsonConvert.SerializeObject(dict, Formatting.Indented);
 #if !RELEASE 
@@ -166,7 +171,7 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
                     }
 
 
-#if !RELEASE
+#if FULLGAME // world snapshot gives "same terrain" on load; demo keeps the original guard
                     // saving world data
                     if (midlevel) {
                         try {
@@ -185,8 +190,7 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
 
                             
 
-                            // TODO all objects lol?
-                            log.warn("TODO SAVESYSTEM OBJECTS");
+                            File.WriteAllBytes(Path.Combine(SavesystemPatch.mpsavefolder, "world_objects.bin"), SavesystemPatch.SerializeWorldObjects());
 
                         } catch (Exception e) {
                             log.error($"SaveGame_MultiplayerPatch: SAVING WORLD\n{e.ToString()}");
@@ -217,6 +221,9 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
         if (!PlayerCamera.main.body.TryGetNetBody(out NetBody nb) || nb == null || !nb.IsPlayer)
             return;
         PlayerCheckpoint.StampCrafted(SavesystemPatch.savedatapathreplacement, nb.RecipesHasCrafterBefore);
+#if FULLGAME
+        EndingFlow.StampSave(SavesystemPatch.savedatapathreplacement, PlayerCamera.main.body);
+#endif
     }
 }
 
@@ -338,6 +345,10 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
 
 
                                 if (MIDLEVEL) {
+#if FULLGAME
+                                    if (Util.GameIsFull()) log.l("LOAD: current-layer checkpoint; player bodies will restore after world generation");
+                                    else
+#endif
                                     log.l($"TODO: LEVEL THING FORGOR WHAT ITS FOR");
                                 }
 
@@ -359,8 +370,12 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
                                 }
                             }
 
-#if !RELEASE
+#if FULLGAME
                             if (MIDLEVEL) {
+                                // Missing tiles must still enter preflight and report
+                                // an incomplete checkpoint instead of quietly loading
+                                // a fresh world under the saved player inventory.
+                                WorldMP.aaaaaaaaaaaaaaaaaaaaaaaaaaa = Array.Empty<byte>();
                                 try {
                                     {
                                         var tilespath = Path.Combine(mpsavedir, "world_tiles.bin");
@@ -383,11 +398,21 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
                                 }  catch (Exception e) {
                                     log.error($"LoadGame_MultiplayerPatch: READING WORLD\n{e.ToString()}");
                                 }
+                                try {
+                                    var tp = Path.Combine(mpsavedir, "world_tiles.bin");
+                                    var fp = Path.Combine(mpsavedir, "world_fluid.bin");
+                                    var op = Path.Combine(mpsavedir, "world_objects.bin");
+                                    log.l($"LOAD: world snapshot tiles={(File.Exists(tp) ? new FileInfo(tp).Length : -1)} fluids={(File.Exists(fp) ? new FileInfo(fp).Length : -1)} objects={(File.Exists(op) ? new FileInfo(op).Length : -1)}");
+                                } catch { }
                             }
 #endif
 
                             // now read all the players
-
+#if FULLGAME
+                            if (Util.GameIsFull()) {
+                                DeferredPlayerSaveRestore.Queue(mpsavedir, MIDLEVEL);
+                            } else {
+#endif
 
                             try {
                                 SharedMain.CreatePlayerCharacters();
@@ -459,6 +484,9 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
                             } catch (Exception e) {
                                 log.error($"LoadGame_MultiplayerPatch: TEST\n{e.ToString()}");
                             }
+#if FULLGAME
+                            }
+#endif
 
 
                         } else {
@@ -493,7 +521,17 @@ public static class PreRunScript_Start_MultiplayerPatch {
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) => SavesystemPatch.TranspilerToReplaceTheApplicationPath(instructions);
 
     static void Prefix() {
-        SavesystemPatch.savedatapathreplacement = SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
+        // In the main menu Net is not running yet, so the plain helper always falls
+        // back to the vanilla folder and "continue" would ignore the multiplayer
+        // save entirely, looking like a brand new run. Prefer mp_save whenever a
+        // multiplayer save exists; a session that starts singleplayer still writes
+        // to the vanilla folder because GetPersistentDataPathToSave checks Net.
+        SavesystemPatch.savedatapathreplacement = SavesystemPatch.HasMultiplayerSaveFile()
+            ? SavesystemPatch.mpsavefolder
+            : SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
+        if (SavesystemPatch.savedatapathreplacement == SavesystemPatch.mpsavefolder) {
+            log.l("SAVE: main menu will use the multiplayer save in mp_save");
+        }
     }
 }
 
@@ -505,7 +543,16 @@ public static class SavesystemPatch {
     // set for map debug and the tutorial. those sessions neither read nor write mp_save.
     internal static bool PreserveSave;
     const string _mpsavefolder_name = "mp_save";
-    public static string mpsavefolder => Path.Combine(Application.persistentDataPath, _mpsavefolder_name);
+    public static string mpsavefolder {
+        get {
+#if FULLGAME && TESTING
+            // Keep opt-in integration fixtures away from the user's real run.
+            string fixture = Environment.GetEnvironmentVariable("CT_ENDING_TEST_SAVE");
+            if (Environment.GetCommandLineArgs().Contains("--mp-ending-test") && !string.IsNullOrEmpty(fixture)) return fixture;
+#endif
+            return Path.Combine(Application.persistentDataPath, _mpsavefolder_name);
+        }
+    }
     public static string vanillasavefolder => Application.persistentDataPath;
     public const string mpsaveheaderfile = "mp_rules.json";
 
@@ -624,7 +671,7 @@ public static class SavesystemPatch {
 
         for (int y = 0; y < world.height; y++) {
             for (int x = 0; x < world.width; x++) {
-                byteblocks[y * world.height + x] = (byte)blocks[x, y];
+                byteblocks[y * world.width + x] = (byte)blocks[x, y];
             }
         }
 
@@ -646,13 +693,16 @@ public static class SavesystemPatch {
             var blocks = worldBlocks;
             for (int y = 0; y < world.height; y++) {
                 for (int x = 0; x < world.width; x++) {
-                    blocks[x, y] = (ushort)mapblocks[y * world.height + x];
+                    blocks[x, y] = (ushort)mapblocks[y * world.width + x];
                 }
             }
 
             world.UpdateWorld();
         } catch (Exception e) {
             log.error($"Failed to load map blocks: {e}");
+#if FULLGAME
+            if (WorldSnapshotTransfer.SnapshotMode) throw;
+#endif
         }
     }
 
@@ -668,7 +718,7 @@ public static class SavesystemPatch {
 
         for (int y = 0; y < world.height; y++) {
             for (int x = 0; x < world.width; x++) {
-                bytefluids[y * world.height + x] = (byte)f[x, y];
+                bytefluids[y * world.width + x] = (byte)f[x, y];
             }
         }
 
@@ -685,18 +735,29 @@ public static class SavesystemPatch {
             var f = fluid;
             for (int y = 0; y < world.height; y++) {
                 for (int x = 0; x < world.width; x++) {
-                    f[x, y] = (byte)mapfluidss[y * world.height + x];
+                    f[x, y] = (byte)mapfluidss[y * world.width + x];
                 }
             }
 
             world.UpdateWorld();
         } catch (Exception e) {
             log.error($"Failed to load map fluid: {e}");
+#if FULLGAME
+            if (WorldSnapshotTransfer.SnapshotMode) throw;
+#endif
         }
     }
 
 
 
+#if FULLGAME
+    public static byte[] SerializeWorldObjects() {
+        return WorldObjectSnapshot.Serialize();
+    }
+    public static void DeserializeWorldObjects(byte[] data) {
+        WorldObjectSnapshot.Deserialize(data);
+    }
+#else
 #if !RELEASE
     public static byte[] SerializeWorldObjects() {
 
@@ -707,6 +768,7 @@ public static class SavesystemPatch {
 
         return new byte[0];
     }
+#endif
 #endif
 
 

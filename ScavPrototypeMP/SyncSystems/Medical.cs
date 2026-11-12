@@ -58,7 +58,7 @@ public struct CharacterLimbHealthState : INetSerializeByMemcpy {
     public float furBloodAmount { get { return compressednumfurBloodAmount / 25.5f; } set { compressednumfurBloodAmount = (byte)(Mathf.Clamp(value, 0f, 10f) * 25.5f); } }
 
     private byte compressednum6;
-    public float muscleHealth { get { return compressednum6 / 2.55f; } set { compressednum6 = (byte)(Mathf.Clamp(value, 0f, 100f) * 2.55f); } }
+    public float muscleHealth { get { return compressednum6 / 2.55f; } set { compressednum6 = (byte)Mathf.RoundToInt(Mathf.Clamp(value, 0f, 100f) * 2.55f); } }
 
     private byte compressednum7;
     public float skinHealth { get { return compressednum7 / 2.55f; } set { compressednum7 = (byte)(Mathf.Clamp(value, 0f, 100f) * 2.55f); } }
@@ -80,9 +80,17 @@ public struct CharacterLimbHealthState : INetSerializeByMemcpy {
     public ushort disinfectionTime;
 
     private byte bandageSlowAmount;
+#if FULLGAME
+    // Unmanaged payload: this struct is copied directly into HealthSync and
+    // PlayerSavedState. Strings cannot be stored as managed references here.
+    ProstheticHealthState prosthetic;
+#endif
     
 
     public CharacterLimbHealthState(Limb limb) {
+#if FULLGAME
+        prosthetic = new ProstheticHealthState(limb.prostheticInfo);
+#endif
         dismembered = limb.dismembered;
         shrapnel = (byte)limb.shrapnel; 
         infected = limb.infected;
@@ -169,6 +177,9 @@ public struct CharacterLimbHealthState : INetSerializeByMemcpy {
     }
 
     public void Apply(Limb limb) {
+#if FULLGAME
+        prosthetic.Apply(limb);
+#endif
 
         //Do sound
         if (dismembered && !limb.dismembered && SharedMain.LocalWorldIsGenerated) {
@@ -850,6 +861,19 @@ static class WoundView_HLayerTimerDisplay_MultiplayerPatch {
 }
 
 
+// The first menu click can activate this component before Unity has run Start.
+// Native Start writes the species label (the same UI text used for the peer name)
+// after ToggleWoundView already assigned it. Restore the selected body's details
+// once native initialization has finished, without changing camera ownership.
+[HarmonyPatch(typeof(WoundView), "Start")]
+internal static class WoundView_Start_RestoreInspectionTargetPatch {
+    static void Postfix(WoundView __instance) {
+        if (!Net.IsRunning || __instance.body == null) return;
+        log.l($"[woundview] initialized body={PlayerCamera_ToggleWoundView_MultiplayerPatch.DescribeBody(__instance.body)} nativeName={__instance.nameText.text}");
+        PlayerCamera_ToggleWoundView_MultiplayerPatch.WoundView_SetTargetBody(__instance.body);
+    }
+}
+
 // fix infections being show on non infected bodies when viewing other players wounds 
 [HarmonyPatch(typeof(WoundView), nameof(WoundView.UpdateView))]
 public static class WoundView_UpdateView_MultiplayerPatch {
@@ -1288,7 +1312,8 @@ public static class WoundView_UpdateView_MultiplayerPatch {
 
 [HarmonyPatch(typeof(WoundView), nameof(WoundView.TakeANap))]
 public static class WoundView_TakeANap_MultiplayerPatch {
-    static void Prefix(WoundView __instance) {
+    static bool Prefix(WoundView __instance) {
+        if (Net.IsRunning && UIInGame.SpectatorModeActive) return false;
         if (PlayerCamera.main.body.canTakeNap) {
             // og code will make the char sleep
 
@@ -1304,6 +1329,7 @@ public static class WoundView_TakeANap_MultiplayerPatch {
             }
 
         }
+        return true;
     }
 
 
@@ -1370,6 +1396,58 @@ public static class WoundView_TakeANap_MultiplayerPatch {
 
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.ToggleWoundView))]
 public static class PlayerCamera_ToggleWoundView_MultiplayerPatch {
+    internal static string DescribeBody(Body b) => b == null ? "null" :
+        $"{b.GetComponent<NetBody>()?.bodyName}#{b.GetInstanceID()} local={b.IsBodyLocal()} pos={b.transform.position:F3}";
+
+    static void TraceCursor(Vector2 cursor, Body hit) {
+        if (!Net.IsRunning) return;
+        var hits = Physics2D.OverlapPointAll(cursor);
+        log.l($"[woundview] cursor={cursor:F3} GetBodyOnPos={DescribeBody(hit)} hits=" +
+            string.Join(";", hits.Select(c => $"{c.name}:Body={DescribeBody(c.GetComponent<Body>())}:Limb={DescribeBody(c.GetComponent<Limb>()?.body)}")));
+        foreach (var b in ScavPlayer.BodyToPlayerDict.Keys.Where(b => b != null))
+            log.l($"[woundview] candidate={DescribeBody(b)} cursorDistance={CursorDistance(cursor, b):F3} colliders=" +
+                string.Join(";", b.GetComponentsInChildren<Collider2D>(true).Select(c => $"{c.name}:enabled={c.enabled}:active={c.gameObject.activeInHierarchy}:simulated={c.attachedRigidbody?.simulated}")));
+    }
+
+    static float CursorDistance(Vector2 cursor, Body b) {
+        float distance = Vector2.Distance(cursor, b.transform.position);
+        // Visible limbs are animated with their rigidbody simulation disabled, so
+        // OverlapPointAll can miss an arm/head that is clearly under the cursor.
+        // Enabled collider bounds still describe the rendered silhouette.
+        foreach (var col in b.GetComponentsInChildren<Collider2D>(true)) {
+            if (col == null || !col.enabled || !col.gameObject.activeInHierarchy) continue;
+            var closest = col.ClosestPoint(cursor);
+            distance = Mathf.Min(distance, Vector2.Distance(cursor, closest));
+        }
+        foreach (var limb in b.limbs) {
+            if (limb != null && !limb.dismembered && limb.gameObject.activeInHierarchy)
+                distance = Mathf.Min(distance, Vector2.Distance(cursor, limb.transform.position));
+        }
+        return distance;
+    }
+
+    // Standing limbs are animated with simulation disabled. OverlapPointAll can
+    // miss a visible head/hand outside the root collider; use the replicated pose.
+    // Keep this limited to medical picking so other physics interactions do not change.
+    internal static Body FindCursorTarget(Vector2 cursor, Body hit) {
+        if (hit != null) return hit;
+        Body nearest = null;
+        float distance = .75f;
+        foreach (var b in ScavPlayer.BodyToPlayerDict.Keys) {
+            if (b == null || !b.gameObject.activeInHierarchy) continue;
+            if (!b.IsBodyLocal() && !KM.DistanceCheck(Util.GetLocalBody(), b, SharedMain.max_player_interaction_distance)) continue;
+            float candidate = CursorDistance(cursor, b);
+            if (candidate < distance) { nearest = b; distance = candidate; }
+        }
+        // Including the owned body above keeps aiming at yourself from choosing
+        // a nearby peer. The caller applies the original interaction distance guard.
+        return nearest;
+    }
+
+    static void Postfix() {
+        if (Net.IsRunning && WoundView.view != null)
+            log.l($"[woundview] after-toggle open={IsOpen()} view.body={DescribeBody(WoundView.view.body)} name={WoundView.view.nameText.text}");
+    }
     public static bool IgnoreNext = false;
 
     public static GameObject CPRButton = null;
@@ -1380,9 +1458,10 @@ public static class PlayerCamera_ToggleWoundView_MultiplayerPatch {
         var wv = WoundView.view;
         // always force set it idk
         wv.body = b;
+        if (Net.IsRunning) log.l($"[woundview] set-target requested={DescribeBody(b)} view.body={DescribeBody(wv.body)}");
 
 
-        var looking_at_someone_else = !Util.IsBodyLocal(wv.body);
+        var looking_at_someone_else = !Util.IsBodyLocal(wv.body) || UIInGame.SpectatorModeActive;
 
         wv.napbutton.gameObject.SetActive(!looking_at_someone_else);
 
@@ -1433,8 +1512,8 @@ public static class PlayerCamera_ToggleWoundView_MultiplayerPatch {
         }
 
         if (CPRButton != null) {
-            CPRButton.SetActive(looking_at_someone_else);
-            CPRButton.GetComponent<UnityEngine.UI.Button>().interactable = looking_at_someone_else;
+            CPRButton.SetActive(looking_at_someone_else && !UIInGame.SpectatorModeActive);
+            CPRButton.GetComponent<UnityEngine.UI.Button>().interactable = looking_at_someone_else && !UIInGame.SpectatorModeActive;
         } else { // thats a problem
             log.error($"Couldn't find the patched 'CPRButton' !!!!!!!! ");
         }
@@ -1528,10 +1607,15 @@ public static class PlayerCamera_ToggleWoundView_MultiplayerPatch {
 
 
         if (!IsOpen()) { // woundview will get activated now
+            if (Net.IsRunning) log.l($"[woundview] opening body_to_open={DescribeBody(body_to_open)} camera={DescribeBody(__instance.body)} owned={DescribeBody(ScavPlayer.LocalPlayer?.body)} sameKey={CoopKeybinds.IsWoundViewSameAsOG()}");
 
-            if (Util.IsLocalBodyAlive() && CoopKeybinds.IsWoundViewSameAsOG() && UnityEngine.Input.GetKeyDown(KeyBinds.GetBind(CoopKeybinds.woundview))) {
+            if (body_to_open == null && Util.IsLocalBodyAlive() && CoopKeybinds.IsWoundViewSameAsOG() && UnityEngine.Input.GetKeyDown(KeyBinds.GetBind(CoopKeybinds.woundview))) {
 
-                var b = Util.GetBodyOnPos(Util.GetCursorWorldPos());
+                var cursor = Util.GetCursorWorldPos();
+                var hit = Util.GetBodyOnPos(cursor);
+                TraceCursor(cursor, hit);
+                var b = FindCursorTarget(cursor, hit);
+                if (Net.IsRunning) log.l($"[woundview] cursor-target={DescribeBody(b)} source={(hit == null ? "pose" : "collider")}");
                 if (b != null && !b.IsBodyLocal()) {
                     if (KM.DistanceCheck(Util.GetLocalBody(), b, SharedMain.max_player_interaction_distance)) {
                         body_to_open = b;
@@ -1704,6 +1788,7 @@ public static class PlayerCamera_WoundSpecialAction_MultiplayerPatch {
 
 
     public static bool Prefix(PlayerCamera __instance) {
+        if (Net.IsRunning && UIInGame.SpectatorModeActive) return false;
         if (!Net.IsRunning) {
             return true; // do default if singleplayer
         }
@@ -1824,6 +1909,9 @@ public static class PlayerCamera_ApplyWoundItem_MultiplayerPatch {
     }
 
     public static void ForceApplyWoundItem(Body healer ,Limb limb, Item item) {
+#if FULLGAME
+        if (EndingFlow.DuringEscape) log.l($"[anesth] ForceApplyWoundItem item={item?.id} healer={healer?.name} limb={limb?.name} body={limb?.body?.name} server={Net.IsServer}");
+#endif
         PlayerCamera_ApplyWoundItem_MultiplayerPatch.last_wounditem_user = healer;
 
 
@@ -1842,6 +1930,10 @@ public static class PlayerCamera_ApplyWoundItem_MultiplayerPatch {
     public static Item applying_item = null;
 
     static bool Prefix(PlayerCamera __instance, Item item) {
+        if (Net.IsRunning && UIInGame.SpectatorModeActive) return false;
+#if FULLGAME
+        if (EndingFlow.DuringEscape) log.l($"[anesth] ApplyWoundItem item={item?.id} selectedLimb={__instance.selectedLimb?.name} body={__instance.selectedLimb?.body?.name} healer={__instance.body?.name} server={Net.IsServer}");
+#endif
         applying_on_limb = __instance.selectedLimb;
         applying_item = item;
         if (Net.IsRunning) {
@@ -1872,7 +1964,7 @@ public static class PlayerCamera_ApplyWoundItem_MultiplayerPatch {
                     writer.Put(new LimbNetId(__instance.selectedLimb));
                     writer.Put(isi.syncId);
 
-                    Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
+                    Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
                     // WRITER END;
 
 
@@ -2145,6 +2237,10 @@ public static class Limb_ImpactDamage_MultiplayerPatch {
 
 
 internal class MedicalSync : CasualtiesTogetherSingleton {
+#if FULLGAME
+    [ServerReceiver((byte)NetmsgId.SERVER_ProsthesisRepair)]
+    static void ServerReceiver_ProsthesisRepair(knetid client, LiteNetLib.Utils.NetDataReader reader) => ProsthesisRepairAuthority.Receive(client, reader);
+#endif
     static bool stolenformp_lastHeartBeating = false;
     static readonly Dictionary<knetid, CharacterHealthStateSyncPacket> HeldHealth = new Dictionary<knetid, CharacterHealthStateSyncPacket>();
     static readonly List<knetid> HeldHealthDone = new List<knetid>();
@@ -2413,15 +2509,6 @@ internal class MedicalSync : CasualtiesTogetherSingleton {
             server_tosend_queue.Enqueue(nb);
 
         }
-    }
-
-    // push host health with confirm so owners keep trader bites / host-applied damage.
-    public static void ForceHealth(NetBody nb) {
-        if (nb == null || nb.body == null || !Net.IsServer) {
-            return;
-        }
-        nb.healthConfirm = true;
-        Server_SendCharacterHealth(nb, true);
     }
 
 

@@ -300,8 +300,20 @@ public static class Body_PlaceBody_MultiplayerPatch {
         ogbodypos = __instance.transform.position;
         ogcampos = PlayerCamera.main.transform.position;
 
-        if (Multiplayer.rules.LayerFinishKeepXOffset && ScavPlayer.TryGetLocalNetBody(out var pb) && Net.IsServer && ScavPlayer.LocalPlayer.IsAlive()) {
-            pb.SetBodyPosition(Util.PlaceBody_FindSpawnLocation(ScavPlayer.LocalPlayer.ServerPlayerState.layer_transition_x_offset, pb.body));
+        // Clients already received the server teleport in WorldPlacePlayer.
+        // Never run vanilla Find(ENDLABSPAWN) or a local terrain scan here.
+        if (Net.IsClient) return false;
+#if FULLGAME
+        if (Util.GameIsFull() && WorldGeneration.world.biomeDepth >= 10 && WorldGeneration.world.biomeDepth <= 11) {
+            __instance.transform.position = Util.PlaceBody_FindSpawnLocation(0f, __instance.origColSize);
+            PlayerCamera.main.transform.position = __instance.transform.position;
+            log.l($"[spawn] server layer={WorldGeneration.world.biomeDepth} vanilla final-layer spawn={__instance.transform.position}");
+            return false;
+        }
+#endif
+
+        if (!Util.GameIsFull() && Multiplayer.rules.LayerFinishKeepXOffset && ScavPlayer.TryGetLocalNetBody(out var pb) && Net.IsServer && ScavPlayer.LocalPlayer.IsAlive()) {
+            pb.SetBodyPosition(Util.PlaceBody_FindSpawnLocation(ScavPlayer.LocalPlayer.ServerPlayerState.layer_transition_x_offset));
             return false;
         }
 
@@ -318,6 +330,13 @@ public static class Body_PlaceBody_MultiplayerPatch {
                 foreach (var item in NetBody.all_instances) {
                     if (item.IsPlayer && !item.IsBodyLocal()) {
                         item.plr.ResetEntropy();
+#if FULLGAME
+                        if (Util.GameIsFull()) {
+                            item.plr.Server_TeleportCharacter(body.transform.position);
+                            log.l($"[spawn] server placed player={item.plr.GetPersistentId()} layer={WorldGeneration.world.biomeDepth} at={body.transform.position}");
+                            continue;
+                        }
+#endif
                         item.SetBodyPosition(new Vector2(item.transform.position.x, body.transform.position.y));
                     }
                 }

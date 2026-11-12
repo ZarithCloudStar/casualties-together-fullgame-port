@@ -125,8 +125,11 @@ public class CharStatusVisuals : MonoBehaviour {
             var tmp = nametag.GetComponent<TextMeshPro>();
             tmp.rectTransform.position += new Vector3(0, 99999);
             tmp.richText = false;
-
-
+#if FULLGAME
+            // By now the localized fonts are loaded; try to attach a CJK fallback so
+            // non-latin player names render instead of boxes.
+            if (Util.GameIsFull()) CjkFontFallback.Ensure();
+#endif
         }
 
     }

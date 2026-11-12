@@ -55,6 +55,9 @@ public static class CoUtils_instance_MultiplayerPatch {
 [HarmonyPatch(typeof(CoUtils), nameof(CoUtils.DoTimedOp))]
 static class CoUtils_DoTimedOp_MultiplayerPatch {
     static bool Prefix(CoUtils __instance, ref string id, ref Action operation, ref float duration) {
+#if FULLGAME
+        if (EndingFlow.DuringEscape) log.l($"[anesth] DoTimedOp id={id} duration={duration} player={__instance.GetPlayer()?.GetPersistentId()} server={Net.IsServer}");
+#endif
 #if DEBUG
         if (log.verbose) log.devevent($"CoUtils.DoTimedOp called (id={id},duration={duration}) {__instance.GetPlayer().ToSafeString()} {new StackTrace(1,true)}", __instance.GetPlayer()?.pos ?? Vector2.zero);
 #endif

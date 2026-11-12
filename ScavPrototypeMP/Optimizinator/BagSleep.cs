@@ -23,6 +23,7 @@ public static class BagSleep
 	static readonly List<Row> Rows = new List<Row>();
 	static readonly HashSet<int> Ids = new HashSet<int>();
 	static readonly HashSet<int> Holds = new HashSet<int>();
+	internal static bool IsSleeping(GameObject go) => go != null && Holds.Contains(go.GetInstanceID());
 	static readonly Dictionary<int, bool> Lights = new Dictionary<int, bool>();
 	static int _sleepLeft;
 

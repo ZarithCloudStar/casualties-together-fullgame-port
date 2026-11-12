@@ -15,7 +15,6 @@ using Together;
 using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.U2D.IK;
-using UnityEngine.UI;
 using static Unity.VisualScripting.Member;
 using static UnityEngine.EventSystems.EventTrigger;
 
@@ -77,13 +76,6 @@ internal static class SettingsMenu_SelectTab_Patch {
 
 public static class Util_UnityExtensions {
 
-    public static Image SetAlpha(this Image img, float alpha) {
-        if (img != null) {
-            img.color = img.color.WithAlpha(alpha);
-        } 
-        return img;
-    }
-
     public static Rect GetScreenRect(this RectTransform rt, Camera camera = null) {
         var corners = new Vector3[4];
         rt.GetWorldCorners(corners);
@@ -103,16 +95,6 @@ public static class Util_UnityExtensions {
         if (go == null) 
             throw new NotSupportedException(uo.GetType().ToString());
         return go.GetComponent(componentType) ?? go.AddComponent(componentType);
-    }
-
-    public static Transform Transform(this UnityEngine.Object uo) {
-        if (uo != null) {
-            if (uo is GameObject)
-                return ((GameObject)uo).transform;
-            if (uo is Component)
-                return ((Component)uo).transform;
-        }
-        return null;
     }
 }
 
@@ -364,9 +346,6 @@ public static class Util_MiscCUExtensions {
     public static Vector2 GetPosition(this DamagingCrate crate) {
         return crate.transform.position;
     }
-    public static Vector2 GetPosition(this Item item) {
-        return item.transform.position;
-    }
 
     public static T GetOrAddComponent<T>(this CrystalEffect ce) where T : Component {
         var uo = ce.crystal;
@@ -440,9 +419,6 @@ public static class Util_LimbExtensions {
         return limb.body.IsBodyLocal();
     }
 
-    public static bool HasProsthetic(this Limb limb) {
-        return Traverse.Create(limb).Field("prostheticInfo").Field("hasProsthetic").GetValue<bool>();
-    }
 
 }
 
@@ -450,10 +426,10 @@ public static class Util_LimbExtensions {
 public static class Util_BodyExtensions {
 
     public static bool IsBodyLocal(this Vomiter vomiter) {
-        return PlayerCamera.main.body == vomiter.body;
+        return vomiter != null && Util.IsBodyLocal(vomiter.body);
     }
     public static bool IsBodyLocal(this Body body) {
-        return PlayerCamera.main.body == body;
+        return Util.IsBodyLocal(body);
     }
     public static Vector2 GetPosition(this Body body) {
         return body.transform.position;
@@ -607,8 +583,6 @@ public static class Util_BodyExtensions {
             body.clawRegrowTime = 0f;
             body.painShock = 0f;
 
-            Traverse.Create(body).Field("venomFake").SetValue(0f);
-            Traverse.Create(body).Field("barotrauma").SetValue(0f);
 
             if (body.TryGetComponent(out Painkillers component))
                 UnityEngine.Object.Destroy(component);
@@ -1100,24 +1074,24 @@ public static class Util {
         return false;
     }
     public static Body GetLocalBody() {
-        return PlayerCamera.main.body;
+        return GetLocalBodyNullable();
     }
     public static Body GetLocalBodyNullable() {
+        // Spectator camera selection is presentation, never network ownership.
+        // Keep the scene-start fallback until the local ScavPlayer has a body.
+        if (Net.IsRunning && UIInGame.SpectatorModeActive)
+            return ScavPlayer.LocalPlayer?.body;
         if (PlayerCamera.main == null) {
             return null;
         }
         return PlayerCamera.main.body;
     }
     public static bool TryGetLocalBody(out Body body) {
-        if (PlayerCamera.main == null) {
-            body = null;
-            return false;
-        }
-        body = PlayerCamera.main.body;
+        body = GetLocalBodyNullable();
         return body != null;
     }
     public static bool IsBodyLocal( Body body) {
-        return PlayerCamera.main?.body == body;
+        return body != null && GetLocalBodyNullable() == body;
     }
     public static bool IsBodyLocal( Limb limb) {
         return limb.body.IsBodyLocal();
@@ -1173,7 +1147,7 @@ public static class Util {
     }
     public static void WoundViewShowAlertText(in string msg) {
         if (IsInWoundView()) {
-            WoundView.view.criticalPanel.SetActive(true);
+            WoundView.view.criticalPanel.SetActive(value: true);
             var txt = WoundView.view.criticalPanel.GetComponentInChildren<TextMeshProUGUI>(true);
             if ((bool)txt) {
                 //OG: WoundView.UpdateView  V520dev1
@@ -1341,49 +1315,36 @@ public static class Util {
 
 
 
-    public static Vector2 PlaceBody_FindSpawnLocation(float x, Body b) {
-        var origColSize = new Vector2(1.6f, 5.0f);
-        if (b != null) {
-            origColSize = b.origColSize;
+    public static Vector2 PlaceBody_FindSpawnLocation(float x = 0, Vector2? colliderSize = null) {
+#if FULLGAME
+        // Body.PlaceBody (fullgame, lines 2178-2211): the final two layers
+        // do not use the normal top-down scan or preserve the previous X.
+        var world = WorldGeneration.world;
+        if (Util.GameIsFull() && world.biomeDepth == 11) {
+            var spawn = GameObject.Find("ENDLABSPAWN");
+            if (spawn == null) throw new InvalidOperationException("[spawn] server ENDLABSPAWN missing; refusing a rock/top fallback");
+            return spawn.transform.position;
         }
-        var p = new Vector2(0,0);
-        try {
-            p = new Vector2(x, WorldGeneration.world.halfHeight * 0.75f);
-            //OG: Body.PlaceBody Fullgame 09.11.2026 with modified X
-            if (WorldGeneration.world.biomeOverride == WorldGeneration.OverrideSceneType.Tutorial) {
-                return GameObject.Find("TUTORIALSPAWN").transform.position;
+        if (Util.GameIsFull() && world.biomeDepth == 10) {
+            for (int j = 0; j < world.height; j++) {
+                Vector2 p = Vector2.down * (world.halfHeight - j);
+                if (!Physics2D.OverlapBox(p, colliderSize ?? Body_Awake_MultiplayerPatch.origColSize, 0f, LayerMask.GetMask("Ground"))) return p;
             }
-            if (WorldGeneration.world.biomeDepth == 11) {
-                return GameObject.Find("ENDLABSPAWN").transform.position;
-            }
-            bool flag = false;
-            if (WorldGeneration.world.biomeDepth != 10) {
-                for (int i = 0; i < WorldGeneration.world.height; i++) {
-                    var pos = new Vector2(x, WorldGeneration.world.halfHeight - i);
-                    if (!Physics2D.OverlapBox(pos, origColSize, 0f, LayerMask.GetMask("Ground"))) {
-                        flag = true;
-                    } else if (flag) {
-                        return pos;
-                    }
-                }
-            } else {
-                for (int j = 0; j < WorldGeneration.world.height; j++) {
-                    var pos = Vector2.down * (WorldGeneration.world.halfHeight - j);
-                    pos.x = x;
-                    if (!Physics2D.OverlapBox(pos, origColSize, 0f, LayerMask.GetMask("Ground"))) {
-                        p = pos;
-                        flag = true;
-                        break;
-                    }
-                }
-            }
-            if (!flag) {
-                log.warn($"No valid player spawnpoint for {DebugHelp.GetPlayerFullDebugString(b)}!");
-            }
-        } catch (Exception e) {
-            log.error(e);
+            throw new InvalidOperationException("[spawn] layer10 has no bottom spawn");
         }
-        return p;
+#endif
+        
+        //OG: Body.PlaceBody V7.0-pre1
+        bool flag = false;
+        for (int i = 0; i < WorldGeneration.world.height; i++) {
+            var p = new Vector2(x, WorldGeneration.world.halfHeight - i);
+            if (!Physics2D.OverlapBox(p, Body_Awake_MultiplayerPatch.origColSize, 0f, LayerMask.GetMask("Ground"))) {
+                flag = true;
+            } else if (flag) {
+                return p;
+            }
+        }
+        return new Vector2(x, WorldGeneration.world.halfHeight * 0.75f);
     }
 
 
@@ -1729,8 +1690,6 @@ public static class Util {
 
 
     private static bool? _checkedIfIsDemo = null;
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool GameIsDemo() { // Stolen from CUCoreLib
         if (_checkedIfIsDemo.HasValue) return _checkedIfIsDemo.Value;
 
@@ -1763,8 +1722,6 @@ public static class Util {
         _checkedIfIsDemo = matched.Count < 2;
         return _checkedIfIsDemo.Value;
     }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool GameIsFull() => !GameIsDemo();
 
     #region COMPRESSION

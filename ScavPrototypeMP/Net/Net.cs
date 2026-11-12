@@ -358,6 +358,9 @@ public static class Net {
         byte msgId = 0;
         try {
             reader.Get(out msgId);
+#if FULLGAME
+            if (Util.GameIsFull() && !PendingCharacterAdmission.CanDispatch(callerclientId, msgId)) return;
+#endif
             if (SERVER_MESSAGE_HANDLERS.TryGetValue(msgId, out var func)) {
                 func( callerclientId, reader);
             } else {
@@ -420,7 +423,11 @@ public static class Net {
             if (!privileged_user) {
 
                 if (
-                    ScavPlayer.ClientIdToPlayerDict.Count() + 1 > Multiplayer.PLAYER_COUNT_LIMIT
+                    ScavPlayer.ClientIdToPlayerDict.Count()
+#if FULLGAME
+                    + (Util.GameIsFull() ? PendingCharacterAdmission.Count : 0)
+#endif
+                    + 1 > Multiplayer.PLAYER_COUNT_LIMIT
                     //netmgr.ConnectedPeersCount + 1 > Multiplayer.PLAYER_COUNT_LIMIT
                 ) {
                     reject_reason = ($"Max players reached ({Multiplayer.PLAYER_COUNT_LIMIT}).");
@@ -428,6 +435,12 @@ public static class Net {
                 }
 
                 if (should_validate_name) {
+#if FULLGAME
+                    if (Util.GameIsFull() && PendingCharacterAdmission.HasName(userInfo.userName)) {
+                        reject_reason = "Player with this name already exists.";
+                        return false;
+                    }
+#endif
 
                     // check name
                     foreach (var item in ScavPlayer.ClientIdToPlayerDict) {
@@ -464,7 +477,15 @@ public static class Net {
 
 
 
+    internal static void QuiesceForApplicationQuit() { IsRunning = false; }
+
     public static void ShutdownReset() {
+#if FULLGAME
+        if (Util.GameIsFull()) {
+            PendingCharacterAdmission.Reset();
+            CharacterLobby.Reset();
+        }
+#endif
         try {
 
             ClientEntityManager = null;
@@ -635,6 +656,9 @@ public static class Net {
     internal static void OnTransportConnected() {
 
         LiteEntitySystemInit();
+#if FULLGAME
+        if (Util.GameIsFull()) CharacterLobby.OnTransportConnected();
+#endif
 
         if (Net.Type == NetType.Host && ScavPlayer.LocalPlayer == null) {
 
@@ -644,7 +668,8 @@ public static class Net {
                 steamId = KSteam.GetLocalUserSteamID().m_SteamID;
                 aplayername = steamId.ToString();
             }
-            var playerEntity = BasePlayer.ServerCreatePlayer(aplayername, steamId, UIMainMenu.LAST_VALID_INPUT_COLOR, true);
+            var playerEntity = BasePlayer.ServerCreatePlayer(aplayername, steamId, UIMainMenu.LAST_VALID_INPUT_COLOR, true,
+                Util.GameIsFull() ? CharacterSelection.Local : (byte)0);
 
         }
 
@@ -656,6 +681,9 @@ public static class Net {
     internal static void DoUpdate() {
         try {
             Transport?.Update();
+#if FULLGAME
+            if (Util.GameIsFull()) PendingCharacterAdmission.Tick();
+#endif
             ClientEntityManager?.Update();
             ServerEntityManager?.Update();
         } catch (Exception e) {
@@ -1056,7 +1084,13 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
         if (log.verbose) log.l($"{this.GetType().Name}: Accepted connection from: {newpeer}  name:{userInfo.userName}  color:{userInfo.color}");
 #endif
 
-        var playerEntity = BasePlayer.ServerCreatePlayer(userInfo.userName, 0, userInfo.color, false);
+#if FULLGAME
+        if (Util.GameIsFull()) {
+            BeginCharacterAdmission(newpeer, userInfo);
+            return;
+        }
+#endif
+        var playerEntity = BasePlayer.ServerCreatePlayer(userInfo.userName, 0, userInfo.color, false, userInfo.characterSelected);
 
         ClientIdToPeerDict[playerEntity.OwnerId] = newpeer;
 
@@ -1068,6 +1102,35 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
         };
 
     }
+
+#if FULLGAME
+    internal bool BeginCharacterAdmission(NetPeer peer, Multiplayer.IntroductionPlayerInfo intro) {
+        knetid temporaryId = 0;
+        return PendingCharacterAdmission.Begin(peer, intro, 0, intro.userName,
+            () => peer.ConnectionState == ConnectionState.Connected,
+            id => {
+                temporaryId = id;
+                ClientIdToPeerDict[id] = peer;
+                peer.Tag = new TagPlayerInfo { intro = intro, plrId = id, pendingCharacter = true };
+            },
+            entity => {
+                ClientIdToPeerDict.Remove(temporaryId);
+                ClientIdToPeerDict[entity.OwnerId] = peer;
+                var acceptedIntro = intro;
+                acceptedIntro.characterSelected = entity.lobbyCharacterSelected.Value;
+                peer.Tag = new TagPlayerInfo {
+                    intro = acceptedIntro, plrId = entity.OwnerId,
+                    netPlayer = entity.serverNetPlayer, plr = entity.player
+                };
+            },
+            () => {
+                if (ClientIdToPeerDict.TryGet(temporaryId, out var current) && ReferenceEquals(current, peer))
+                    ClientIdToPeerDict.Remove(temporaryId);
+                if (peer.Tag is TagPlayerInfo tag && tag.pendingCharacter && tag.plrId.Equals(temporaryId)) peer.Tag = null;
+            },
+            reason => { var writer = new NetDataWriter(); writer.Put(reason); peer.Disconnect(writer); });
+    }
+#endif
 
     void INetEventListener.OnNetworkError(IPEndPoint endPoint, SocketError socketError) {
         log.error($"{this.GetType().Name}.INetEventListener.OnNetworkError :IPEndPoint: {endPoint}, SocketError: {socketError}");
@@ -1125,6 +1188,9 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
         if (log.verbose) log.l($"{this.GetType().Name}.INetEventListener.OnPeerDisconnected :peer: {peer}, DisconnectInfo: Reason: {disconnectInfo.Reason} SocketErrorCode: {disconnectInfo.SocketErrorCode} AdditionalData: {disconnectInfo.AdditionalData?.RawData?.ToHexString()}");
 #endif
         var tttttt = Net.Type;
+#if FULLGAME
+        if (Util.GameIsFull()) PendingCharacterAdmission.Disconnect(peer);
+#endif
 
         try {
             if (peer == CLIENT_PEER) {
@@ -1209,6 +1275,9 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
             foreach (var peer in peers) {
                 try {
                     if (peer.Tag != null && peer.Tag is TagPlayerInfo klpe) {
+#if FULLGAME
+                        if (Util.GameIsFull() && klpe.plr == null) continue;
+#endif
                         //ClientIdToPeerDict[klpe.plrId] = peer;
                         klpe.plr.ping = peer.Ping * 0.001f;
                     } 

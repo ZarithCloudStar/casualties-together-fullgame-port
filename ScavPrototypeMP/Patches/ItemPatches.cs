@@ -201,6 +201,22 @@ public static class Item_DoAmputate_MultiplayerPatch {
 
 
 
+[HarmonyPatch(typeof(FreshItemDrop), "Awake")]
+static class FreshItemDrop_Awake_MultiplayerPatch {
+    static bool Prefix(FreshItemDrop __instance) {
+        if (!Net.IsRunning || !Net.IsClient) return true;
+        // The server's FreshItemDrop already opted into floating; a client's
+        // local itemfloating setting must not destroy this replicated state.
+        __instance.timeLeft = 10f;
+        // Inventory reseating can temporarily parent a replica. Its authoritative
+        // lifetime must survive that until the server sends the pickup state.
+        __instance.forceOn = true;
+        __instance.rb = __instance.GetComponent<Rigidbody2D>();
+        if (__instance.rb != null) __instance.rb.gravityScale = 0f;
+        return false;
+    }
+}
+
 [HarmonyPatch(typeof(FreshItemDrop), nameof(FreshItemDrop.Start))]
 static class FreshItemDrop_Start_MultiplayerPatch {
 
@@ -208,6 +224,8 @@ static class FreshItemDrop_Start_MultiplayerPatch {
     const float max_distance_to_keep = 8f;
 
     static void Postfix(FreshItemDrop __instance) {
+        if (Net.IsRunning && Net.IsClient) return; // lifetime/relevance belongs to the server
+        if (Net.IsRunning && log.verbose) log.l($"[drop] server fresh drop id={__instance.GetComponent<Item>()?.id} at={__instance.transform.position} lifetime={__instance.timeLeft:0.0}s");
         if (Net.IsRunning) {
             var np = ScavPlayer.GetDistanceToNearestLivingPlayer(__instance.transform.position);
             if (np.Item2 > max_distance_to_keep * max_distance_to_keep) {
@@ -227,7 +245,12 @@ static class FreshItemDrop_Start_MultiplayerPatch {
 static class FreshItemDrop_OnDestroy_ErrorfixPatch {
     static bool Prefix(FreshItemDrop __instance) {
 
-        __instance.rb.gravityScale = 1;
+        // Publish the terminal edge now, before a sleeping/inactive object can
+        // stop its tracker and leave the last positive tenth in the snapshot.
+        if (Net.IsRunning && Net.IsServer && NetObjectRegistry.TryGetSyncInfo(__instance.gameObject, out var si))
+            si.EndFreshDrop();
+
+        if (__instance.rb != null) __instance.rb.gravityScale = 1;
 
         if (__instance.part != null) {
             Component.Destroy(__instance.part.gameObject);

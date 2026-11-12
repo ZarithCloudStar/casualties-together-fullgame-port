@@ -54,8 +54,7 @@ public struct PlayerSavedState {
 
 
 
-        // inventory park is host-only. a client SAVESTATE_ left syncinfos live and made leave ghosts.
-        if (Net.IsServer && Multiplayer.rules.SavePlayerInventory) {
+        if (Multiplayer.rules.SavePlayerInventory) {
             invholder = new GameObject($"SAVESTATE_{nb}");
             inventory = new Item[8];
 
@@ -72,15 +71,6 @@ public struct PlayerSavedState {
 
             foreach (var item in l) {
                 item.transform.SetParent(invholder.transform);
-            }
-
-            // host keeps the meshes for rejoin Apply, but SyncInfo must die or
-            // later clients spawn floaters at the leave spot.
-            Item[] parked = invholder.GetComponentsInChildren<Item>(true);
-            for (int i = 0; i < parked.Length; i++) {
-                if (parked[i] != null) {
-                    NetObjectRegistry.DetachSyncKeepMesh(parked[i].gameObject);
-                }
             }
 
             invholder.SetActive(false);
@@ -102,6 +92,10 @@ public struct PlayerSavedState {
             health.Apply(body);
             painkiller.Apply(body);
             if (body.TryGetNetBody(out var nb)) {
+#if FULLGAME
+                if (Util.GameIsFull() && nb.IsPlayer) ChipState.ApplyGameplay(nb.plr);
+                else
+#endif
                 nb.SetUnchipped(unchipped);
                 if (nb.IsPlayer) {
                     if (MindMemory != null) {
@@ -505,7 +499,36 @@ public class ServerMain : MonoBehaviour {
 
 
     public static GameObject CHARACTER_PREFAB = null;
-    public static Body CHARACTER_PREFAB_BODY => CHARACTER_PREFAB.transform.GetChild(0).GetComponent<Body>();
+    public static Body CHARACTER_PREFAB_BODY => Util.GameIsFull()
+        ? CHARACTER_PREFAB.GetComponentInChildren<Body>(true)
+        : CHARACTER_PREFAB.transform.GetChild(0).GetComponent<Body>();
+
+    static readonly string[] characterPrefabPaths = {
+        "Special/Characters/Experiment", "Special/Characters/Milky", "Special/Characters/Dune"
+    };
+    static readonly GameObject[] characterPrefabs = new GameObject[3];
+
+    public static GameObject GetCharacterPrefab(int chr) => GetCharacterPrefab(chr, out _);
+
+    internal static GameObject GetCharacterPrefab(int chr, out byte resolvedCharacter) {
+        resolvedCharacter = 0;
+        if (!Util.GameIsFull()) return CHARACTER_PREFAB;
+        if (chr < 0 || chr >= characterPrefabs.Length) {
+            log.warn($"CHARACTER: invalid prefab selection {chr}; falling back to Experiment (0).");
+            chr = 0;
+        }
+        if (characterPrefabs[chr] == null) {
+            characterPrefabs[chr] = Resources.Load<GameObject>(characterPrefabPaths[chr]);
+            if (characterPrefabs[chr] == null) {
+                log.error($"CHARACTER: could not load '{characterPrefabPaths[chr]}'; falling back to Experiment (0).");
+                return chr == 0 ? null : GetCharacterPrefab(0, out resolvedCharacter);
+            }
+        }
+        resolvedCharacter = (byte)chr;
+        return characterPrefabs[chr];
+    }
+
+    internal static string GetCharacterPrefabPath(int chr) => characterPrefabPaths[chr >= 0 && chr < characterPrefabPaths.Length ? chr : 0];
 
 
     public static IReadOnlyList<knetid> AllClientIds => _real_AllClientIds;
@@ -519,6 +542,14 @@ public class ServerMain : MonoBehaviour {
 
 
     public static IEnumerator GiveSpawnLocationToPlayer(knetid clientId) {
+#if FULLGAME
+        double snapshotWait = Time.realtimeSinceStartupAsDouble;
+        string snapshotToken = WorldSnapshotTransfer.Token;
+        while (clientId != Net.SERVER_CLIENTID && !WorldSnapshotTransfer.SpawnAllowed(clientId)) {
+            if (!Net.IsServer || snapshotToken != WorldSnapshotTransfer.Token || WorldSnapshotTransfer.Failed || Time.realtimeSinceStartupAsDouble - snapshotWait > 120) yield break;
+            yield return null;
+        }
+#endif
 #if TESTING
         log.l($"GiveSpawnLocationToPlayer called  clientId:{clientId}");
 #endif
@@ -526,7 +557,11 @@ public class ServerMain : MonoBehaviour {
         ScavPlayer plr;
         NetBody pb;
 
-        while (!ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out plr, out pb) || !Util.IsWorldGenerated() || !Body_PlaceBody_MultiplayerPatch.has_spawn_location ) { // wait until the world is generated
+        while (!ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out plr, out pb) || !Util.IsWorldGenerated() || !Body_PlaceBody_MultiplayerPatch.has_spawn_location
+#if FULLGAME
+            || (Util.GameIsFull() && Util.IsTutorialWorld() && !SandboxMode.SpawnReady)
+#endif
+        ) { // wait until the world and the authoritative tutorial room are placed
 
             if (plr != null) {
                 plr.ResetEntropy();
@@ -537,6 +572,7 @@ public class ServerMain : MonoBehaviour {
 
         if (plr != null) {
             plr.ResetEntropy();
+            log.l($"[spawn] request player={plr.playerName} lateJoin={plr.LateJoin} admissionPending={plr.ServerPlayerState.late_join_spawn_pending} spawnOnPlayer={Multiplayer.rules.SpawnOnPlayer} savedPose={plr.ServerPlayerState.did_give_spawn_location_from_a_save} shared={Body_PlaceBody_MultiplayerPatch.SpawnLocation:F3} host={ScavPlayer.LocalPlayer?.pos}");
 #if TESTING
             log.l($"GiveSpawnLocationToPlayer finished waiting for {plr}");
 #endif
@@ -544,9 +580,29 @@ public class ServerMain : MonoBehaviour {
             if (!pb.body.alive && Multiplayer.rules.LateJoinSpectate) {
                 // dont give them any spawn location, cuz they were moved to outside of the map
             } else {
+#if FULLGAME
+                if (Util.GameIsFull() && Util.IsTutorialWorld() && SandboxMode.SpawnReady) {
+                    plr.Server_TeleportCharacter(SandboxMode.SpawnLocation);
+                    log.l($"[sandbox] authoritative spawn player={plr.playerName} at={SandboxMode.SpawnLocation:F3}");
+                } else if (Util.GameIsFull() && PlayerPlacementCheckpoint.TryApply(plr, true)) {
+                    // The saved pose wins even for a late WS1 ACK / late join.
+                } else if (Util.GameIsFull() && !plr.ServerPlayerState.did_give_spawn_location_from_a_save) {
+                    if (!TrySpawnLateJoinOnCompanion(plr, pb)) {
+                        plr.Server_TeleportCharacter(Body_PlaceBody_MultiplayerPatch.SpawnLocation);
+                        log.l($"[spawn] shared authoritative layer={WorldGeneration.world.biomeDepth} player={plr.GetPersistentId()} at={Body_PlaceBody_MultiplayerPatch.SpawnLocation}");
+                    }
+                } else
+#endif
                 if (plr.ServerPlayerState.did_give_spawn_location_from_a_save) {
                     plr.ServerPlayerState.did_give_spawn_location_from_a_save = false;
                 } else {
+#if FULLGAME
+                    if (Util.GameIsFull() && WorldGeneration.world.biomeDepth >= 10 && WorldGeneration.world.biomeDepth <= 11) {
+                        var spawn = Body_PlaceBody_MultiplayerPatch.SpawnLocation;
+                        plr.Server_TeleportCharacter(spawn);
+                        log.l($"[spawn] authoritative layer={WorldGeneration.world.biomeDepth} player={plr.GetPersistentId()} at={spawn}");
+                    } else
+#endif
                     if (
                         !Multiplayer.rules.LayerFinishKeepXOffset // dont keep x offset
                         || WorldGeneration.world.totalTraveled <= 0  // if its the first layer all spawn in the pod
@@ -554,11 +610,12 @@ public class ServerMain : MonoBehaviour {
                     ) {
                         LateSpawnLocation(pb);
                     } else {
-                        pb.SetBodyPosition(Util.PlaceBody_FindSpawnLocation(plr.ServerPlayerState.layer_transition_x_offset, plr.body));
+                        pb.SetBodyPosition(Util.PlaceBody_FindSpawnLocation(plr.ServerPlayerState.layer_transition_x_offset));
                     }
                 }
             }
 
+            plr.ServerPlayerState.late_join_spawn_pending = false;
             if (!pb.IsBodyLocal()) {
                 log.l($"SERVER: Sending a spawn location for {pb} to {pb.transform.position} ");
 
@@ -599,7 +656,19 @@ public class ServerMain : MonoBehaviour {
             required = 1000;
             return false;
         }
-        return CheckIfCanFinishLayerCustomCondition((ScavPlayer plr) => { return (plr.pos.y < (float)(0L - (long)WorldGeneration.world.halfHeight) + 3.1f); }, out current, out required);
+#if FULLGAME
+        // EndingFlow owns the carrier breach/cutscene. Generic auto-continue
+        // must never race it, including when everyone spawns at layer10 bottom.
+        if (EndingFlow.Active && WorldGeneration.world.biomeDepth == 10) {
+            current = 0; required = GetNumberOfPlayersRequiredToFinishLayer();
+            return false;
+        }
+#endif
+        return CheckIfCanFinishLayerCustomCondition(plr => IsLayerFinishPosition(plr.pos.y), out current, out required);
+    }
+    internal static bool IsLayerFinishPosition(float y) {
+        var world = WorldGeneration.world;
+        return world.biomeDepth == 10 ? y > world.halfHeight - 5f : y < -(float)world.halfHeight + 3.1f;
     }
     public static bool CheckIfShouldStartRadlineForStragglers(byte minimum = 1) {
         if (Multiplayer.rules.StragglerRadlinePercent < 100) {
@@ -639,6 +708,24 @@ public class ServerMain : MonoBehaviour {
     }
 
 
+
+#if FULLGAME
+    // Saved/checkpoint poses and sandbox placement have already taken priority
+    // in GiveSpawnLocationToPlayer. Only a fresh mid-run admission reaches here.
+    internal static bool TrySpawnLateJoinOnCompanion(ScavPlayer joining, NetBody body) {
+        if (!joining.ServerPlayerState.late_join_spawn_pending || !Multiplayer.rules.SpawnOnPlayer) return false;
+        var companion = GetPlayerBodyHostOrAnyoneAlive(joining, body);
+        if (companion == null || companion == body || companion.body == null || !companion.body.alive || !IsInWorld(companion.pos)) {
+            log.l($"[spawn] late-join no living companion player={joining.playerName}; using shared spawn");
+            return false;
+        }
+        var spawn = companion.pos;
+        joining.Server_TeleportCharacter(spawn);
+        PlayerCheckpoint.ReclaimGear(joining.playerId);
+        log.l($"[spawn] companion authoritative player={joining.playerName} companion={companion.bodyName} at={spawn:F3}");
+        return true;
+    }
+#endif
 
     public static void LateSpawnLocation(NetBody b) {
         var pb = GetPlayerBodyHostOrAnyoneAlive(b.plr, b); 
@@ -766,8 +853,11 @@ public class ServerMain : MonoBehaviour {
         return false;
     }
     public static bool DidHeFinishTheLayer(Body body) {
+#if FULLGAME
+        if (EndingFlow.Active && WorldGeneration.world.biomeDepth >= 9 && WorldGeneration.world.biomeDepth <= 11) return false;
+#endif
         // OG: WorldGeneration.ContinueRun
-        if ((body.transform.position.y < (float)(0L - (long)WorldGeneration.world.halfHeight) + 3.1f)) {
+        if (IsLayerFinishPosition(body.transform.position.y)) {
             return true;
         }
          
@@ -1215,9 +1305,24 @@ public class ServerMain : MonoBehaviour {
 
 
     public static void Server_AnnounceSeed(IReadOnlyList<knetid> to_who) {
+#if FULLGAME
+        if (WorldSnapshotTransfer.SnapshotMode && WorldSnapshotTransfer.Applied) {
+            try { WorldSnapshotTransfer.RefreshForLateJoin(); }
+            catch (Exception ex) { WorldSnapshotTransfer.Fail(ex.Message); return; }
+        }
+#endif
         var writer = Net.CreateWriter(NetmsgId.GenerateWorld_SeedAnnounce);
         writer.Put(WorldGeneration_GenerateWorld_MultiplayerPatch.firstworldgenparams);
-        Net.Server_SendToClientsVeryReliable( writer, to_who);
+#if FULLGAME
+        writer.Put(WorldSnapshotTransfer.Protocol);
+        writer.Put(WorldSnapshotTransfer.SnapshotMode);
+        writer.Put(WorldSnapshotTransfer.Token ?? "");
+#endif
+        Net.Server_SendToClientsVeryReliable(writer, to_who);
+#if FULLGAME
+        if (WorldSnapshotTransfer.SnapshotMode && WorldSnapshotTransfer.Applied)
+            foreach (var id in to_who) WorldSnapshotTransfer.Send(id);
+#endif
 
         // WRITER END;
     }
@@ -1426,6 +1531,7 @@ public class ServerMain : MonoBehaviour {
                         world.generatingWorld = true;
 
                         Plugin.log.LogInfo($"SERVER: Autocontinuing the run! ");
+                        log.l($"[layer] transition source=ServerMain.AutoContinue from={world.biomeDepth} to={world.biomeDepth + 1}");
                         Chat.Server_ChatAnnouncement($"<key:autocontinue_run>");
 
 

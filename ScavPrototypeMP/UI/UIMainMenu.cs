@@ -244,6 +244,9 @@ public static class UIMainMenu {
             GUI.skin.label.wordWrap = false;
             GUI.skin.label.alignment = TextAnchor.UpperLeft;
             var txt = $"{plr.playerId}: {plr.playerName}";
+#if FULLGAME
+            if (Util.GameIsFull()) txt += "  " + CharacterLobby.RosterLabel(plr);
+#endif
             var txtcontent = FixGuiContent.Content(txt, 11);
 
             var textsize = GUI.skin.label.CalcSize(txtcontent);
@@ -364,7 +367,11 @@ public static class UIMainMenu {
             try {
                 GUILayout.BeginHorizontal();
                 {
+#if FULLGAME
+                    var connectedplrs = Lang.Get("netpanel_connectedplrs") + ConnectedPlayerCountForDisplay() + "/" + Multiplayer.rules.PLAYER_COUNT_LIMIT;
+#else
                     var connectedplrs = Lang.Get("netpanel_connectedplrs") + ScavPlayer.ClientIdToPlayerDict.Count + "/" + Multiplayer.rules.PLAYER_COUNT_LIMIT;
+#endif
 
                     if (should_do_buttons_usable) {
                         if (GUILayout.Button(
@@ -385,6 +392,9 @@ public static class UIMainMenu {
                     foreach (var plr in ScavPlayer.ClientIdToPlayerDict.Values) {
                         _GUI__PlrListDrawPlr(plr);
                     }
+#if FULLGAME
+                    DrawPendingCharacterRows(false);
+#endif
                 }
                 GUI.skin.label.alignment = og_align;
                 GUILayout.EndScrollView();
@@ -1236,11 +1246,23 @@ public static class UIMainMenu {
             
             
 
+#if FULLGAME
+            if (Util.GameIsFull()) {
+                LobbyCharacterPanel.DrawModMenuButton(bigheight);
+                SaveCurrentLayerExit.DrawButton(bigheight);
+                SandboxMode.DrawButton(bigheight);
+                GUILayout.Space(8 * GetMenuUIScale());
+            }
+#endif
             GUILayout.BeginHorizontal(GUILayout.Height(bigheight));
             {
                 if (Net.IsRunning) {
 
                     GUILayout.FlexibleSpace();
+#if FULLGAME
+                    bool enabledBeforeDisconnect = GUI.enabled;
+                    if (Util.GameIsFull() && SaveCurrentLayerExit.IsSaving) GUI.enabled = false;
+#endif
                     if (GUILayout.Button(Net.IsClient ?
                         (Net.IsConnecting ?
                             Lang.Get("mmct_disconnect_abort")
@@ -1253,6 +1275,9 @@ public static class UIMainMenu {
                         Multiplayer.DoMultiplayerStatusMessageLog("Disconnected by the user.");
                         Util.PlayUISound(PlayerCamera.UISoundType.Close);
                     }
+#if FULLGAME
+                    GUI.enabled = enabledBeforeDisconnect;
+#endif
 
                     if (Net.IsRunningSteam && KSteam.IS_IN_LOBBY && (!(KSteam.CURRENT_LOBBY.locked || Net.CurrentServerInfo.midjoin_lock_active) || Net.IsServer)) {
                         GUILayout.FlexibleSpace();
@@ -1442,6 +1467,31 @@ public static class UIMainMenu {
     public static bool ____GUI___ConnectionSecondPanel_ContentRender_RenderDetailedPlayerList_ban_kick_safety = false; // ban/kick safety
     public static bool ____GUI___ConnectionSecondPanel_ContentRender_RenderDetailedPlayerList_showLitenetLibBanButton = false;
     public static bool ____GUI___ConnectionSecondPanel_ContentRender_RenderDetailedPlayerList_gaben = false;
+
+#if FULLGAME
+    internal static int ConnectedPlayerCountForDisplay() => ScavPlayer.ClientIdToPlayerDict.Count +
+        (Util.GameIsFull() && Net.IsServer ? PendingCharacterAdmission.Count : 0);
+
+    internal static void DrawPendingCharacterRows(bool allowKick) {
+        if (!Util.GameIsFull() || !Net.IsServer || !Net.IsRunning) return;
+        foreach (var entry in PendingCharacterAdmission.Snapshot()) {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(entry.name + "  " + CharacterSelection.Text("character_choosing", "Choosing a character…"));
+            if (allowKick && Con.CanExecuteAdminCommands()) {
+                bool previousEnabled = GUI.enabled;
+                GUI.enabled = previousEnabled && ____GUI___ConnectionSecondPanel_ContentRender_RenderDetailedPlayerList_ban_kick_safety;
+                try {
+                    if (GUILayout.Button(Lang.Get("mmct_plr_kick"))) {
+                        knetid id = entry.id;
+                        CharacterSelection.DeferUiAction("kick pending player", () => PendingCharacterAdmission.Reject(id,
+                            CharacterSelection.Text("character_pending_kicked", "You were removed from the lobby by the host.")));
+                    }
+                } finally { GUI.enabled = previousEnabled; }
+            }
+            GUILayout.EndHorizontal();
+        }
+    }
+#endif
     
     static void _GUI___ConnectionSecondPanel_ContentRender_RenderDetailedPlayerList(Rect r) {
         if (!Net.IsRunning) {
@@ -1464,9 +1514,18 @@ public static class UIMainMenu {
 
             }
         } else {
+#if FULLGAME
+            if (!(Util.GameIsFull() && Net.IsServer && PendingCharacterAdmission.Count > 0)) {
+#endif
             GUI.skin.label.alignment = TextAnchor.MiddleCenter;
             GUILayout.Label(Lang.Get("mmct_nobody"));
+#if FULLGAME
+            }
+#endif
         }
+#if FULLGAME
+        DrawPendingCharacterRows(true);
+#endif
 
     }
 
@@ -1536,7 +1595,9 @@ public static class UIMainMenu {
                 if (prev_preset != _GUI____RenderRuleField_PresetChosen) {
                     if (real_preset >= 0 && presets.Count() > 0) {
                         _GUI____RenderRuleField_PresetName = presets.ElementAt(real_preset);
+                        bool hostMP3Sources = Multiplayer.rules.AllowClientMP3Sources;
                         Multiplayer.rules = Multiplayer.RulesSaver.GetData(_GUI____RenderRuleField_PresetName);
+                        if (Net.IsClient) Multiplayer.rules.AllowClientMP3Sources = hostMP3Sources;
                         Multiplayer.ApplyGameRules();
                     } else {
                         _GUI____RenderRuleField_PresetName = "";
@@ -1630,6 +1691,8 @@ public static class UIMainMenu {
     static float _GUI____RenderRuleField_cur_max_width = 0;
 
     static void _GUI____RenderRuleField(FieldInfo fld, bool can_edit, in Rect r2) {
+
+        if (Net.IsClient && fld.Name == nameof(MultiplayerGameRules.AllowClientMP3Sources)) can_edit = false;
 
         bool do_tooltip = false;
         string ruleName = Lang.Get("rule_name_" + fld.Name, true) ?? fld.Name;
@@ -1815,7 +1878,11 @@ public static class UIMainMenu {
 
         var og_enabled = GUI.enabled;
 
-        var textsize = GUI.skin.label.CalcSize(FixGuiContent.Content(plr.playerName, 19));
+        var displayName = plr.playerName;
+#if FULLGAME
+        if (Util.GameIsFull()) displayName += "  " + CharacterLobby.RosterLabel(plr);
+#endif
+        var textsize = GUI.skin.label.CalcSize(FixGuiContent.Content(displayName, 19));
 
         GUILayout.BeginHorizontal();
         {
@@ -1833,7 +1900,7 @@ public static class UIMainMenu {
             }
 
             GUI.color = plr.playerColor;
-            GUILayout.Label( plr.playerName , GUILayout.Width(Mathf.Min(textsize.x, r.width*0.5f)));
+            GUILayout.Label( displayName , GUILayout.Width(Mathf.Min(textsize.x, r.width*0.5f)));
             GUI.color = Color.white;
 
             GUILayout.FlexibleSpace();
@@ -2624,6 +2691,11 @@ public static class UIMainMenu {
 
 
         GUI.skin.label.alignment = TextAnchor.UpperCenter;
+        GUILayout.Label("");
+        GUI.skin.label.wordWrap = true;
+        UIBullshit._GUI_BiggerLabel(Lang.Get("mmta_port_note"), 0.95f);
+        UIBullshit._GUI_BiggerLabel(Lang.Get("mmta_author_note"), 0.95f);
+        GUI.skin.label.wordWrap = false;
         GUILayout.Label("");
         UIBullshit._GUI_BiggerLabel(Lang.Get("mmta_credits"), 1.2f);
         

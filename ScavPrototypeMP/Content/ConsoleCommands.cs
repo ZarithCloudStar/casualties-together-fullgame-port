@@ -88,6 +88,10 @@ static class ConsoleScript_TryExecuteCommand_MultiplayerPatch {
     }
 }
 
+
+
+
+
 [HarmonyPatch(typeof(ConsoleScript), nameof(ConsoleScript.LogToConsole))]
 static class ConsoleScript_LogToConsole_MultiplayerPatch {
     static bool Prefix(ConsoleScript __instance, string text) {
@@ -103,6 +107,8 @@ static class ConsoleScript_LogToConsole_MultiplayerPatch {
         return true;
     }
 }
+
+
 
 [HarmonyPatch(typeof(ConsoleScript), nameof(ConsoleScript.ParsePosition))]
 static class ConsoleScript_ParsePosition_MultiplayerPatch {
@@ -131,11 +137,14 @@ static class ConsoleScript_ParsePosition_MultiplayerPatch {
     }
 }
 
+
+
 [HarmonyPatch(typeof(ConsoleScript), nameof(ConsoleScript.ParseBool))]
 static class ConsoleScript_ParseBool_MultiplayerPatch {
     static bool Prefix(ConsoleScript __instance, string s, ref bool __result) {
         s = s.ToLower();
         
+
         if (bool.TryParse(s, out __result)) {
             return false;
         }
@@ -153,7 +162,7 @@ static class ConsoleScript_ParseBool_MultiplayerPatch {
 static class ConsoleScript_ToggleActiveState_MultiplayerPatch {
     static bool Prefix(ConsoleScript __instance) {
         if (!__instance.active) { //It's going to be active
-
+            
         }
         return true;
     }
@@ -226,10 +235,7 @@ public class Con : CasualtiesTogetherSingleton {
             throw new Exception("Local player not found!");
         }
     }
-    
-    public static void LogToConsole(string text) {
-        con.LogToConsole(text);
-    }
+
     public static void ConFailIfCheatsDisabled() {
         if (!CanCheat()) {
             throw new Exception("Cheats disabled. " + CheatWarningText());
@@ -348,7 +354,7 @@ public class Con : CasualtiesTogetherSingleton {
             Util.CallLambdaWhen(() => { return ConsoleScript.instance != null; }, () => {
                 RegisterCommand(comm);
             } );
-            //if (log.verbose) log.warn($"Registering command too early! {comm.name}");// This triggers but isn't a significantly negative consequence
+            if (log.verbose) log.warn($"Registering command too early! {comm.name}");
         } else {
             if (!ConsoleScript.Commands.Contains(comm))
                 ConsoleScript.Commands.Add(comm);
@@ -521,6 +527,11 @@ public class Con : CasualtiesTogetherSingleton {
 
 
     static ScavPlayer CommandCallerPlayer = null;
+    static void RequireHostForMP3Rule(string ruleName) {
+        if (ruleName == nameof(MultiplayerGameRules.AllowClientMP3Sources) && Net.IsRunning &&
+            (Net.IsClient || (CommandCallerPlayer != null && !CommandCallerPlayer.IsHost)))
+            throw new Exception(Lang.Get("mp3_rule_host_only"));
+    }
     // Can return null !
     public static ScavPlayer GetCommandCallerPlayer() { 
         if (CommandCallerPlayer == null) {
@@ -538,6 +549,14 @@ public class Con : CasualtiesTogetherSingleton {
 
     internal static void _RegisterMultiplayerConsoleCommands() {
         var con = ConsoleScript.instance;
+
+#if FULLGAME
+        if (Util.GameIsFull()) {
+            RegisterCommand_LocalOnly(new Command("character", CharacterSelection.Text("character_command_desc", "Choose your multiplayer character (0, 1 or 2)."),
+                args => CharacterSelection.ExecuteCommand(args), new Dictionary<int, List<string>> { [0] = new() { "0", "1", "2" } },
+                ("character", "optional: 0, 1 or 2")));
+        }
+#endif
 
         // patched commands
         {
@@ -646,57 +665,6 @@ public class Con : CasualtiesTogetherSingleton {
             };
             kill.argDescription = kill.argDescription.AddToArray(("player", "optional"));
 
-
-            Command amputate = ConsoleScript.SearchExact("amputate");
-            amputate.action = delegate (string[] args) {
-                con.CheckForWorld();
-                ConFailIfCheatsDisabled();
-
-                if (args.Length > 2) {
-                    var plrname = args[2];
-                    var isall = plrname == "@a";
-                    var succ = false;
-                    var res = PerformActionOnPlayersByName(plrname, (ScavPlayer plr) => {
-
-                        Limb limb2 = plr.body.LimbByName(args[1]);
-                        var str = DebugHelp.GetGameObjectFullDebugString(limb2);
-                        if (!limb2) {
-                            throw new Exception("\"" + str + "\" is not a valid limb!");
-                        }
-                        if (limb2.isAbdomen || limb2.isHead || limb2.isVital) {
-                            throw new Exception("\"" + str + "\" is not an extremity and cannot be amputated!");
-                        }
-                        if (limb2.dismembered) {
-                            throw new Exception(str + " is already dismembered!");
-                        }
-                        limb2.Dismember();
-                        LogToConsole($"Dismembered {str}.");
-                    }, true, GetCommandCallerPlayer(), true, false);
-
-                    if (succ) {
-                    } else {
-                        con.LogToConsole($"{plrname} not found. ");
-                    }
-
-                } else {
-                    //vanilla
-
-                    Limb limb2 = PlayerCamera.main.body.LimbByName(args[1]);
-                    if (!limb2) {
-                        throw new Exception("\"" + args[1] + "\" is not a valid limb!");
-                    }
-                    if (limb2.isAbdomen || limb2.isHead || limb2.isVital) {
-                        throw new Exception("\"" + args[1] + "\" is not an extremity and cannot be amputated!");
-                    }
-                    if (limb2.dismembered) {
-                        throw new Exception(args[1] + " is already dismembered!");
-                    }
-                    limb2.Dismember();
-                    LogToConsole("Dismembered \"" + limb2.fullName + "\".");
-                }
-
-            };
-            amputate.argDescription = amputate.argDescription.AddToArray(("player", "optional"));
 
 
             Command setbodyfield = ConsoleScript.SearchExact("setbodyfield");
@@ -1975,12 +1943,7 @@ public class Con : CasualtiesTogetherSingleton {
                 prs.StartTutorial();
             } else {
                 log.l("Loading vanilla world");
-                if (splited.Contains("loadsave")) {
-                    PlayerPrefs.SetInt("didbasiccourse", 1);
-                    prs.LoadRun();
-                } else {
-                    prs.StartRun();
-                }
+                prs.StartRun();
             }
         }, new Dictionary<int, List<string>> { { 0,
                 new List<string> { "debug", "tutorial", "vanilla" }
@@ -2547,7 +2510,11 @@ public class Con : CasualtiesTogetherSingleton {
             con.LogToConsole(rules);
         }, null));
         RegisterCommand(new Command("resetrules", "MP - reset all multiplayer game rules to default values", (string[] splited) => {
+            bool hostMP3Sources = Multiplayer.rules.AllowClientMP3Sources;
             Multiplayer.rules = new MultiplayerGameRules();
+            if (CommandCallerPlayer != null && !CommandCallerPlayer.IsHost)
+                Multiplayer.rules.AllowClientMP3Sources = hostMP3Sources;
+            Multiplayer.ApplyGameRules();
             con.LogToConsole("Reset all rules to default.");
         }, null));
         RegisterCommand(new Command("rule", "MP - set multiplayer game rule", (string[] splited) => {
@@ -2555,6 +2522,7 @@ public class Con : CasualtiesTogetherSingleton {
             con.CheckArgumentCount(splited, 2);
 
             var rulename = splited[1];
+            RequireHostForMP3Rule(rulename);
             var rulevalstr = splited[2];
             foreach (var fld in typeof(MultiplayerGameRules).GetFields(BindingFlags.Public | BindingFlags.Instance)) {
                 if (fld.Name == rulename) {
@@ -3915,7 +3883,12 @@ public class Con : CasualtiesTogetherSingleton {
         helptext += "krok verbose // verbose\n";
         helptext += "krok cleanworld // despawn monsters and useless items\n";
         helptext += "krok objreset // unregister all objects, to test sync again\n";
-        helptext += "krok sync // Toggle specific synchronization systems (DEV ONLY):\n";
+        helptext += "krok sync // Toggle specific synchronization systems (DEV ONLY):\n" +
+#endif
+#if !RELEASE
+                        "\tkrok sync tile // World tiles sync.\n" +
+                        "\tkrok sync fluid // World fluids sync.\n" +
+                        "\tkrok sync health // Player health sync.\n";
 #endif
 
 
@@ -4067,6 +4040,7 @@ public class Con : CasualtiesTogetherSingleton {
                 } else {
                     ConFailIfNetworkIsRunningAndIsClient();
                     var rulename = args[2];
+                      RequireHostForMP3Rule(rulename);
                     var rulevalstr = args[3];
                     foreach (var fld in typeof(MultiplayerGameRules).GetFields(BindingFlags.Public | BindingFlags.Instance)) {
                         if (fld.Name == rulename) {

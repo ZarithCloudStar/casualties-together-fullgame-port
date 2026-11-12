@@ -6,6 +6,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using UnityEngine;
 
 namespace Together;
@@ -18,11 +19,27 @@ public static class PlayerCheckpoint {
     static float _wait;
     static int _cursor;
     static bool _writing;
+#if FULLGAME
+    static bool checkedWrite;
+    // Only the explicit save-and-exit batch requests exception propagation.
+    // Existing automatic/disconnect checkpoints retain their logging behavior.
+    internal static void RunChecked(Action write) {
+        if (_writing || checkedWrite) throw new InvalidOperationException("A checkpoint is already being written.");
+        checkedWrite = true;
+        try { write(); }
+        finally { checkedWrite = false; }
+    }
+#endif
     // mp species lock. separate from the bep config gg uses for a solo run.
     static readonly Dictionary<string, string> _species = new Dictionary<string, string>();
     static readonly Dictionary<string, int> _speciesSlot = new Dictionary<string, int>();
 
     public static void Tick() {
+#if FULLGAME
+        // Do not overwrite the checkpoint with a fresh, not-yet-restored body
+        // in the frames between worldgen completion and deferred restoration.
+        if (Util.GameIsFull() && DeferredPlayerSaveRestore.InProgress) return;
+#endif
         if (_writing || !Net.IsServer || !Util.IsWorldGenerated())
             return;
         var world = WorldGeneration.world;
@@ -72,6 +89,9 @@ public static class PlayerCheckpoint {
     }
 
     public static void WriteOne(ScavPlayer plr, bool nextLayer) {
+#if FULLGAME
+        if (Util.GameIsFull() && DeferredPlayerSaveRestore.InProgress) return;
+#endif
         if (SavesystemPatch.PreserveSave)
             return;
         if (_writing || plr == null || plr.body == null || PlayerCamera.main == null)
@@ -96,6 +116,9 @@ public static class PlayerCheckpoint {
                 CopyHostFlag(folder);
         } catch (Exception e) {
             log.error($"PlayerCheckpoint.WriteOne {plr}\n{e}");
+#if FULLGAME
+            if (checkedWrite) throw;
+#endif
         } finally {
             SavesystemPatch.savedatapathreplacement = previousPath;
             _writing = false;
@@ -116,7 +139,7 @@ public static class PlayerCheckpoint {
             return false;
 
         var snap = WorldRunSnapshot.Capture();
-        var pos = plr.body.transform.position;
+        var pos = plr.netBody != null ? plr.netBody.GetPosition() : (Vector2)plr.body.transform.position;
         var previousPath = SavesystemPatch.savedatapathreplacement;
         var camera = PlayerCamera.main;
         var previousBody = camera.body;
@@ -132,7 +155,8 @@ public static class PlayerCheckpoint {
             EndGearCapture(plr);
             RegisterBody(plr.body);
 
-            plr.body.transform.position = pos;
+            if (plr.netBody != null) plr.netBody.SetBodyPosition(pos);
+            else plr.body.transform.position = pos;
             if (plr.ServerPlayerState != null) {
                 plr.ServerPlayerState.loaded_save = true;
                 plr.ServerPlayerState.did_give_spawn_location_from_a_save = false;
@@ -148,6 +172,12 @@ public static class PlayerCheckpoint {
             SaveSystem_HasSave_MultiplayerPatch.force = false;
             SavesystemPatch.savedatapathreplacement = previousPath;
             camera.body = previousBody;
+#if FULLGAME
+            // ForceLoad temporarily targets another player's body and changes
+            // vanilla UI. Restore both players from their per-save choices.
+            ChipState.ApplyGameplay(plr);
+            if (ScavPlayer.LocalPlayer != plr) ChipState.ApplyGameplay(ScavPlayer.LocalPlayer);
+#endif
         }
     }
 
@@ -200,6 +230,9 @@ public static class PlayerCheckpoint {
             File.WriteAllBytes(path, SaveSystem.Zip(root.ToString(Newtonsoft.Json.Formatting.None)));
         } catch (Exception e) {
             log.error($"PlayerCheckpoint.StampCrafted\n{e}");
+#if FULLGAME
+            if (checkedWrite) throw;
+#endif
         }
     }
 
@@ -291,6 +324,9 @@ public static class PlayerCheckpoint {
             File.WriteAllBytes(path, SaveSystem.Zip(root.ToString(Newtonsoft.Json.Formatting.None)));
         } catch (Exception e) {
             log.error($"PlayerCheckpoint.StampSpecies\n{e}");
+#if FULLGAME
+            if (checkedWrite) throw;
+#endif
         }
     }
 
@@ -342,11 +378,34 @@ public static class PlayerCheckpoint {
             dict["LEVEL"] = midlevel;
             dict["RULES"] = Multiplayer.rules;
             dict["MODIFIER"] = midlevel ? (WorldMP.GetLayerModifier()?.modifierIndex ?? -1) : -1;
-            dict["PLRPOS"] = new Dictionary<string, (float, float)>();
+            // Keep everyone's coordinates so a mid-layer save resumes exactly there.
+            var positions = new Dictionary<string, (float, float)>();
+            if (Util.GameIsFull()) {
+                foreach (var pair in ScavPlayer.BodyToPlayerDict) {
+                    try {
+                        if (pair.Key == null || pair.Value == null) continue;
+                        var p = pair.Key.transform.position;
+                        positions[pair.Value.GetPersistentId()] = (p.x, p.y);
+                    } catch (Exception posError) {
+                        log.warn($"PlayerCheckpoint.WriteRules: could not record a position: {posError.Message}");
+                    }
+                }
+                foreach (var pair in positions) log.l($"CHECKPOINT: position player={pair.Key} x={pair.Value.Item1:0.##} y={pair.Value.Item2:0.##}");
+            }
+            dict["PLRPOS"] = positions;
+#if FULLGAME
+            var poses = PlayerPlacementCheckpoint.Capture();
+            dict["PLRPOS"] = poses.ToDictionary(p => p.Key, p => (p.Value.x, p.Value.y));
+            dict["PLRPOSE"] = poses;
+            if (EndingFlow.Active) dict["ENDING"] = EndingFlow.Capture();
+#endif
             var text = Newtonsoft.Json.JsonConvert.SerializeObject(dict, Newtonsoft.Json.Formatting.Indented);
             File.WriteAllText(Path.Combine(SavesystemPatch.mpsavefolder, SavesystemPatch.mpsaveheaderfile), text);
         } catch (Exception e) {
             log.error($"PlayerCheckpoint.WriteRules\n{e}");
+#if FULLGAME
+            if (checkedWrite) throw;
+#endif
         }
     }
 
@@ -377,10 +436,6 @@ public static class PlayerCheckpoint {
             return;
         }
         ushort id = plr.playerId;
-        if (id == 0) {
-            _born.Clear();
-            return;
-        }
         if (!_gear.TryGetValue(id, out List<Item> list)) {
             list = new List<Item>();
             _gear[id] = list;
@@ -395,7 +450,7 @@ public static class PlayerCheckpoint {
     }
 
     internal static void ReclaimGear(ushort playerId) {
-        if (playerId == 0 || !_gear.TryGetValue(playerId, out List<Item> list))
+        if (!_gear.TryGetValue(playerId, out List<Item> list))
             return;
         if (!ScavPlayer.TryGetPlayerFromClientId(playerId, out ScavPlayer plr) || plr == null)
             return;
@@ -525,13 +580,18 @@ public static class PlayerCheckpoint {
         (bool made, int intel)[] recipes;
         int biomeOverride;
         bool unchipped;
+        int endlessLoops;
+        bool isMercRun, loadedRun;
 
         internal static WorldRunSnapshot Capture() {
             var s = new WorldRunSnapshot();
+            s.loadedRun = SaveSystem.loadedRun;
             var world = WorldGeneration.world;
             if (world != null) {
                 s.hadWorld = true;
                 s.biomeDepth = world.biomeDepth;
+                s.endlessLoops = world.endlessLoops;
+                s.isMercRun = world.isMercRun;
                 s.totalTraveled = world.totalTraveled;
                 s.lootRarity = world.lootRarityMultiplier;
                 s.trapRarity = world.trapRarityMultiplier;
@@ -558,9 +618,12 @@ public static class PlayerCheckpoint {
         }
 
         internal void Restore() {
+            SaveSystem.loadedRun = loadedRun;
             var world = WorldGeneration.world;
             if (hadWorld && world != null) {
                 world.biomeDepth = biomeDepth;
+                world.endlessLoops = endlessLoops;
+                world.isMercRun = isMercRun;
                 world.totalTraveled = totalTraveled;
                 world.lootRarityMultiplier = lootRarity;
                 world.trapRarityMultiplier = trapRarity;

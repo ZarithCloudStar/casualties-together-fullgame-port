@@ -659,6 +659,18 @@ internal static class TrapClaim {
 
         var writer = Net.CreateWriter(NetmsgId.CreateExplosionEffect);
         WriteBoom(writer, id, param);
+#if FULLGAME
+        // The crystal sends its own pure presentation event. This existing
+        // packet still carries the authoritative damage claim identity.
+        writer.Put(CrystalSync.UnstableExplosion);
+        if (CrystalSync.UnstableExplosion) {
+            SyncInfo source = null;
+            bool mapped = CrystalSync.UnstableExplosionSource != null &&
+                NetObjectRegistry.TryGetSyncInfo(CrystalSync.UnstableExplosionSource, out source);
+            writer.Put(mapped ? source.syncId : (knetid)0);
+            writer.Put(mapped ? source.Version : (byte)0);
+        }
+#endif
         Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.AllClientIdsExceptHost);
 
         try {

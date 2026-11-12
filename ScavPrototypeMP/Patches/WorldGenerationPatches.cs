@@ -18,7 +18,11 @@ namespace Together;
 
 [HarmonyPatch(typeof(PreRunScript), nameof(PreRunScript.StartRun))]
 public static class PreRunScript_StartRun_MultiplayerPatch {
-    static bool Prefix(PreRunScript __instance) {
+    static bool Prefix(PreRunScript __instance, bool __runOriginal) {
+        if (!__runOriginal || WorldMP.IsMenuLoadPending) return false;
+#if FULLGAME
+        if (CharacterReadyGate.LoadQueued) return false;
+#endif
         if (Net.IsRunning) {
 
             //TODO implement this
@@ -49,7 +53,8 @@ public static class PreRunScript_StartRun_MultiplayerPatch {
 
 [HarmonyPatch(typeof(PreRunScript), nameof(PreRunScript.LoadRun))]
 public static class PreRunScript_LoadRun_MultiplayerPatch {
-    static bool Prefix(PreRunScript __instance) {
+    static bool Prefix(PreRunScript __instance, bool __runOriginal) {
+        if (!__runOriginal || WorldMP.IsMenuLoadPending) return false;
         if (Net.IsRunning) {
             if (Net.IsClient) {
                 Multiplayer.DoMultiplayerStatusMessageLog("You can't start the game, server can.");
@@ -71,7 +76,11 @@ public static class PreRunScript_LoadRun_MultiplayerPatch {
 
 [HarmonyPatch(typeof(PreRunScript), nameof(PreRunScript.StartTutorial))]
 public static class PreRunScript_StartTutorial_MultiplayerPatch {
-    static bool Prefix(PreRunScript __instance) {
+    static bool Prefix(PreRunScript __instance, bool __runOriginal) {
+        if (!__runOriginal || WorldMP.IsMenuLoadPending) return false;
+#if FULLGAME
+        if (CharacterReadyGate.LoadQueued) return false;
+#endif
         if (Net.IsRunning) {
             if (Net.IsClient) {
                 Multiplayer.DoMultiplayerStatusMessageLog("You can't start the game, server can.");
@@ -196,8 +205,15 @@ static class WorldGenerationSetBlockNoUpdatePatch {
         return true;
     }
 }
-[HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.SetBlock), new[] { typeof(Vector2Int), typeof(ushort) })]
+[HarmonyPatch]
 public static class WorldGeneration_SetBlock_MultiplayerPatch {
+    static System.Reflection.MethodBase TargetMethod() {
+        // The int/int and Vector2 wrappers both call the Vector2Int implementation.
+        return Util.GameIsFull()
+            ? AccessTools.Method(typeof(WorldGeneration), nameof(WorldGeneration.SetBlock), new[] { typeof(Vector2Int), typeof(ushort) })
+            : AccessTools.Method(typeof(WorldGeneration), nameof(WorldGeneration.SetBlock));
+    }
+
     public struct ChangedBlockInfo : INetSerializeByMemcpy {
         public Vector2Int16 pos; 
         public ushort block;
@@ -388,6 +404,9 @@ public static class RegenerateWorldPatch {
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.GenerateEntityAtPos))]
 public static class WorldGeneration_GenerateEntityAtPos_MultiplayerPatch {
     public static void Prefix(WorldGeneration __instance, Vector2 pos, GameObject basObj) {
+#if FULLGAME
+        if (Util.GameIsFull()) SnapshotPrefabCatalog.RegisterEntityPrefab(basObj);
+#endif
         foreach (Transform ch in basObj.transform) {
             ScavMPBuildingSynchronizer.RegisterNonUniqueIdBg(ch, false);
         }
@@ -671,6 +690,9 @@ public static class WorldGeneration_GenerateWorld_MultiplayerPatch {
     public static bool client_firstworldgenparams_are_used = true;
     
     public static void InitializeSpecialResourcePrefabs() {
+#if FULLGAME
+        if (Util.GameIsFull()) SnapshotPrefabCatalog.Initialize();
+#endif
         {
             var ticks = (GameObject)Resources.Load("CaveTicks");
             ticks.GetOrAddComponent<TrackerStaticCaveTicks>();
@@ -791,7 +813,8 @@ public static class WorldGenerationSaveAndExitPatch {
 
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.ContinueRun))]
 public static class WorldGeneration_ContinueRun_MultiplayerPatch {
-    static bool Prefix(WorldGeneration __instance) {
+    static bool Prefix(WorldGeneration __instance, bool __runOriginal) {
+        if (!__runOriginal) return false;
         ServerMain._ded_server_switch_counter = -20;
 
         if (Net.IsRunning) {
@@ -820,6 +843,7 @@ public static class WorldGeneration_ContinueRun_MultiplayerPatch {
                 if (!doingRegen && !__instance.generatingWorld && __instance.worldExists) {
 
                     Multiplayer.DoMultiplayerStatusMessageLog($"Host pressed ContinueRun button and everything checks out! ");
+                    log.l($"[layer] transition source=ContinueRun from={__instance.biomeDepth} to={__instance.biomeDepth + 1}");
                     Chat.Server_ChatAnnouncement("<key:host_continue_run_announcement>");
 
                     // biomeDepth has not moved yet, so SaveGame's stored depth+1 is the next layer.

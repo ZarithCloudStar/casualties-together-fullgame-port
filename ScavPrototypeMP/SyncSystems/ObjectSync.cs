@@ -577,37 +577,14 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
             si.Destroy();
     }
 
-    // disconnect save parks gear under SAVESTATE_. kill the SyncInfo so clients drop
-    // their copy, but leave the host mesh for PlayerSavedState.Apply.
-    public static void DetachSyncKeepMesh(GameObject go) {
-        if (!Net.IsServer || go == null) {
-            return;
-        }
-        SyncInfo si = null;
-        if (SyncRegistry.TryGetValue(go, out SyncInfo listed) && listed != null && !listed.IsDestroyed) {
-            si = listed;
-        } else if (go.TryGetComponent(out SyncInfoGameObjectTracker existing) && existing.syncInfo != null && !existing.syncInfo.IsDestroyed) {
-            si = existing.syncInfo;
-        }
-        if (si == null) {
-            return;
-        }
-        if (go.TryGetComponent(out SyncInfoGameObjectTracker tracker)) {
-            tracker.syncInfo = null;
-        }
-        SyncRegistry.Remove(go);
-        si.tracker = null;
-        si.go = null;
-        if (!si.IsDestroyed) {
-            si.Destroy();
-        }
-    }
-
 
 
 
     // call this in Start of any entity that needs to be synced
     public static void NewGO(GameObject obj) {
+#if FULLGAME
+        if (Net.IsClient && EndingLabObjects.Keep(obj)) return;
+#endif
 #if TESTING
 		if (ObjectShouldNotBeSynced(obj)) {
 			throw new Exception($"Attempting to register an ignored object: {DebugStringGameObject(obj)}");
@@ -637,6 +614,9 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
         radius *= radius;
 
         foreach (var item in TrackerBuildingEntityBackgroundified.all_instances) {
+#if FULLGAME
+            if (Util.GameIsFull() && (item == null || !item.gameObject.scene.IsValid() || !item.gameObject.scene.isLoaded)) continue;
+#endif
             if ((item.is_a_background_tilemap // || item.is_weird_nocollision_building
                 ) // && item.TryGetComponent<BuildingEntity>(out var be) 
                 && KM.DistanceCheck_PreSqr(item.transform.position, pos, radius)) {
@@ -688,6 +668,11 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
     internal static bool ShouldKeepRegistered(GameObject obj) {
         if (obj == null)
             return false;
+#if FULLGAME
+        // Lab guards have a dedicated authoritative pose stream. Releasing their
+        // IDs outside a camera chunk would recreate them every snapshot.
+        if (EndingGuardSync.Active && obj.GetComponent<GuardScript>() != null) return true;
+#endif
         var simulationTransform = obj.transform;
         while (simulationTransform.parent != null &&
             simulationTransform.parent.TryGetComponent<Container>(out _)) {
@@ -1035,6 +1020,9 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
 
 
     public static bool Client_DeleteUnregisteredSyncableObject(GameObject obj) {
+#if FULLGAME
+        if (EndingLabObjects.Keep(obj)) return false;
+#endif
         if (!ObjectShouldNotBeSynced(obj)) {
             SafeDestroyObject(obj);
             return true;
