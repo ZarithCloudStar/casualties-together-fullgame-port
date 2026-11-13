@@ -34,6 +34,13 @@ public static class PlayerCheckpoint {
     static readonly Dictionary<string, string> _species = new Dictionary<string, string>();
     static readonly Dictionary<string, int> _speciesSlot = new Dictionary<string, int>();
 
+#if FULLGAME
+    internal static void ResetSaveCaches() {
+        _species.Clear(); _speciesSlot.Clear(); _gear.Clear(); _born.Clear();
+        _capture = false; _wait = 0; _cursor = 0;
+    }
+#endif
+
     public static void Tick() {
 #if FULLGAME
         // Do not overwrite the checkpoint with a fresh, not-yet-restored body

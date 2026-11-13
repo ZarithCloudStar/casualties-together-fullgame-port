@@ -13,6 +13,10 @@ internal static class CharacterReadyGate {
     internal static bool LoadQueued { get; private set; }
     internal static bool RequestLoad() {
         if (WorldMP.IsMenuLoadPending) return false;
+        if (SaveSlots.Enabled && Net.IsRunning && Net.IsServer && !SaveSlots.LoadPrepared) {
+            SaveSlots.RequestLoad();
+            return false;
+        }
         if (CharacterReadyGate.Allow("LoadRun")) return true;
         LoadQueued = true;
         log.l("LOAD: queued menu load; retaining save intent until character admission settles");
@@ -69,6 +73,7 @@ internal static class PreRunScript_StartRun_CharacterReadyPatch {
     // Run first so the gate still sees the click.
     [HarmonyPriority(Priority.First)]
     static bool Prefix() {
+        if (SaveSlots.Enabled && (SaveSlotMenu.IsOpen || SaveSlots.LoadPrepared || SaveSlots.Busy)) return false;
         if (WorldMP.IsMenuLoadPending || CharacterReadyGate.LoadQueued || !CharacterReadyGate.Allow("StartRun")) return false;
         EndingFlow.ResetRun();
         return true;
@@ -84,7 +89,8 @@ internal static class PreRunScript_LoadRun_CharacterReadyPatch {
 [HarmonyPatch(typeof(PreRunScript), nameof(PreRunScript.StartTutorial))]
 internal static class PreRunScript_StartTutorial_CharacterReadyPatch {
     [HarmonyPriority(Priority.First)]
-    static bool Prefix() => !WorldMP.IsMenuLoadPending && !CharacterReadyGate.LoadQueued && CharacterReadyGate.Allow("StartTutorial");
+    static bool Prefix() => !(SaveSlots.Enabled && (SaveSlotMenu.IsOpen || SaveSlots.LoadPrepared || SaveSlots.Busy)) &&
+        !WorldMP.IsMenuLoadPending && !CharacterReadyGate.LoadQueued && CharacterReadyGate.Allow("StartTutorial");
 }
 
 // The vanilla load coroutine is the third path into a run (the mod announces the

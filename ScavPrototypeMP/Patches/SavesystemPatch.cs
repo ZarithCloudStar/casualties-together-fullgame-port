@@ -72,6 +72,12 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
 
     static bool Prefix() {
         wrote = false;
+#if FULLGAME
+        if (!force && SaveSlots.Enabled && Net.IsRunning && Net.IsServer && !SavesystemPatch.PreserveSave) {
+            try { SaveSlots.SaveVanilla(); } finally { wrote = false; }
+            return false;
+        }
+#endif
         // a practice world must not overwrite the real mp_save. saveandquit still returns to the menu.
         if (SavesystemPatch.PreserveSave && !force)
             return false;
@@ -521,6 +527,12 @@ public static class PreRunScript_Start_MultiplayerPatch {
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) => SavesystemPatch.TranspilerToReplaceTheApplicationPath(instructions);
 
     static void Prefix() {
+#if FULLGAME
+        if (SaveSlots.Enabled) {
+            SavesystemPatch.savedatapathreplacement = SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
+            return;
+        }
+#endif
         // In the main menu Net is not running yet, so the plain helper always falls
         // back to the vanilla folder and "continue" would ignore the multiplayer
         // save entirely, looking like a brand new run. Prefer mp_save whenever a
@@ -543,7 +555,7 @@ public static class SavesystemPatch {
     // set for map debug and the tutorial. those sessions neither read nor write mp_save.
     internal static bool PreserveSave;
     const string _mpsavefolder_name = "mp_save";
-    public static string mpsavefolder {
+    public static string MultiplayerSaveRoot {
         get {
 #if FULLGAME && TESTING
             // Keep opt-in integration fixtures away from the user's real run.
@@ -551,6 +563,14 @@ public static class SavesystemPatch {
             if (Environment.GetCommandLineArgs().Contains("--mp-ending-test") && !string.IsNullOrEmpty(fixture)) return fixture;
 #endif
             return Path.Combine(Application.persistentDataPath, _mpsavefolder_name);
+        }
+    }
+    public static string mpsavefolder {
+        get {
+#if FULLGAME
+            if (SaveSlots.Enabled) return SaveSlots.DirectoryPath;
+#endif
+            return MultiplayerSaveRoot;
         }
     }
     public static string vanillasavefolder => Application.persistentDataPath;
@@ -570,6 +590,9 @@ public static class SavesystemPatch {
         return File.Exists(vanillasavefolder + "\\save.sv");
     }
     public static bool HasMultiplayerSaveFile() {
+#if FULLGAME
+        if (SaveSlots.Enabled) return SaveSlots.HasSave;
+#endif
         if (File.Exists(mpsavefolder + "\\save.sv"))
             return true;
         if (!Directory.Exists(mpsavefolder))
@@ -595,6 +618,11 @@ public static class SavesystemPatch {
 
     internal static string GetTheOnePersistentDataPathWithSaveFile() {
 
+#if FULLGAME
+        if (SaveSlots.Enabled && HasMultiplayerSaveFile())
+            return Util.IsInWorld() || SaveSlots.LoadPrepared ? mpsavefolder : SaveSlots.PreviewDirectory;
+#endif
+
         if (Net.IsRunning && HasMultiplayerSaveFile()) {
             return mpsavefolder;
         } else {
@@ -610,6 +638,9 @@ public static class SavesystemPatch {
         }
     }
     internal static void DeleteMPSave() {
+#if FULLGAME
+        if (SaveSlots.Enabled) { SaveSlots.BeginNewRun(); return; }
+#endif
         if (Directory.Exists(mpsavefolder)) {
             try {
                 Directory.Delete(mpsavefolder, true);

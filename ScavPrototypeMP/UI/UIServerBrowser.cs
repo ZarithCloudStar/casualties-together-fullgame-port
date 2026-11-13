@@ -147,10 +147,13 @@ public static class UIServerBrowser {
                         GUILayout.BeginVertical(GUI.skin.box);
                         try {
                             var is_a_steam_lobby = lobby.steam_lobby_info != null;
+                            // 同一版本号下的不同补丁包构建不同；房主开了文件校验就一定会被踢。
+                            var buildDiffers = lobby.BuildDiffersFromMine;
+                            var hashWillReject = lobby.JoinWillBeHashRejected;
 
                             GUI.skin.label.fontSize = lobbyfontsize;
 #if RELEASE
-                            if (lobby.version != MY_VERSION) {
+                            if (lobby.version != MY_VERSION || hashWillReject) {
                                 GUI.enabled = false;
                                 GUILayout.BeginHorizontal();
                                 {
@@ -165,7 +168,10 @@ public static class UIServerBrowser {
 
                                 GUI.skin.label.alignment = TextAnchor.UpperLeft;
                                 GUI.skin.label.fontSize = (int)(GUI.skin.label.fontSize * 0.9f);
-                                GUILayout.Label(Lang.Get("mmsb_lobbybadver") + " - " + lobby.version);
+                                if (lobby.version != MY_VERSION)
+                                    GUILayout.Label(Lang.Get("mmsb_lobbybadver") + " - " + lobby.version);
+                                else
+                                    GUILayout.Label("双方 mod 安装包不一致（构建 " + lobby.build + " ≠ " + KSteam.GetModBuildTag() + "）：对方开启了文件校验，加入会被踢。请统一使用同一个压缩包。");
                                 GUI.enabled = og_enabled;
                             } else 
 #endif
@@ -307,7 +313,7 @@ public static class UIServerBrowser {
                                 GUILayout.BeginHorizontal();
                                 {
                                     {
-                                        GUI.enabled = og_enabled && (!Multiplayer.IsNetworkActiveOrIsInGame()) && (lobby.IsJoinable() || i_am_privileged_user_idc_bout_passwords);
+                                        GUI.enabled = og_enabled && (!Multiplayer.IsNetworkActiveOrIsInGame()) && (lobby.IsJoinable() || i_am_privileged_user_idc_bout_passwords) && !hashWillReject;
                                         if (
                                             GUILayout.Button(
                                                 Lang.Get(lobby.latejoinspectate ? "mmsb_lobbyjoinspectate" : "mmsb_lobbyjoin")
@@ -383,6 +389,12 @@ public static class UIServerBrowser {
 
                                     GUI.skin.label.alignment = TextAnchor.LowerRight;
                                     GUILayout.Label("V" + lobby.version);
+                                    if (buildDiffers) {
+                                        var ogcol = GUI.contentColor;
+                                        GUI.contentColor = new Color(1f, 0.55f, 0.2f);
+                                        GUILayout.Label("构建不同 (" + lobby.build + ") - 对方未开文件校验，可能可以进，但可能不同步");
+                                        GUI.contentColor = ogcol;
+                                    }
 
                                     GUILayout.Space(uiscale);
 

@@ -39,6 +39,7 @@ internal static class DeferredPlayerSaveRestore {
     internal static IEnumerator RestoreAfterGeneration(WorldGeneration world, object session, string folder) {
         pendingRestores++;
         bool finished = false;
+        bool slotRestored = false, restoreFailed = false;
         Action finish = () => finished = true;
         WorldMP.OnWorldgenFinish += finish;
         try {
@@ -106,7 +107,7 @@ internal static class DeferredPlayerSaveRestore {
                             }
                         } catch (Exception slotError) { log.warn($"LOAD: could not count slots player={player.playerName}: {slotError.Message}"); }
                         log.l($"LOAD: restored player={player.playerName} generated={Util.IsWorldGenerated()} layer={world.biomeDepth} filledSlots={filled} path={path}");
-                    } catch (Exception ex) { log.error($"LOAD: deferred player restore failed player={player.playerName}: {ex}"); }
+                    } catch (Exception ex) { restoreFailed = true; log.error($"LOAD: deferred player restore failed player={player.playerName}: {ex}"); }
                 }
                 if (waiting.Count == 0) break;
                 if (Time.realtimeSinceStartupAsDouble >= bodyDeadline) {
@@ -115,7 +116,11 @@ internal static class DeferredPlayerSaveRestore {
                 }
                 yield return null;
             }
-        } finally { WorldMP.OnWorldgenFinish -= finish; pendingRestores--; }
+            slotRestored = Current(world, session) && waiting.Count == 0 && !restoreFailed && !WorldSnapshotTransfer.Failed;
+        } finally {
+            WorldMP.OnWorldgenFinish -= finish; pendingRestores--;
+            SaveSlots.LoadCompleted(slotRestored);
+        }
     }
 
     static bool Current(WorldGeneration world, object session) => Net.IsRunning && Net.IsServer &&

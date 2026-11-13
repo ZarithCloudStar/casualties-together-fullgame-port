@@ -101,14 +101,26 @@ internal static class SaveCurrentLayerExit {
                 Multiplayer.DoMultiplayerStatusMessageLog(Text("save_current_exit_unavailable", "Wait until the world has finished loading and changing layers."));
                 return false;
             }
-            IsSaving = true; // latch before the coroutine's first yield
-            try { Util.StartCoroutine(Save(world, world.biomeDepth)); }
-            catch { IsSaving = false; throw; }
+            if (SaveSlots.Enabled) {
+                if (SaveSlotMenu.IsOpen || SaveSlots.Busy) return false;
+                SaveSlotMenu.Open(false, (slot, name) => {
+                    if (!Stable(world) || PlayerCamera.main == null) return;
+                    StartSave(world, slot, name);
+                });
+                return true;
+            }
+            StartSave(world, 0, null);
             return true;
         } catch (Exception ex) { Fail(ex); return false; }
     }
 
-    static IEnumerator Save(WorldGeneration world, int layer) {
+    static void StartSave(WorldGeneration world, int slot, string name) {
+        IsSaving = true; // latch before the coroutine's first yield
+        try { Util.StartCoroutine(Save(world, world.biomeDepth, slot, name)); }
+        catch { IsSaving = false; throw; }
+    }
+
+    static IEnumerator Save(WorldGeneration world, int layer, int slot, string name) {
         // Leave the button event before any file IO or scene transition.
         // All writes below then run in one main-thread turn, without yielding
         // between players or leaving a substituted camera body across frames.
@@ -117,20 +129,25 @@ internal static class SaveCurrentLayerExit {
             Multiplayer.DoMultiplayerStatusMessageLog(Text("save_current_exit_busy", "Saving…"));
             yield return null;
             bool success = false;
-            try { WriteAndValidate(world, layer); success = true; }
+            try {
+                if (SaveSlots.Enabled) SaveSlots.WithTarget(slot, name, () => SaveSlots.Commit(() => WriteAndValidate(world, layer)));
+                else WriteAndValidate(world, layer);
+                success = true;
+            }
             catch (Exception ex) { Fail(ex); }
             if (!success) yield break;
             try {
                 Multiplayer.DoMultiplayerStatusMessageLog(Text("save_current_exit_success", "Saved. Returning to the lobby."));
                 log.l($"SAVE-EXIT: success layer={layer}; returning to lobby");
                 PlayerCamera.main.ToMainMenu(); // existing reliable client announcement
-            } catch (Exception ex) { Fail(ex); }
+            } catch (Exception ex) { SaveSlots.Report("存档已保存，但返回大厅失败；可稍后手动返回。", ex); }
         } finally { IsSaving = false; }
     }
 
-    static void WriteAndValidate(WorldGeneration world, int layer) {
+    internal static void WriteAndValidate(WorldGeneration world, int layer) {
         if (!Stable(world) || world.biomeDepth != layer || PlayerCamera.main == null) throw new InvalidOperationException("World/session changed before saving.");
-        var players = ScavPlayer.ClientIdToPlayerDict.Values.Where(p => p != null && p.body != null).ToArray();
+        var players = ScavPlayer.ClientIdToPlayerDict.Values.Where(p => p != null).ToArray();
+        if (DeferredPlayerSaveRestore.InProgress || players.Any(p => p.body == null)) throw new InvalidOperationException("玩家角色尚未完成恢复。");
         var host = players.SingleOrDefault(p => p.IsLocal);
         if (host == null) throw new InvalidOperationException("A local host body is required for the root save.");
         var bodies = players.Select(p => p.body).ToArray();
@@ -217,6 +234,7 @@ internal static class SaveCurrentLayerExit {
 
     static void Fail(Exception ex) {
         log.error($"SAVE-EXIT: failed; automatic return cancelled: {ex}");
+        SaveSlotMenu.ShowError("保存失败，旧存档已保留；已取消返回大厅，请重试。");
         try { Multiplayer.DoMultiplayerStatusMessageLog(Text("save_current_exit_failed", "Save failed. Staying in the game.")); }
         catch (Exception statusError) { log.error($"SAVE-EXIT: failure status could not be displayed: {statusError}"); }
     }

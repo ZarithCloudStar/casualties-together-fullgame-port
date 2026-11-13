@@ -33,6 +33,10 @@ internal static class CharacterRunMemory {
     static bool loaded;
     static bool dirty;
 
+    internal static void ResetForDirectory() {
+        choices.Clear(); chips.Clear(); storedSeed = 0; loaded = dirty = false;
+    }
+
     static string DirectoryPath => SavesystemPatch.mpsavefolder;
     static string FilePath => Path.Combine(DirectoryPath, FileName);
 

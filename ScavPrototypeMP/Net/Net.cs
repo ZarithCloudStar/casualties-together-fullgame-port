@@ -108,6 +108,16 @@ public class NetPublicServerInfo : INetSerializable {
     public string[] modlist = new string[0];
     public bool latejoinspectate => rules.LateJoinSpectate;
 
+    // 大厅里公布的构建标识（CasualtiesMP.dll 的短哈希）与房主是否开启文件校验。
+    // 仅用于服务器列表展示；老版本房主不会发送，此时为 "" / true。
+    // 注意：不要加进 Serialize/Deserialize，那会改变联机包格式。
+    public string build = "";
+    public bool host_hashcheck = true;
+    public bool BuildDiffersFromMine =>
+        !string.IsNullOrEmpty(build) && build != KSteam.GetModBuildTag();
+    // 构建不同 + 房主开了文件校验 => 一定会被踢，列表里就不要让人白点。
+    public bool JoinWillBeHashRejected => BuildDiffersFromMine && host_hashcheck;
+
     public NetPublicServerInfo SetValues() {
         dedicated = Net.IsDedicatedServer;
         haspassword = !String.IsNullOrEmpty(Multiplayer.INPUT_PASSWORD);

@@ -1,4 +1,4 @@
-#if FULLGAME
+﻿#if FULLGAME
 using CasualtiesTogetherUtils;
 using System;
 using System.Collections.Generic;
@@ -100,14 +100,14 @@ internal static class PendingCharacterAdmission {
         double now = Time.realtimeSinceStartupAsDouble;
         var entry = new Pending {
             Id = id, Connection = connection, Intro = intro, SteamId = steamId, CreationName = creationName,
-            AcceptedAt = now, Deadline = DeadlineAfter(now, RequestedTimeoutSeconds ?? 60f),
+            AcceptedAt = now, Deadline = DeadlineAfter(now, RequestedTimeoutSeconds ?? 180f),
             Connected = connected, Promote = promote, Cleanup = cleanup, Reject = reject
         };
         pending.Add(id, entry);
         byConnection.Add(connection, id);
         try {
             bindPending(id);
-            log.l($"CHARACTER: pending player={intro.userName} tempId={id} chr={intro.characterSelected} timeout={RequestedTimeoutSeconds ?? 60f:0.###}");
+            log.l($"CHARACTER: pending player={intro.userName} tempId={id} chr={intro.characterSelected} timeout={RequestedTimeoutSeconds ?? 180f:0.###}");
             log.l($"CHARACTER: roster {intro.userName}=unset chosen=false");
 
             // Rejoining the same save: the server already knows this player's pick,

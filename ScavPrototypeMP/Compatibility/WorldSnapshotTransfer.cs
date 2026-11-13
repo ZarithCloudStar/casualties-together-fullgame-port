@@ -94,7 +94,7 @@ internal static class WorldSnapshotTransfer {
 #if TESTING
         WorldCheckpointRegression.RecordFailure(reason);
 #endif
-        string message = "当前层快照同步失败，已中止进入世界；请确认双方均为 fix7。 / Checkpoint sync aborted (fix7 / WS1-SC1 required): " + reason;
+        string message = "当前层快照同步失败，已中止进入世界；请确认双方使用同一个安装包。 / Checkpoint sync aborted (both peers must use the same build): " + reason;
         log.error("WORLD-SNAPSHOT: " + message);
         Multiplayer.DoMultiplayerStatusMessageLog(message);
         if (Net.IsClient) {

@@ -21,6 +21,7 @@ public static class PreRunScript_StartRun_MultiplayerPatch {
     static bool Prefix(PreRunScript __instance, bool __runOriginal) {
         if (!__runOriginal || WorldMP.IsMenuLoadPending) return false;
 #if FULLGAME
+        if (SaveSlots.Enabled && (SaveSlotMenu.IsOpen || SaveSlots.LoadPrepared || SaveSlots.Busy)) return false;
         if (CharacterReadyGate.LoadQueued) return false;
 #endif
         if (Net.IsRunning) {
@@ -61,6 +62,9 @@ public static class PreRunScript_LoadRun_MultiplayerPatch {
                 return false;
             }
 
+#if FULLGAME
+            if (SaveSlots.Enabled && !SaveSlots.LoadPrepared) { SaveSlots.RequestLoad(); return false; }
+#endif
             SaveSystem.loadedRun = true;
             WorldMP.LoadVanillaGeneratedWorld(true);
 

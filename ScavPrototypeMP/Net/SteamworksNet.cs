@@ -1,4 +1,4 @@
-using BepInEx.Logging;
+﻿using BepInEx.Logging;
 using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteNetLib;
@@ -641,6 +641,39 @@ public class KSteam : MonoBehaviour {
     public const string LOBBYDATAKEY_MODS = _LOBBYDATAKEYPREFIX + "MODS";
     public const string LOBBYDATAKEY_LANGUAGE = _LOBBYDATAKEYPREFIX + "LANGUAGE";
 
+    // Build identity of the local CasualtiesMP.dll.
+    // We ship several hotfix builds under the same ModVersion, so the version string
+    // alone cannot tell two installers apart. Without this, mixing builds passes the
+    // version gate and only fails later as "Game file Hashes mismatch." (or desyncs
+    // silently when the host turned the hash check off).
+    static string _modBuildTag;
+    public static string GetModBuildTag() {
+        if (!string.IsNullOrEmpty(_modBuildTag)) return _modBuildTag;
+        try {
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            var path = asm != null ? asm.Location : null;
+            if (!string.IsNullOrEmpty(path) && File.Exists(path)) {
+                ulong h = Util.GetFileHash(path);
+                _modBuildTag = (h & 0xFFFFFFFul).ToString("X8");
+                return _modBuildTag;
+            }
+        } catch (Exception e) {
+            Together.log.warn("BUILD TAG: " + e.Message);
+        }
+        _modBuildTag = "UNKNOWN0";
+        return _modBuildTag;
+    }
+
+    static bool LooksLikeBuildTag(string tag) {
+        if (string.IsNullOrEmpty(tag) || tag.Length != 8) return false;
+        for (int i = 0; i < tag.Length; i++) {
+            char c = tag[i];
+            bool hex = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F');
+            if (!hex) return false;
+        }
+        return true;
+    }
+
     static string GetMyModListAsString() {
         return String.Join(":", Multiplayer.GetModGUIDs().Select(x => x.Replace(":", "")));
     }
@@ -681,8 +714,10 @@ public class KSteam : MonoBehaviour {
         writer.PutUnmanaged(aaa);
         writer.PutArray(ScavPlayer.ClientIdToPlayerDict.Values.Select(x => x.SteamId).ToArray());
         writer.Put(Multiplayer.SERVER_TOGGLE_ENFORCE_MODLIST);
-        
-
+        // Appended AFTER the existing payload: older builds stop reading at the bool
+        // above and simply ignore the trailing bytes, so this stays backwards compatible.
+        writer.Put((byte)(Multiplayer.SERVER_TOGGLE_CHECK_GAME_HASH ? 1 : 0));
+        writer.Put(GetModBuildTag());
 
         writer.CompressWriter(0);
         var reader = new NetDataReader(writer);
@@ -809,6 +844,19 @@ public class KSteam : MonoBehaviour {
                         var mymods = GetMyModListAsString().Split(':');
 
                         l.enforcemodlist_locked = !(new HashSet<string>(mymods).SetEquals(l.modlist));
+                    }
+                }
+
+                // Optional tail (added later). Old hosts don't send it, old clients ignore it.
+                // Only trust a well-formed tag so stray trailing bytes can't fake a mismatch.
+                if (!reader.EndOfData) {
+                    byte buildFlags = reader.GetByte();
+                    if (!reader.EndOfData) {
+                        var tag = reader.GetString();
+                        if (LooksLikeBuildTag(tag)) {
+                            l.build = tag;
+                            l.host_hashcheck = (buildFlags & 1) != 0;
+                        }
                     }
                 }
 
@@ -1066,6 +1114,7 @@ public class KSteam : MonoBehaviour {
                 Multiplayer.DoMultiplayerStatusMessageError("STEAM: OnLobbyEnter IOFailure: " + reason);
 
                 IS_IN_LOBBY = false;
+                if (Net.TryGetSteamTransport(out var failedTransport)) failedTransport.RecordClientFailure();
                 Net.ShutdownReset();
                 
                 return;
@@ -1083,6 +1132,7 @@ public class KSteam : MonoBehaviour {
 
                 IS_IN_LOBBY = false;
                 Util.PlayUISound(PlayerCamera.UISoundType.Deny);
+                if (Net.TryGetSteamTransport(out var failedTransport)) failedTransport.RecordClientFailure();
                 Net.ShutdownReset();
                 
                 return;
@@ -1117,20 +1167,15 @@ public class KSteam : MonoBehaviour {
                 if (tsteam.CreateClientSocket()) {
                     Multiplayer.DoMultiplayerStatusMessageLog("CreateClientSocket Success.");
 
-#if FULLGAME
-                    if (!Util.GameIsFull())
-#endif
-                    Net.OnTransportConnected();
+                    // Do NOT send the intro right now: ConnectP2P was just issued and the
+                    // handle is still "Connecting", so SendMessageToConnection returns
+                    // k_EResultIgnored and the packet is silently dropped (this is why the
+                    // first join after creating a lobby used to do nothing until a retry).
+                    // The intro + OnTransportConnected are flushed from the Connected callback.
+                    tsteam.SendClientIntroWhenConnected();
 
-                    var hellopacket = Multiplayer.GetClientConnectIntroductionPacket();
-                    tsteam.SendThroughSteamSocket(tsteam.serverUser.connection, new ArraySegment<byte>(hellopacket.Data), Steamworks.Constants.k_nSteamNetworkingSend_Reliable);
-#if FULLGAME
-                    // The first Steam packet is the intro. OnTransportConnected
-                    // immediately sends the remembered SetCharacter afterwards.
-                    if (Util.GameIsFull()) Net.OnTransportConnected();
-#endif
-                    
                 } else {
+                    tsteam.RecordClientFailure();
                     LeaveLobbyAndResetNet((CSteamID)pCallback.m_ulSteamIDLobby);
                     IS_IN_LOBBY = false;
                     return;
@@ -1138,6 +1183,8 @@ public class KSteam : MonoBehaviour {
             }
 
         } catch (Exception e) {
+            if (Net.TryGetSteamTransport(out var failedTransport)) failedTransport.RecordClientFailure();
+            Net.ShutdownReset();
             Together.log.error("STEAM: OnLobbyEnter_APIDispatch: " + e.ToString());
         }
     }
@@ -1228,6 +1275,7 @@ public class KSteam : MonoBehaviour {
                 }
 
                 if (isLocalUser) {
+                    tsteam.RecordClientFailure();
                     Multiplayer.DoMultiplayerStatusMessageLog($"I got removed from the lobby.");
 
                     if (Util.IsInWorld()) {
@@ -1259,6 +1307,7 @@ public class KSteam : MonoBehaviour {
                     + " closeP2P=" + (closeP2p ? 1 : 0)
                     + " method=TransportSteamworks.RemoveSteamUser "
                     + connSnap);
+                if (Net.IsClient && changedUser == CURRENT_LOBBY.ownerID.m_SteamID) tsteam.RecordClientFailure();
                 tsteam.RemoveSteamUser(pCallback.m_ulSteamIDUserChanged);
 
 
@@ -1313,7 +1362,7 @@ public class KSteam : MonoBehaviour {
                 ulong targetId = ulong.Parse(msg);
 
                 if ( targetId == SteamUser.GetSteamID().m_SteamID ) {
-                    Multiplayer.DoMultiplayerStatusMessageLog("STEAM: Kicked: " + reason);
+                    Multiplayer.DoMultiplayerStatusMessageLog("STEAM: Kicked: " + reason + Multiplayer.ExplainServerRejection(reason));
                     LeaveLobbyAndResetNet(true);
                 }
             }
@@ -1868,155 +1917,101 @@ public class TransportSteamworks : NetTransportBase {
         }
     }
 
+    bool CloseSteamConnection(HSteamNetConnection connection, string reason) => is_steamserver
+        ? SteamGameServerNetworkingSockets.CloseConnection(connection, 0, reason, false)
+        : SteamNetworkingSockets.CloseConnection(connection, 0, reason, false);
+
+    // Bound diagnostic rate even when a peer repeatedly requests new handles.
+    readonly Dictionary<ulong, double> _nextConnectingLog = new();
+    int _suppressedConnectingLogs;
+    void LogConnecting(SteamNetConnectionStatusChangedCallback_t callback, bool ownDial, string decision, string result) {
+        ulong remote = callback.m_info.m_identityRemote.GetSteamID64();
+        if (_nextConnectingLog.TryGetValue(remote, out double next) && Time.realtimeSinceStartupAsDouble < next) { _suppressedConnectingLogs++; return; }
+        if (_nextConnectingLog.Count >= 128) _nextConnectingLog.Clear();
+        _nextConnectingLog[remote] = Time.realtimeSinceStartupAsDouble + 1;
+        log.l($"[steam-conn] connecting remote={callback.m_info.m_identityRemote.GetSteamID64()} handle={callback.m_hConn} ownDial={ownDial} isServer={Net.IsServer} type={Net.Type} listen={listenSocket} incomingListen={callback.m_info.m_hListenSocket} mapping={connectionMapping.Count} decision={decision} acceptResult={result} suppressed={_suppressedConnectingLogs}");
+        _suppressedConnectingLogs = 0;
+    }
+
     private void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t pCallback) {
+        bool incoming = pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connecting;
+        bool ownDial = serverUser != null && pCallback.m_hConn == serverUser.connection;
         try {
-
-
-#if !RELEASE
-            KSteam.steamtestlog($"{this.GetType().Name}.OnConnectionStatusChanged [" + SteamNetConnectionStatusChangedCallback_t.k_iCallback + " - SteamNetConnectionStatusChangedCallback] - " + pCallback.m_hConn + " -- " + pCallback.m_info + " -- " + pCallback.m_eOldState);
-#endif
-
-
-            if (pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connecting) {
-                //This happens when someone asked to connect to us, in the case of NetCode for GameObject this should only happen if we are a server/host
-                //the current standard is to blindly accept ... NetCode for GO should really consider a validation model for connections
-                // NOTE: a client also gets a Connecting event for its OWN outgoing connection to the host.
-                // That one must never be accepted/closed here; comparing the handle tells them apart.
-                bool ourOwnDial = serverUser != null && pCallback.m_hConn == serverUser.connection;
-                KSteam.steamtestlog($"[steam-conn] connecting handle={pCallback.m_hConn} remote={pCallback.m_info.m_identityRemote.GetSteamID64()} ownDial={ourOwnDial} isServer={Net.IsServer} type={Net.Type} steamServer={is_steamserver} listen={listenSocket} mapping={connectionMapping.Count} limit={Multiplayer.PLAYER_COUNT_LIMIT}");
-
-                if (ourOwnDial) {
-                    // Our own dial to the host; the transport reports progress, nothing for us to accept.
-                } else if (Net.IsServer) {
-
-                    if (connectionMapping.Count > Multiplayer.PLAYER_COUNT_LIMIT) {
-                        KSteam.steamtestlog($"[steam-conn] reject {pCallback.m_info.m_identityRemote.GetSteamID64()}: max players");
-
-                        bool res2;
-                        if (is_steamserver) {
-                            res2 = SteamGameServerNetworkingSockets.CloseConnection(pCallback.m_hConn, 0, "MP max players", false);
-                        } else {
-                            res2 = SteamNetworkingSockets.CloseConnection(pCallback.m_hConn, 0, "MP max players", false);
-                        }
-
-
-                        return;
-                    }
-
-
-                    EResult res;
-                    if (is_steamserver) {
-                        res = SteamGameServerNetworkingSockets.AcceptConnection(pCallback.m_hConn);
-                    } else {
-                        res = SteamNetworkingSockets.AcceptConnection(pCallback.m_hConn);
-                    }
-
-                    KSteam.steamtestlog($"[steam-conn] accept {pCallback.m_info.m_identityRemote.GetSteamID64()} result={res}");
-                    if (res != EResult.k_EResultOK) {
-                        log.error($"[steam-conn] AcceptConnection failed for {pCallback.m_info.m_identityRemote.GetSteamID64()}: {res}; closing so the client gets a reason instead of a timeout.");
-                        if (is_steamserver) {
-                            SteamGameServerNetworkingSockets.CloseConnection(pCallback.m_hConn, 0, "accept failed: " + res, false);
-                        } else {
-                            SteamNetworkingSockets.CloseConnection(pCallback.m_hConn, 0, "accept failed: " + res, false);
-                        }
-                        return;
-                    }
-
-                    if (res == EResult.k_EResultOK) {
-                        if (Net.IsServer) {
-                            if (log.verbose)
-                                KSteam.steamtestlog($"OnConnectionStatusChanged: Accepting connection {pCallback.m_info.m_identityRemote.GetSteamID64()}");
-
-
-                            var clientId = pCallback.m_info.m_identityRemote.GetSteamID64();
-
-                            //This should be a new connection, record it
-                            if (connectionMapping.ContainsKey(clientId) == false) {
-                                var nCon = new SteamConnectionData(pCallback.m_info.m_identityRemote.GetSteamID());
-                                nCon.connection = pCallback.m_hConn;
-                                connectionMapping.Add(clientId, nCon);
-                            }
-                        } else {
-                            if (log.verbose)
-                                KSteam.steamtestlog($"OnConnectionStatusChanged: Connection {pCallback.m_info.m_identityRemote.GetSteamID64()} could not be accepted: this is not a server");
-                        }
-                    } else {
-                        KSteam.steamtestlog($"[steam-conn] connection {pCallback.m_info.m_identityRemote.GetSteamID64()} could not be accepted: {res}");
-                    }
-                } else {
-                    // Not a server: the request will time out on Steam's side unless we close it ourselves.
-                    log.warn($"[steam-conn] incoming request from {pCallback.m_info.m_identityRemote.GetSteamID64()} but this peer is not a server (type={Net.Type}, running={Net.IsRunning}); closing with a reason.");
-                    if (is_steamserver) {
-                        SteamGameServerNetworkingSockets.CloseConnection(pCallback.m_hConn, 0, "not a server", false);
-                    } else {
-                        SteamNetworkingSockets.CloseConnection(pCallback.m_hConn, 0, "not a server", false);
-                    }
+            ulong remote = pCallback.m_info.m_identityRemote.GetSteamID64();
+            bool currentTransport = ReferenceEquals(Net.Transport, this);
+            if (incoming) {
+                if (ownDial && currentTransport && Net.IsClient) {
+                    LogConnecting(pCallback, true, "outgoing", "not-required");
+                    return;
                 }
+                string reject = !currentTransport ? "inactive transport" : !Net.IsServer ? "not a server" : null;
+                if (reject == null && connectionMapping.TryGetValue(remote, out var old)) {
+                    if (old.connection == pCallback.m_hConn) {
+                        LogConnecting(pCallback, false, "already-accepted", "OK");
+                        return;
+                    }
+                    bool gotInfo = is_steamserver
+                        ? SteamGameServerNetworkingSockets.GetConnectionInfo(old.connection, out var oldInfo)
+                        : SteamNetworkingSockets.GetConnectionInfo(old.connection, out oldInfo);
+                    // Preserve a live session; only replace terminal/stale mappings.
+                    if (gotInfo && (oldInfo.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connected
+                        || oldInfo.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connecting
+                        || oldInfo.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_FindingRoute))
+                        reject = "duplicate live connection";
+                    else RemoveSteamUser(remote);
+                }
+                if (reject == null && connectionMapping.Count >= Multiplayer.PLAYER_COUNT_LIMIT) reject = "MP max players";
+                if (reject != null) {
+                    bool closed = CloseSteamConnection(pCallback.m_hConn, reject);
+                    LogConnecting(pCallback, ownDial, "reject: " + reject + " close=" + closed, "not-called");
+                    return;
+                }
+                var result = is_steamserver
+                    ? SteamGameServerNetworkingSockets.AcceptConnection(pCallback.m_hConn)
+                    : SteamNetworkingSockets.AcceptConnection(pCallback.m_hConn);
+                LogConnecting(pCallback, false, result == EResult.k_EResultOK ? "accepted" : "accept-failed", result.ToString());
+                if (result != EResult.k_EResultOK) {
+                    bool closed = CloseSteamConnection(pCallback.m_hConn, "accept failed: " + result);
+                    log.error($"[steam-conn] accept failed remote={remote} handle={pCallback.m_hConn} result={result} close={closed}");
+                    return;
+                }
+                connectionMapping[remote] = new SteamConnectionData((CSteamID)remote) {
+                    connection = pCallback.m_hConn, acceptedListenSocket = pCallback.m_info.m_hListenSocket
+                };
             } else if (pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connected) {
-                KSteam.steamtestlog($"[steam-conn] connected remote={pCallback.m_info.m_identityRemote.GetSteamID64()} isServer={Net.IsServer} type={Net.Type}");
-
-                var clientId = pCallback.m_info.m_identityRemote.GetSteamID64();
-
-
-                //We should already have it but if not record the server connection that was just accepted
-                if (connectionMapping.ContainsKey(clientId) == false) {
-                    var nCon = new SteamConnectionData(pCallback.m_info.m_identityRemote.GetSteamID());
-                    nCon.connection = pCallback.m_hConn;
-                    connectionMapping.Add(clientId, nCon);
-                } else {
-                    //Should be redundent but update the conneciton handle anyway
-                    connectionMapping[clientId].connection = pCallback.m_hConn;
+                // A queued callback for an obsolete handle must never overwrite a new session.
+                if (!currentTransport || !connectionMapping.TryGetValue(remote, out var data) || data.connection != pCallback.m_hConn) {
+                    CloseSteamConnection(pCallback.m_hConn, "obsolete connected handle");
+                    return;
                 }
-
-                //return NetworkEvent.Connect;
-                return;
-            } else if (
-                pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ClosedByPeer
-                || pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ProblemDetectedLocally
-            ) {
-
-                var client_steamId = pCallback.m_info.m_identityRemote.GetSteamID64();
-
-                //The connection is no more
-                if (log.verbose)
-                    KSteam.steamtestlog($"OnConnectionStatusChanged: Connection closed for {BetterToStringFromSteamID(client_steamId)} state changed: {pCallback.m_info.m_eState}    lobby owner:{BetterToStringFromSteamID(KSteam.CURRENT_LOBBY.ownerID.m_SteamID)}");
-
-                if (client_steamId == KSteam.CURRENT_LOBBY.ownerID.m_SteamID) {
-                    Multiplayer.ShutdownNetwork();
-                    Multiplayer.DoMultiplayerStatusMessageLog($"Steam: Connection closed: {pCallback.m_info.m_eState.ToString().TrimStart("k_ESteamNetworkingConnectionState_")}");
-                } else {
-                    // socket died on its own. not a lobby callback. log it before we stop sending.
-                    ESteamNetConnectionEnd endReason = (ESteamNetConnectionEnd)pCallback.m_info.m_eEndReason;
-                    string endDebug = OneLine(pCallback.m_info.m_szEndDebug);
-                    string persona = SteamFriends.GetFriendPersonaName((CSteamID)client_steamId);
-                    bool closeP2p = connectionMapping.ContainsKey(client_steamId);
-                    ulong lobbyId = KSteam.CURRENT_LOBBY.lobby_steamID.m_SteamID;
-                    int memberCount = SteamMatchmaking.GetNumLobbyMembers(KSteam.CURRENT_LOBBY.lobby_steamID);
-                    log.l("[lobby-left] trigger=OnConnectionStatusChanged steam=" + client_steamId
-                        + " name=\"" + OneLine(persona) + "\""
-                        + " state=" + pCallback.m_info.m_eState + " (" + ((int)pCallback.m_info.m_eState) + ")"
-                        + " old=" + pCallback.m_eOldState + " (" + ((int)pCallback.m_eOldState) + ")"
-                        + " end=" + endReason + " (" + pCallback.m_info.m_eEndReason + ")"
-                        + " debug=\"" + endDebug + "\""
-                        + " lobby=" + lobbyId
-                        + " members=" + memberCount
-                        + " closeP2P=" + (closeP2p ? 1 : 0)
-                        + " method=TransportSteamworks.RemoveSteamUser");
-                    //Remove the mapped connection info
-                    RemoveSteamUser(client_steamId);
+                if (Net.IsClient) TryFlushPendingClientIntro();
+            } else if (pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ClosedByPeer
+                || pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ProblemDetectedLocally) {
+                bool mapped = connectionMapping.TryGetValue(remote, out var data) && data.connection == pCallback.m_hConn;
+                log.l($"[lobby-left] trigger=OnConnectionStatusChanged steam={remote} handle={pCallback.m_hConn} state={pCallback.m_info.m_eState} old={pCallback.m_eOldState} end={(ESteamNetConnectionEnd)pCallback.m_info.m_eEndReason} ({pCallback.m_info.m_eEndReason}) debug=\"{OneLine(pCallback.m_info.m_szEndDebug)}\" mapped={mapped}");
+                // Always free the callback handle, including rejected/unmapped incoming requests.
+                CloseSteamConnection(pCallback.m_hConn, "connection ended");
+                if (!currentTransport) return;
+                if (!mapped) {
+                    // Never let an old handle delete a newer session for the same SteamID.
+                    if (!connectionMapping.ContainsKey(remote)) RemoveSteamUser(remote);
+                    return;
                 }
-
-                //return NetworkEvent.Disconnect;
-                return;
-            } else {
-                var client_steamId = pCallback.m_info.m_identityRemote.GetSteamID64();
-                if (log.verbose)
-                    KSteam.steamtestlog($"OnConnectionStatusChanged: Connection closed for {BetterToStringFromSteamID(client_steamId)} state changed: {pCallback.m_info.m_eState}    lobby owner:{BetterToStringFromSteamID(KSteam.CURRENT_LOBBY.ownerID.m_SteamID)}");
-
+                bool accepted = data.acceptedListenSocket != HSteamListenSocket.Invalid;
+                bool clientFailed = Net.IsClient && ownDial;
+                if (clientFailed) RecordClientFailure();
+                RemoveSteamUser(remote);
+                if (clientFailed) {
+                    Multiplayer.ShutdownNetwork(); // includes ShutdownReset, even after an established session fails
+                    Multiplayer.DoMultiplayerStatusMessageLog("与房主的连接已断开，请稍后重新连接。");
+                } else if (Net.IsServer && accepted) {
+                    RebuildServerListener();
+                }
             }
-
         } catch (Exception e) {
-            Plugin.Logger.LogError("OnConnectionStatusChanged: " + e.ToString());
+            // Exceptions in incoming processing must not leave Steam waiting for Accept.
+            if (incoming && !ownDial) CloseSteamConnection(pCallback.m_hConn, "incoming callback exception");
+            Plugin.Logger.LogError("OnConnectionStatusChanged: " + e);
         }
     }
 
@@ -2032,6 +2027,7 @@ public class TransportSteamworks : NetTransportBase {
         internal SteamNetConnectionRealTimeStatus_t connectionStatus = new();
         internal CSteamID id;
         internal HSteamNetConnection connection;
+        internal HSteamListenSocket acceptedListenSocket;
 
 
 
@@ -2044,12 +2040,76 @@ public class TransportSteamworks : NetTransportBase {
     public SteamNetworkingConfigValue_t[] options = new SteamNetworkingConfigValue_t[0];
     public HSteamListenSocket listenSocket { get; private set; }
     internal SteamConnectionData serverUser { get; private set; }
+    // Client handshake (intro + OnTransportConnected) is deferred until the P2P
+    // connection actually reports Connected; sending earlier gets dropped with
+    // k_EResultIgnored and used to strand the first join attempt.
+    bool _pendingClientIntro;
     internal readonly Dictionary<ulong, SteamConnectionData> connectionMapping = new Dictionary<ulong, SteamConnectionData>();
     // One buffer for the life of the transport. A client used to allocate 65535 slots every frame.
     const int ClientPollCap = 256;
     const int HostPollCap = 255;
     IntPtr[] _pollPtrs;
     readonly List<SteamConnectionData> _pollConnections = new List<SteamConnectionData>(4);
+
+    const string P2PPortKey = "cu_p2p_port";
+    int _listenPort;
+    bool _listenerRebuildPending;
+    readonly List<HSteamListenSocket> _retiredListeners = new();
+
+    void CloseListener(HSteamListenSocket socket) {
+        if (is_steamserver) SteamGameServerNetworkingSockets.CloseListenSocket(socket);
+        else SteamNetworkingSockets.CloseListenSocket(socket);
+    }
+
+    void CloseUnusedRetiredListeners() {
+        foreach (var socket in _retiredListeners.ToArray()) {
+            if (connectionMapping.Values.Any(data => data.acceptedListenSocket == socket)) continue;
+            CloseListener(socket);
+            _retiredListeners.Remove(socket);
+        }
+    }
+
+    void RebuildServerListener() {
+        _listenerRebuildPending = false;
+        // CloseListenSocket kills accepted connections. Retain occupied listeners
+        // until their final peer leaves; publish a fresh port for subsequent joins.
+        var previous = listenSocket;
+        int previousPort = _listenPort;
+        listenSocket = HSteamListenSocket.Invalid;
+        _listenPort = _listenPort % 999 + 1;
+        if (CreateServerSocket()) {
+            if (previous != HSteamListenSocket.Invalid) _retiredListeners.Add(previous);
+            CloseUnusedRetiredListeners();
+            log.l($"[steam-conn] listener rebuilt old={previous} new={listenSocket} port={_listenPort} retained={_retiredListeners.Count}");
+        } else {
+            listenSocket = previous;
+            _listenPort = previousPort;
+            log.error("[steam-conn] listener rebuild failed; previous listener retained");
+        }
+    }
+
+    internal void RecordClientFailure() {
+        if (_clientFailureRecorded || _clientLobbyId == 0) return;
+        _clientFailureRecorded = true;
+        _joinFailures.TryGetValue(_clientLobbyId, out var failure);
+        int count = Math.Min(failure.count + 1, 5);
+        double delay = Math.Min(30, Math.Pow(2, count));
+        _joinFailures[_clientLobbyId] = (count, Time.realtimeSinceStartupAsDouble + delay);
+        log.l($"[steam-conn] join failed lobby={_clientLobbyId} failures={count} retryDelay={delay}s");
+    }
+    static readonly Dictionary<ulong, (int count, double retryAt)> _joinFailures = new();
+    ulong _clientLobbyId;
+    bool _clientFailureRecorded;
+
+    IEnumerator JoinLobbyAfterBackoff(ulong lobby) {
+        if (_joinFailures.TryGetValue(lobby, out var waiting) && waiting.retryAt > Time.realtimeSinceStartupAsDouble)
+            log.l($"[steam-conn] delaying retry lobby={lobby} remaining={waiting.retryAt - Time.realtimeSinceStartupAsDouble:0.0}s");
+        while (ReferenceEquals(Net.Transport, this) && Net.IsClient
+            && _joinFailures.TryGetValue(lobby, out var failure) && Time.realtimeSinceStartupAsDouble < failure.retryAt)
+            yield return null;
+        if (ReferenceEquals(Net.Transport, this) && Net.IsClient)
+            KSteam.OnLobbyEnterCallResult.Set(SteamMatchmaking.JoinLobby(new CSteamID(lobby)));
+    }
 
     public byte hostLobbyBucket;
 
@@ -2071,14 +2131,21 @@ public class TransportSteamworks : NetTransportBase {
             options = new SteamNetworkingConfigValue_t[0];
 
         if (is_steamserver)
-            listenSocket = SteamGameServerNetworkingSockets.CreateListenSocketP2P(0, options.Length, options);
+            listenSocket = SteamGameServerNetworkingSockets.CreateListenSocketP2P(_listenPort, options.Length, options);
         else
-            listenSocket = SteamNetworkingSockets.CreateListenSocketP2P(0, options.Length, options);
+            listenSocket = SteamNetworkingSockets.CreateListenSocketP2P(_listenPort, options.Length, options);
 
 
-        if (log.verbose)
-            log.l(this.GetType().Name + "CreateServerSocket!");
-
+        if (listenSocket == HSteamListenSocket.Invalid) {
+            log.error($"[steam-conn] CreateListenSocketP2P failed port={_listenPort}");
+            return false;
+        }
+        if (!SteamMatchmaking.SetLobbyData(LobbyId, P2PPortKey, _listenPort.ToString(System.Globalization.CultureInfo.InvariantCulture))) {
+            CloseListenSocket();
+            log.error("[steam-conn] could not publish P2P port");
+            return false;
+        }
+        log.l($"[steam-conn] listening handle={listenSocket} port={_listenPort}");
         return true;
     }
     internal bool CreateClientSocket() {
@@ -2094,6 +2161,8 @@ public class TransportSteamworks : NetTransportBase {
                 onConnectionChange = Callback<SteamNetConnectionStatusChangedCallback_t>.Create(OnConnectionStatusChanged);
 
         var ConnectToSteamID = KSteam.CURRENT_LOBBY.ownerID;
+        int.TryParse(SteamMatchmaking.GetLobbyData(LobbyId, P2PPortKey), out int remotePort);
+        if (remotePort < 0 || remotePort > 999) remotePort = 0;
 
         serverUser = new SteamConnectionData( (CSteamID)(ConnectToSteamID));
 
@@ -2106,18 +2175,61 @@ public class TransportSteamworks : NetTransportBase {
             SteamNetworkingIdentity smi = new SteamNetworkingIdentity();
             smi.SetSteamID(serverUser.id);
             if (is_steamserver)
-                serverUser.connection = SteamGameServerNetworkingSockets.ConnectP2P(ref smi, 0, options.Length, options);
+                serverUser.connection = SteamGameServerNetworkingSockets.ConnectP2P(ref smi, remotePort, options.Length, options);
             else
-                serverUser.connection = SteamNetworkingSockets.ConnectP2P(ref smi, 0, options.Length, options);
+                serverUser.connection = SteamNetworkingSockets.ConnectP2P(ref smi, remotePort, options.Length, options);
 
+            if (serverUser.connection == HSteamNetConnection.Invalid) return false;
             connectionMapping.Add((ulong)ConnectToSteamID, serverUser);
-            KSteam.steamtestlog($"[steam-conn] dialing owner={serverUser.id.m_SteamID} handle={serverUser.connection} relayInit=ok");
+            log.l($"[steam-conn] dialing owner={serverUser.id.m_SteamID} handle={serverUser.connection} port={remotePort} relayInit=ok");
 
             return true;
         } catch (Exception ex) {
             log.error($"{this.GetType().Name}.CreateClientSocket : Client could not be started !! {ex.Message}");
             return false;
         }
+    }
+
+
+    /// <summary>Client side: wait for the P2P connection to reach Connected, then send
+    /// the intro packet and start the client entity system. Sending before that returns
+    /// k_EResultIgnored and the handshake never happens.</summary>
+    internal void SendClientIntroWhenConnected() {
+        _pendingClientIntro = true;
+        TryFlushPendingClientIntro();
+    }
+
+    internal void CancelPendingClientIntro() {
+        _pendingClientIntro = false;
+    }
+
+    void TryFlushPendingClientIntro() {
+        if (!_pendingClientIntro) return;
+        if (serverUser == null || serverUser.connection == HSteamNetConnection.Invalid) return;
+
+        SteamNetConnectionInfo_t info;
+        bool gotInfo;
+        if (is_steamserver)
+            gotInfo = SteamGameServerNetworkingSockets.GetConnectionInfo(serverUser.connection, out info);
+        else
+            gotInfo = SteamNetworkingSockets.GetConnectionInfo(serverUser.connection, out info);
+        if (!gotInfo || info.m_eState != ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connected) return;
+
+        _pendingClientIntro = false;
+        KSteam.steamtestlog($"[steam-conn] sending client intro conn={serverUser.connection}");
+
+#if FULLGAME
+        if (!Util.GameIsFull())
+#endif
+        Net.OnTransportConnected();
+
+        var hellopacket = Multiplayer.GetClientConnectIntroductionPacket();
+        SendThroughSteamSocket(serverUser.connection, new ArraySegment<byte>(hellopacket.Data), Steamworks.Constants.k_nSteamNetworkingSend_Reliable);
+#if FULLGAME
+        // The first Steam packet is the intro. OnTransportConnected
+        // immediately sends the remembered SetCharacter afterwards.
+        if (Util.GameIsFull()) Net.OnTransportConnected();
+#endif
     }
 
 
@@ -2212,7 +2324,8 @@ public class TransportSteamworks : NetTransportBase {
                 return false;
             }
 
-            KSteam.OnLobbyEnterCallResult.Set(SteamMatchmaking.JoinLobby(new CSteamID(lobby_steamID)));
+            t._clientLobbyId = lobby_steamID;
+            Util.StartCoroutine(() => t.JoinLobbyAfterBackoff(lobby_steamID));
 
             return true;
 
@@ -2245,8 +2358,30 @@ public class TransportSteamworks : NetTransportBase {
     float one_second_timer = -1;
 
     public SteamNetConnectionRealTimeStatus_t client_status = new();
+    // 断线后偶发：监听 socket 或 Steam 回调丢失，导致新的连接请求没人 accept，
+    // Steam 等到超时（"App didn't accept or close incoming connection in time"）。
+    // 主机每秒自检一次，缺什么补什么，并记录日志。
+    void EnsureServerSocketHealthy() {
+        if (!Net.IsServer || !Net.IsRunning || !IS_IN_LOBBY) return;
+        try {
+            if (_listenerRebuildPending) RebuildServerListener();
+            if (listenSocket == HSteamListenSocket.Invalid) {
+                if (CreateServerSocket()) log.l("[steam-conn] listen socket was missing; recreated");
+                else log.error("[steam-conn] listen socket was missing and could not be recreated");
+            }
+            if (onConnectionChange == null) {
+                if (is_steamserver) onConnectionChange = Callback<SteamNetConnectionStatusChangedCallback_t>.CreateGameServer(OnConnectionStatusChanged);
+                else onConnectionChange = Callback<SteamNetConnectionStatusChangedCallback_t>.Create(OnConnectionStatusChanged);
+                log.l("[steam-conn] connection callback was missing; re-registered");
+            }
+        } catch (Exception e) {
+            log.error("[steam-conn] server socket health check: " + e);
+        }
+    }
+
     void UpdateOneSecond() {
         CheckLobbyMembersList();
+        EnsureServerSocketHealthy();
 
         SteamNetConnectionRealTimeStatus_t status = new();
         SteamNetConnectionRealTimeLaneStatus_t laneStatus = new();
@@ -2601,6 +2736,7 @@ public class TransportSteamworks : NetTransportBase {
 #if FULLGAME
         if (Util.GameIsFull() && connectionMapping.TryGetValue(steamID, out var pendingConnection))
             PendingCharacterAdmission.Disconnect(pendingConnection);
+        pendingCharacterIds.Remove(steamID);
 #endif
 
 
@@ -2616,8 +2752,13 @@ public class TransportSteamworks : NetTransportBase {
         SteamIDToClientIDDict.Remove(steamID);
 
 
+        if (serverUser != null && serverUser.id.m_SteamID == steamID) {
+            _pendingClientIntro = false;
+            serverUser = null;
+        }
         if (connectionMapping.TryGetValue(steamID, out var conndata)) {
-
+            // Lobby departure may arrive before the socket's terminal callback.
+            if (conndata.acceptedListenSocket != HSteamListenSocket.Invalid) _listenerRebuildPending = true;
             bool res2;
             if (is_steamserver) {
                 res2 = SteamGameServerNetworkingSockets.CloseConnection(conndata.connection, 0, "disconnected", false);
@@ -2627,6 +2768,7 @@ public class TransportSteamworks : NetTransportBase {
 
 
             connectionMapping.Remove(steamID);
+            CloseUnusedRetiredListeners();
 #if TESTING
             log.warn($"OnLobbyMemberListChanged: removing {steamID} from connectionMapping ");
 #endif
@@ -2684,9 +2826,10 @@ public class TransportSteamworks : NetTransportBase {
     }
     internal void Shutdown(bool reset_net) {
 
-        CloseListenSocket();
-
         CloseP2PSessions();
+        CloseListenSocket();
+        foreach (var socket in _retiredListeners) CloseListener(socket);
+        _retiredListeners.Clear();
 
         if (reset_net) {
             if (CURRENT_LOBBY.lobby_steamID != CSteamID.Nil || KSteam.IS_IN_LOBBY) {
@@ -2709,6 +2852,7 @@ public class TransportSteamworks : NetTransportBase {
         serverUser = null;
     }
     private void CloseP2PSessions() {
+        _pendingClientIntro = false;
         CloseConnectionOnServerUser();
 
         foreach (SteamConnectionData user in connectionMapping.Values) {
@@ -2719,6 +2863,12 @@ public class TransportSteamworks : NetTransportBase {
         }
 
         connectionMapping.Clear();
+        SteamIDToNetPlayerDict.Clear();
+        SteamIDToClientIDDict.Clear();
+#if FULLGAME
+        pendingCharacterIds.Clear();
+#endif
+        _listenerRebuildPending = false;
         if (log.verbose)
             KSteam.steamtestlog($"{this.GetType().Name}.CloseP2PSessions - has Closed P2P Sessions With all Users");
 
@@ -2808,6 +2958,10 @@ public class TransportSteamworks : NetTransportBase {
         }
     }
     double lastExceedWarn = 0;
+    // While a peer is still connecting (or just died) every queued packet fails with
+    // k_EResultIgnored/k_EResultNoConnection. Logging each one floods the player log;
+    // one line per second is enough to diagnose.
+    double lastSendFailWarn = 0;
     public void SendThroughSteamSocket(in HSteamNetConnection connection, ReadOnlySpan<byte> data, int sendFlag) {
 
         byte[] data_copied = data.ToArray();
@@ -2853,11 +3007,14 @@ public class TransportSteamworks : NetTransportBase {
                         Plugin.Logger.LogError($"{this.GetType().Name}.Send: Could not send: {msgid_as_str}{response} {BetterToStringFromSteamID(foundsteamid.id)}");
                     }
                 } else {
+                    if (Time.realtimeSinceStartupAsDouble - lastSendFailWarn > 1.0) {
+                        lastSendFailWarn = Time.realtimeSinceStartupAsDouble;
 #if TESTING
-                    Plugin.Logger.LogError($"{this.GetType().Name}.Send: Could not send: {msgid_as_str}{response} {BetterToStringFromSteamID(foundsteamid.id)} {new StackTrace()}");
+                        Plugin.Logger.LogError($"{this.GetType().Name}.Send: Could not send: {msgid_as_str}{response} {BetterToStringFromSteamID(foundsteamid.id)} {new StackTrace()}");
 #else
-                    Plugin.Logger.LogError($"{this.GetType().Name}.Send: Could not send: {msgid_as_str}{response} {BetterToStringFromSteamID(foundsteamid.id)}");
+                        Plugin.Logger.LogError($"{this.GetType().Name}.Send: Could not send: {msgid_as_str}{response} {BetterToStringFromSteamID(foundsteamid.id)} (further identical failures suppressed for 1s)");
 #endif
+                    }
                 }
             } else {
                 Plugin.Logger.LogError($"{this.GetType().Name}.Send: Could not send: {msgid_as_str}{response}  UNKNOWN CONNECTION {connection}");

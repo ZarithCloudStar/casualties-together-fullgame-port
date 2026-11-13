@@ -167,7 +167,8 @@ public partial struct MultiplayerGameRules : INetSerializeByMemcpy {
 
 
     public bool EnableMP3Sync = true;
-    public bool AllowClientMP3Sources = false;
+    // 默认开启：允许主客机互相同步 MP3 自定义音源（bugfix2 起由默认关闭改为默认开启）。
+    public bool AllowClientMP3Sources = true;
     [MultiplayerRuleByte(4,"")]
     public byte VoicechatQuality = 4;
     public bool VoicechatEnabled = true; // DONE
@@ -1218,6 +1219,28 @@ S_LerpFactor: {_entityManager.LerpFactor}";
         }
         return aaaaaaaaaaa;
     }
+    // 服务端拒绝/踢人原因 → 中文可操作说明。保留原始英文原因，方便排查。
+    internal static string ExplainServerRejection(string reason) {
+        if (string.IsNullOrWhiteSpace(reason)) return "";
+        var r = reason.ToLowerInvariant();
+        string cn = null;
+        if (r.Contains("game file hashes"))
+            cn = "双方的 mod 安装包（或游戏文件）不一致。即使版本号相同，不同补丁包的 CasualtiesMP.dll 也不同；请让房主和所有玩家使用同一个压缩包。";
+        else if (r.Contains("version mismatch"))
+            cn = "双方 mod 版本不一致，请所有人使用同一个安装包。";
+        else if (r.Contains("wrong password"))
+            cn = "密码错误。";
+        else if (r.Contains("already in progress"))
+            cn = "对方已经开始游戏，且没有开启中途加入。";
+        else if (r.Contains("different set of mods"))
+            cn = "对方要求不同的模组组合。";
+        else if (r.Contains("name too short"))
+            cn = "玩家名太短（至少 3 个字符）。";
+        else if (r.Contains("corrupt payload"))
+            cn = "数据损坏，通常意味着版本不兼容。";
+        return cn == null ? "" : "\n" + cn;
+    }
+
     public static bool ValidateClientConnectIntroductionPacket(NetDataReader reader, ref IntroductionPlayerInfo userInfo, out string deny_reason, bool check_name = true, bool userHasMasterKey = false) {
         userInfo.userName = "EMPTY_STRING";
         userInfo.color = Color24.black;
@@ -1238,7 +1261,7 @@ S_LerpFactor: {_entityManager.LerpFactor}";
 #if FULLGAME
             // A master key cannot make an incompatible LES layout safe.
             if (Util.GameIsFull() && userInfo.version != Multiplayer.FULL_VERSION_TAG) {
-                deny_reason = "Version mismatch: both peers require fix7 / WS1-SC1 checkpoint sync. 双方必须使用 fix7。";
+                deny_reason = $"Version mismatch: both peers must use the same build ({Multiplayer.FULL_VERSION_TAG}). 双方必须使用同一个安装包（{Multiplayer.FULL_VERSION_TAG}）。";
                 return false;
             }
 #endif
@@ -1248,9 +1271,9 @@ S_LerpFactor: {_entityManager.LerpFactor}";
                     if (userInfo.modlist == null)
                         deny_reason = ($"modlist == null");
                     else
-                        deny_reason = ($"Version mismatch.");
+                        deny_reason = ($"Version mismatch. (需要 {Multiplayer.FULL_VERSION_TAG})");
 #else
-                    deny_reason = ($"Version mismatch.");
+                    deny_reason = ($"Version mismatch. (需要 {Multiplayer.FULL_VERSION_TAG})");
 #endif
                     return false;
                 }
@@ -1672,8 +1695,11 @@ S_LerpFactor: {_entityManager.LerpFactor}";
     internal static void _FIRST_INIT()  {
         FULL_VERSION_TAG = Application.version + "_MPv" + Plugin.MOD_VERSION;
 #if FULLGAME
-        FULL_VERSION_TAG += "_WS1_SC1"; // WS1 transport, exact structure prefab references
+        // 必须全员更新的版本标识（替代原来的 _WS1_SC1）。
+        // 大厅列表显示为 V1.0.1_MPv5.5.0-cu-port-fix2；装其它版本的服务器会显示“版本错误”并禁止加入。
+        FULL_VERSION_TAG += "-fix2";
 #endif
+        log.l($"MP VERSION TAG: {FULL_VERSION_TAG}  |  BUILD: {KSteam.GetModBuildTag()} (同版本号但不同补丁包的 DLL 构建不同) ");
 
 #if !RELEASE
         log.l("Mod list: " + String.Join(", ", GetBepinPlugins()));

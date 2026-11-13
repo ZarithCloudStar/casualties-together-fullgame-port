@@ -191,6 +191,7 @@ public static class UIMainMenu {
 
                 Util.PlayUISound(PlayerCamera.UISoundType.Click);
             } else {
+                UpdateChecker.ClosePopup();
                 Util.PlayUISound(PlayerCamera.UISoundType.Close);
             }
             if (UIManager.MP_MENU_BUTTON != null) {
@@ -496,6 +497,12 @@ public static class UIMainMenu {
 
     internal static void _GUI_DrawMPMainMenu() {
         if (!mainmenu_open) return;
+
+        // 版本更新弹窗是模态的：打开时只画它，避免底下的按钮被同一次点击触发。
+        if (UpdateChecker.PopupOpen) {
+            UpdateChecker.DrawPopup();
+            return;
+        }
         if (Util.IsInWorld()) {
             if (PlayerCamera.main != null) { // TEMP? FOR MOVABLE WINDOWS ALLOW TS?
                 PlayerCamera.main.radialOpen = false;
@@ -547,6 +554,20 @@ public static class UIMainMenu {
             temp_label_style.alignment = TextAnchor.MiddleCenter;
             temp_label_style.fontSize = (int)(ogfontsize * 1.5f);
             GUI.Label(topbar, Lang.Get("mainmenu_settings"), temp_label_style);
+
+            // 打开多人菜单时自动检查一次版本；结果缓存在 UpdateChecker 里（30 分钟）。
+            UpdateChecker.EnsureChecked();
+            {
+                var versionRect = topbar.ShrinkBorder(UIBullshit.uiBlockSmallBorderSize);
+                versionRect.width = Mathf.Min(340f * GetMenuUIScale(), topbar.width * 0.28f);
+                var state = UpdateChecker.CurrentState;
+                // Same menu font/size, with a separately laid-out label. Enlarged
+                // multiline button glyphs used to be clipped by native button metrics.
+                if (MenuDialogUI.Button(versionRect, UpdateChecker.StateText(), GetMenuUIScale(), UpdateChecker.Clickable, state == UpdateChecker.State.HasUpdate)) {
+                    if (state == UpdateChecker.State.Failed) UpdateChecker.EnsureChecked(true);
+                    else UpdateChecker.OpenPopup();
+                }
+            }
 
 
 
@@ -2683,6 +2704,11 @@ public static class UIMainMenu {
         var ogalign = GUI.skin.label.alignment;
         GUI.skin.label.wordWrap = false;
 
+        GUILayout.Space(10 * GetMenuUIScale());
+
+        GUILayout.Label("本修改版 · 更新与联机", MenuDialogUI.Text(GetMenuUIScale(), 1.15f));
+        GUILayout.Label("联机 QQ 群：" + ReleaseUpdate.CommunityGroup + "    网盘提取码：" + ReleaseUpdate.DownloadCode, MenuDialogUI.Text(GetMenuUIScale()));
+        if (GUILayout.Button("查看版本、下载地址与联机群", GUILayout.Height(42 * GetMenuUIScale()))) UpdateChecker.OpenPopup();
         GUILayout.Space(10 * GetMenuUIScale());
 
         //TODO steam guide link 

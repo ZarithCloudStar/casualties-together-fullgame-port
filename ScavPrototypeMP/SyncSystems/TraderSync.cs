@@ -87,7 +87,9 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
     /// </summary>
     public bool received_their_inv;// { get; private set; }
 
+#if !FULLGAME
     protected bool net_didDeathMoodDebuff = false;
+#endif
 
     public BuildingEntity build => GetComponent<BuildingEntity>();
 
@@ -199,7 +201,7 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
         }
 
         if (Net.IsServer && is_registered) {
-
+#if !FULLGAME
             var field_didDeathMoodDebuff = Traverse.Create(og).Field("didDeathMoodDebuff");
 
             var og_didDeathMoodDebuff = (bool)field_didDeathMoodDebuff.GetValue();
@@ -216,6 +218,7 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
 
             }
 
+#endif
             if (doublesendRepState > 0) {
                 doublesendRepState -= Time.deltaTime;
 
@@ -320,6 +323,9 @@ static class TraderScript_OnUse_MultiplayerPatch {
 
 [HarmonyPatch(typeof(TraderScript), "OnWillRenderObject")]
 static class TraderScript_OnWillRender_PinLog {
+#if FULLGAME
+    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) => TraderMoodEffects.Transpile(instructions);
+#endif
     private static void Prefix(TraderScript __instance, out (float rep, float host) __state) {
         __state = (__instance == null) ? default : (__instance.reputation, __instance.hostility);
     }

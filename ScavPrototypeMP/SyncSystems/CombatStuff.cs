@@ -550,6 +550,7 @@ public static class Body_Attack_MultiplayerPatch {
 
         float healthBefore = be.GetHealth();
 #if FULLGAME
+        TraderMoodEffects.RecordHit(be, attacker, healthBefore - building_dmg);
         if (be.animal) EndingGuardSync.PlayerHit(be, attacker);
 #endif
         be.SetHealth(be.GetHealth() - building_dmg);
@@ -692,11 +693,23 @@ public static class Body_Attack_MultiplayerPatch {
     static bool BodyAttack_CheckIfItWasABuilding(RaycastHit2D hit) {
         var b = hit.collider.GetComponent<BuildingEntity>();
         if (b != null ) {
+#if FULLGAME
+            // Corpse Start uses the camera's character. Static-hit replay on a
+            // non-Dune host therefore rejects a guest Dune's perfectly valid hit.
+            // Resolve permission from this swing, and send the existing entity hit.
+            bool corpseHit = CorpseCombat.IsHumanCorpse(b);
+            if (corpseHit) b.cantHit = !CorpseCombat.CanHit(b, LastAttacker);
+#endif
             if (b.cantHit) {
                 return false;
             }
             var islocal = Util.IsBodyLocal(LastAttacker);
             var isphysactive = ScavMPBuildingSynchronizer.BuildingHasActivePhysics(b);
+#if FULLGAME
+            // A static trader also needs an explicit hit: the actor must survive
+            // server validation so death XP/regret belong to the actual killer.
+            isphysactive |= corpseHit || b.GetComponent<TraderScript>() != null;
+#endif
 
             if (islocal) {
                 if (b.TryGetSyncInfo(out var si)) {
@@ -1055,7 +1068,11 @@ public static class Body_Attack_MultiplayerPatch {
 
                 bool inRange = KM.DistanceCheck(plr.body, building_si, 15);
                 float healthBefore = building_si.building != null ? building_si.building.GetHealth() : -1f;
-                if (inRange) {
+                if (inRange
+#if FULLGAME
+                    && CorpseCombat.CanHit(building_si.building, plr.body)
+#endif
+                ) {
 #if DEBUG
                     log.l($"{plr}  CALLED DamageBuilding ");
 #endif
@@ -2212,6 +2229,7 @@ public static class TurretScript_Shoot_MultiplayerPatch {
         var damage = (b.animal ? (gst.og.animalDamage * num) : (gst.og.structureDamage * num));
 
 #if FULLGAME
+        TraderMoodEffects.RecordHit(b, gst.body, b.GetHealth() - damage);
         if (b.animal) EndingGuardSync.PlayerHit(b, gst.body);
 #endif
         b.SetHealth(b.GetHealth() - damage);

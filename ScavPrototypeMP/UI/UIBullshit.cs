@@ -424,6 +424,10 @@ public class UIBullshit : CasualtiesTogetherSingleton {
 
     }
     public static bool IsAnyMenuOpen() {
+        if (UpdateChecker.PopupOpen) return true;
+#if FULLGAME
+        if (SaveSlotMenu.IsOpen) return true;
+#endif
         return Util.IsInPauseMenuOrMainMenu() || UIMainMenu.IsOpen();
     }
 
@@ -432,6 +436,20 @@ public class UIBullshit : CasualtiesTogetherSingleton {
 	public static bool dev348432843289723498723497824398 = true;
 	public static bool dev34843gfddgfgdfdfgfdgfdg4398 = false;
 	void OnGUI() {
+        if (UpdateChecker.PopupOpen) {
+            _GUI_CaptureOGUITextures();
+            _GUI_DoTexturesForMPUserInterface();
+            try { UpdateChecker.DrawPopup(); } finally { _GUI_ResetToOGUITextures(); }
+            return;
+        }
+#if FULLGAME
+        if (SaveSlotMenu.IsOpen) {
+            _GUI_CaptureOGUITextures();
+            _GUI_DoTexturesForMPUserInterface();
+            try { SaveSlotMenu.Draw(); } finally { _GUI_ResetToOGUITextures(); }
+            return;
+        }
+#endif
         _GUI_DoTheFullGUI();
     }
 

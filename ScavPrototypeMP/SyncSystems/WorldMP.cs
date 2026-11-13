@@ -294,6 +294,9 @@ public class WorldMP : CasualtiesTogetherSingleton {
     }
 
     public static void LoadVanillaGeneratedWorld(bool loadsave = false) {
+#if FULLGAME
+        if (loadsave && Net.IsServer && SaveSlots.Enabled && !SaveSlots.LoadPrepared) { SaveSlots.RequestLoad(); return; }
+#endif
         // Every world entry (host start, load, menu button) funnels through here,
         // so the "everyone picked a character" gate lives at this choke point.
         if (!CharacterReadyGate.Allow(loadsave ? "LoadVanillaGeneratedWorld(load)" : "LoadVanillaGeneratedWorld(new)")) return;

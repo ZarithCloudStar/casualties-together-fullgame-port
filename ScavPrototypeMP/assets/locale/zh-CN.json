@@ -41,7 +41,7 @@
   "casualtiestogether_save_current_exit_unavailable": "请等待世界加载或换层完成后再保存。",
   "casualtiestogether_save_current_exit_success": "保存成功，正在返回联机大厅。",
   "casualtiestogether_character_pending_kicked": "主机已将你移出房间。",
-  "casualtiestogether_character_timeout": "选择角色超时，请重新连接并选择角色。",
+  "casualtiestogether_character_timeout": "选角超时，请重新连接",
   "casualtiestogether_character_choosing": "选择角色中…",
   "casualtiestogether_character_desc_2": "使用 Dune 进入游戏。",
   "casualtiestogether_character_desc_1": "使用 Milky 进入游戏。",
