@@ -217,6 +217,25 @@ internal static class UpdateChecker {
 
     internal static bool Clickable => CurrentState == State.HasUpdate || CurrentState == State.Failed || CurrentState == State.Cached;
 
+    /// <summary>标题栏状态与独立刷新按钮；手动刷新绕过正常缓存等待。</summary>
+    internal static void DrawMenuHeader(Rect area, float scale) {
+        EnsureChecked();
+        float gap = Mathf.Max(4f, 6f * scale);
+        var statusRect = new Rect(area.x, area.y, Mathf.Min(340f * scale, area.width * .28f), area.height);
+        var refreshRect = new Rect(statusRect.xMax + gap, area.y,
+            Mathf.Min(112f * scale, area.width * .10f), area.height);
+        UIBullshit.CheckCursorOverlap(statusRect);
+        UIBullshit.CheckCursorOverlap(refreshRect);
+        var state = CurrentState;
+        if (MenuDialogUI.Button(statusRect, StateText(), scale, Clickable, state == State.HasUpdate)) {
+            if (state == State.Failed) EnsureChecked(true);
+            else OpenPopup();
+        }
+        bool checking = CurrentState == State.Checking;
+        if (MenuDialogUI.Button(refreshRect, checking ? "检查中…" : "重新检查", scale, !checking))
+            EnsureChecked(true);
+    }
+
     /// <summary>模态弹窗。调用方在菜单打开且 PopupOpen 时只画它。</summary>
     internal static void DrawPopup() {
         bool previous = GUI.enabled;

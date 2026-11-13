@@ -555,19 +555,8 @@ public static class UIMainMenu {
             temp_label_style.fontSize = (int)(ogfontsize * 1.5f);
             GUI.Label(topbar, Lang.Get("mainmenu_settings"), temp_label_style);
 
-            // 打开多人菜单时自动检查一次版本；结果缓存在 UpdateChecker 里（30 分钟）。
-            UpdateChecker.EnsureChecked();
-            {
-                var versionRect = topbar.ShrinkBorder(UIBullshit.uiBlockSmallBorderSize);
-                versionRect.width = Mathf.Min(340f * GetMenuUIScale(), topbar.width * 0.28f);
-                var state = UpdateChecker.CurrentState;
-                // Same menu font/size, with a separately laid-out label. Enlarged
-                // multiline button glyphs used to be clipped by native button metrics.
-                if (MenuDialogUI.Button(versionRect, UpdateChecker.StateText(), GetMenuUIScale(), UpdateChecker.Clickable, state == UpdateChecker.State.HasUpdate)) {
-                    if (state == UpdateChecker.State.Failed) UpdateChecker.EnsureChecked(true);
-                    else UpdateChecker.OpenPopup();
-                }
-            }
+            // 状态旁常驻手动刷新入口，最新版也能立即重新检查。
+            UpdateChecker.DrawMenuHeader(topbar.ShrinkBorder(UIBullshit.uiBlockSmallBorderSize), GetMenuUIScale());
 
 
 
