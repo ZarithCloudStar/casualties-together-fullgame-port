@@ -1,4 +1,30 @@
+> **这是修改版分支，不是原项目官方版本。**
+>
+> 基于 [Casualties: Together](https://github.com/creaturefeaturelarry/casualties-together) 5.4.0 修改，
+> 适配《Casualties: Unknown》正式版 1.0.1。
+>
+> 修改版作者：bilibili 星云Zarith  
+> 许可证：LGPL-2.1
 
+## 这个分支包含什么
+
+- 同层存档 / 读档（含未探索区域背景与结构）
+- 三结局多人触发规则优化
+- 旁观相机与输入修复
+- 医疗面板 / 假肢状态同步与权威修复
+- 水晶同步（普通水晶颜色、重力、不稳定爆炸表现）
+- 多人 MP3 音源
+- 沙盒模式、共同出生点、联机稳定性修复
+
+## 安装
+
+解压到《Casualties: Unknown》游戏根目录，主机和客机必须使用**同一版本**。
+
+## 构建
+
+1. 安装正式版 1.0.1
+2. 运行 `python scripts/prepare_workspace.py`
+3. 用 Visual Studio 2022 打开 `CasualtiesTogether.sln` 编译
 
 <div align="center">
 <a href="https://www.nexusmods.com/scavprototype/mods/67">
