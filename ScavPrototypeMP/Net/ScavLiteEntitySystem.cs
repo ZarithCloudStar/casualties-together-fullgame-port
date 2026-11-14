@@ -870,6 +870,10 @@ public class SyncInfo : PredictableEntityLogic {
     public SyncVar<byte> freshDropTenths;
     // the gold slot. save already writes item.favourited. this is what other machines see.
     public SyncVar<bool> favourited;
+#if FULLGAME
+    public SyncVar<byte> itemSwatch;
+    public readonly SyncString itemLabel = new();
+#endif
 
     public enum CurrentBattery : byte {
         None,
@@ -1426,7 +1430,11 @@ public class SyncInfo : PredictableEntityLogic {
         if (condition.Value != item.condition) {
             return true;
         }
-        if (favourited.Value != item.favourited) {
+        if (favourited.Value != item.favourited
+#if FULLGAME
+            || itemSwatch.Value != item.colorSwatch || itemLabel.Value != (item.label ?? "")
+#endif
+        ) {
             return true;
         }
         byte wet = (byte)(Mathf.Clamp(Time.time - item.wetTime, 0f, 125f) / 125f * 255f);
@@ -1660,6 +1668,10 @@ public class SyncInfo : PredictableEntityLogic {
                 item.condition = 0f;
             condition.Value = item.condition;
             favourited.Value = item.favourited;
+#if FULLGAME
+            itemSwatch.Value = (byte)item.colorSwatch;
+            itemLabel.Value = item.label ?? "";
+#endif
 
             wetTime = Time.time - item.wetTime;
 
@@ -2313,7 +2325,11 @@ public class SyncInfo : PredictableEntityLogic {
             }
             item.condition = cond;
         }
+#if FULLGAME
+        ItemSync.ApplyFavourite(item, syncId, favourited.Value, itemSwatch.Value, itemLabel.Value);
+#else
         ItemSync.ApplyFavourite(item, syncId, favourited.Value);
+#endif
         item.wetTime = Time.time - wetTime;
 
         UpdateItemContainer();

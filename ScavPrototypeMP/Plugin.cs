@@ -1,4 +1,4 @@
-﻿
+
 
 
 using BepInEx;
@@ -44,9 +44,9 @@ namespace Together {
         internal Harmony harmony;
 
 
-        public static string TARGET_GAME_VERSION => Util.GameIsFull() ? "1.0.1" : "7.0.1";
+        public static string TARGET_GAME_VERSION => Util.GameIsFull() ? "1.0.2" : "7.0.1";
         internal static bool SupportsGameVersion(string version) => Util.GameIsFull()
-            ? version == "1.0" || version == "1.0.1"
+            ? version == "1.0.2"
             : version == TARGET_GAME_VERSION;
         public static readonly string MOD_VERSION = BuildInfo.MOD_VERSION;
         public static string FULL_MOD_VERSION { get; internal set; }
@@ -293,9 +293,14 @@ namespace Together {
             if (!SupportsGameVersion(Application.version)) {
                 LoadErrorNotifier.errorstr += $"Mismatching version detected: TARGET: {TARGET_GAME_VERSION} - CURRENT: {Application.version}";
 
+                if (Util.GameIsFull()) LoadErrorNotifier.errorstr += "\n请更新游戏至 1.0.2，并确保所有玩家安装 bugfix4。Please update the game to 1.0.2 and install bugfix4 on every peer.";
                 Together.log.error(LoadErrorNotifier.errorstr);
 
                 LoadErrorNotifier.errorstr += "\n";
+#if FULLGAME
+                this.AddComponent<LoadErrorNotifier>();
+                return; // Do not run 1.0.2-only patches/settings against an older full game.
+#endif
             }
 
             try {

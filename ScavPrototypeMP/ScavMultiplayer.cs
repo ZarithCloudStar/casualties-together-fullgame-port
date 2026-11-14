@@ -1700,8 +1700,8 @@ S_LerpFactor: {_entityManager.LerpFactor}";
         FULL_VERSION_TAG = Application.version + "_MPv" + Plugin.MOD_VERSION;
 #if FULLGAME
         // 必须全员更新的版本标识（替代原来的 _WS1_SC1）。
-        // 大厅列表显示为 V1.0.1_MPv5.5.0-cu-port-fix3；装其它版本的服务器会显示“版本错误”并禁止加入。
-        FULL_VERSION_TAG += "-fix3";
+        // 大厅列表显示为 V1.0.2_MPv5.5.0-cu-port-fix4；装其它版本的服务器会显示“版本错误”并禁止加入。
+        FULL_VERSION_TAG += "-fix4";
 #endif
         SessionLog.Event("PROTOCOL", FULL_VERSION_TAG);
         log.l($"MP VERSION TAG: {FULL_VERSION_TAG}  |  BUILD: {KSteam.GetModBuildTag()} (同版本号但不同补丁包的 DLL 构建不同) ");

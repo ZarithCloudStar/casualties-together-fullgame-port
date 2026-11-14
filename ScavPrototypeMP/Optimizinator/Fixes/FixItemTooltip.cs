@@ -82,6 +82,9 @@ internal static class FixItemTooltip
 		{
 			int hash = 17;
 			hash = hash * 31 + (item.favourited ? 1 : 0);
+#if FULLGAME
+            hash = hash * 31 + (item.label == null ? 0 : item.label.GetHashCode());
+#endif
 			hash = hash * 31 + (item.isWet ? 1 : 0);
 			hash = hash * 31 + Mathf.FloorToInt(item.condition * 100f);
 			hash = hash * 31 + Mathf.RoundToInt(item.totalWeight * 100f);
@@ -99,12 +102,12 @@ internal static class FixItemTooltip
 			}
 			if (item.TryGetComponent(out WaterContainerItem water))
 			{
-				hash = hash * 31 + Mathf.RoundToInt(water.CurrentTotal);
+				hash = hash * 31 + Mathf.FloorToInt(water.CurrentTotal);
 				hash = hash * 31 + Mathf.RoundToInt(water.Capacity);
 				var stack = water.stack;
 				for (int i = 0; i < stack.Count; i++)
 				{
-					hash = hash * 31 + Mathf.RoundToInt(stack[i].amount);
+					hash = hash * 31 + Mathf.FloorToInt(stack[i].amount);
 					hash = hash * 31 + (stack[i].liquidId == null ? 0 : stack[i].liquidId.GetHashCode());
 				}
 			}

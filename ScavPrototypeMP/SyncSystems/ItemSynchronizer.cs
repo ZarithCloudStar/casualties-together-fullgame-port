@@ -1079,8 +1079,13 @@ public static class PlayerCamera_TryPerformInventoryAction_MultiplayerPatch {
                     __result = true;
                     return false;
                 }
-                // nothing moved. still finish combine and the slot here, so the original unload-first branch does not run.
+#if FULLGAME
+                // 1.0.2 consumes an expanddesc bag pour even when nothing fits.
+                // Do not fall through into a slot swap/combine for an empty or refused pour.
+                __result = true;
+#else
                 __result = FinishSlotOrCombine(__instance, component, item);
+#endif
                 return false;
             }
 
@@ -1198,6 +1203,92 @@ public static class PlayerCamera_TryPerformInventoryAction_MultiplayerPatch {
 }
 
 // the favourite key flips the copy on screen. the host item is the one that gets saved.
+#if FULLGAME
+[HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.HandleWhileDragging))]
+static class PlayerCamera_Favourite_MultiplayerPatch {
+    static Item watched;
+    static bool before;
+
+    static void Prefix(List<RaycastResult> uiCasts) {
+        watched = null;
+        if (!Net.IsRunning || uiCasts == null)
+            return;
+        if (!Input.GetKeyDown(KeyBinds.GetBind("favourite")))
+            return;
+        for (int i = 0; i < uiCasts.Count; i++) {
+            if (!uiCasts[i].gameObject.TryGetComponent(out InvButton button) || !button.Overlaps(uiCasts))
+                continue;
+            Item item = button.GetItem();
+            if (item != null) {
+                watched = item;
+                before = item.favourited;
+            }
+            break;
+        }
+    }
+
+    static void Postfix() {
+        if (!Net.IsRunning || watched == null || watched.favourited == before)
+            return;
+        Send(watched);
+    }
+
+    internal static void Send(Item watched) {
+        if (!Net.IsRunning || watched == null) return;
+        if (!ItemSync.TryGetSyncInfo(watched, out SyncInfo si) || si == null)
+            return;
+        var writer = Net.CreateWriter(NetmsgId.SERVER_ItemFavourited);
+        writer.Put(si.syncId);
+        writer.Put(watched.favourited);
+        writer.Put((byte)watched.colorSwatch);
+        writer.Put(watched.label ?? "");
+        Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
+        if (Net.IsClient)
+            ItemSync.PredictFavourite(si.syncId, watched);
+    }
+
+    [ServerReceiver((byte)NetmsgId.SERVER_ItemFavourited)]
+    static void Server_ItemFavourited(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
+        reader.Get(out knetid id);
+        reader.Get(out bool want);
+        reader.Get(out byte swatch);
+        reader.Get(out string label);
+        if (!ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out var plr, out var body))
+            return;
+        if (!ItemSync.TryGetItemSyncInfo(id, out SyncInfo si) || si == null || si.item == null)
+            return;
+        bool ok = body != null && ItemSync.CheckIfBodyReachThisItem(si, body) &&
+            swatch < PlayerCamera.main.colorSwatches.Count && (label?.Length ?? 0) <= 128;
+        if (ok) {
+            si.item.favourited = want;
+            si.item.colorSwatch = swatch;
+            si.item.label = label ?? "";
+        }
+        else if (si.item.favourited == want)
+            si.item.favourited = !want;
+        si.favourited.Value = si.item.favourited;
+        si.itemSwatch.Value = (byte)si.item.colorSwatch;
+        si.itemLabel.Value = si.item.label ?? "";
+        if (!ok && plr != null && !plr.IsLocal)
+            ItemSync.EchoFavourite(plr, si);
+    }
+
+    [ClientReceiver((byte)NetmsgId.CLIENT_ItemFavourited, false)]
+    static void Client_ItemFavourited(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+        reader.Get(out knetid id);
+        reader.Get(out bool value);
+        reader.Get(out byte swatch);
+        reader.Get(out string label);
+        ItemSync.ClearFavouritePending(id);
+        if (ItemSync.TryGetItemSyncInfo(id, out SyncInfo si) && si != null && si.item != null)
+            { si.item.favourited = value; si.item.colorSwatch = swatch; si.item.label = label; }
+    }
+}
+
+
+
+
+#else
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.HandleWhileDragging))]
 static class PlayerCamera_Favourite_MultiplayerPatch {
     static Item watched;
@@ -1265,18 +1356,23 @@ static class PlayerCamera_Favourite_MultiplayerPatch {
 
 
 
+#endif
 [HarmonyPatch(typeof(Body), nameof(Body.CombineItems))]
 public static class Body_CombineItems_MultiplayerPatch {
 
 
 
+    internal static Body GunLoadingBody;
     //OG: Body.CombineItems V5t2  but i just commented out the stupidass playercamera, and also it returns false if it was water container
     public static bool Body_CombineItems(Body combinerguy ,Item it1, Item it2) {
         if (!combinerguy.CanCombine(it1, it2)) {
             return true;
         }
         if ((bool)it1.GetComponent<GunScript>() && (bool)it2.GetComponent<AmmoScript>()) {
-            it1.GetComponent<GunScript>().LoadMag(it2.GetComponent<AmmoScript>());
+            var previous = GunLoadingBody;
+            GunLoadingBody = combinerguy;
+            try { it1.GetComponent<GunScript>().LoadMag(it2.GetComponent<AmmoScript>()); }
+            finally { GunLoadingBody = previous; }
             return true;
         }
         if ((bool)it1.GetComponent<AmmoScript>() && (bool)it2.GetComponent<AmmoScript>()) {
@@ -1286,7 +1382,14 @@ public static class Body_CombineItems_MultiplayerPatch {
         if (it1.TryGetComponent<WaterContainerItem>(out var component) && it2.TryGetComponent<WaterContainerItem>(out var component2)) {
             if (component.SpaceLeft > 0f && it1.id != "craftingbottle") {
                 if (Util.IsBodyLocal(combinerguy)) { 
-                    PlayerCamera.main.StartLiquidTransfer(component, component2);
+                    #if FULLGAME
+                    if (Input.GetKey(KeyBinds.GetBind("expanddesc"))) {
+                        float amount = component.SpaceLeft;
+                        combinerguy.CombineLiquids(component, component2, amount);
+                        DoTheCombineAnnouncement(true, amount, combinerguy, it1, it2);
+                    } else
+#endif
+                        PlayerCamera.main.StartLiquidTransfer(component, component2);
                 }
             }
             return false;
@@ -2301,6 +2404,53 @@ internal class ItemSync : CasualtiesTogetherSingleton {
 
 
 
+#if FULLGAME
+    struct FavPending {
+        internal bool want;
+        internal byte swatch;
+        internal string label;
+        internal double until;
+    }
+    static readonly Dictionary<knetid, FavPending> FavPendingMap = new Dictionary<knetid, FavPending>();
+
+    // keep the local star until the host copy catches up. an older sample would wipe it.
+    internal static void PredictFavourite(knetid id, Item item) {
+        FavPendingMap[id] = new FavPending {
+            want = item.favourited, swatch = (byte)item.colorSwatch, label = item.label ?? "",
+            until = Time.realtimeSinceStartupAsDouble + ClientMain.RTT_IN_SECONDS_with_margin + 1.0
+        };
+    }
+
+    internal static void ClearFavouritePending(knetid id) {
+        FavPendingMap.Remove(id);
+    }
+
+    internal static void ApplyFavourite(Item item, knetid id, bool value, byte swatch, string label) {
+        if (item == null)
+            return;
+        if (FavPendingMap.TryGetValue(id, out FavPending pending)) {
+            if ((pending.want == value && pending.swatch == swatch && pending.label == (label ?? "")) || Time.realtimeSinceStartupAsDouble >= pending.until)
+                FavPendingMap.Remove(id);
+            else
+                return;
+        }
+        item.favourited = value;
+        item.colorSwatch = swatch;
+        item.label = label ?? "";
+    }
+
+    internal static void EchoFavourite(ScavPlayer plr, SyncInfo si) {
+        if (plr == null || si == null || si.item == null)
+            return;
+        var writer = Net.CreateWriter(NetmsgId.CLIENT_ItemFavourited);
+        writer.Put(si.syncId);
+        writer.Put(si.item.favourited);
+        writer.Put((byte)si.item.colorSwatch);
+        writer.Put(si.item.label ?? "");
+        Net.Server_SendTo(DeliveryMethod.ReliableOrdered, writer, plr.playerId);
+    }
+
+#else
     struct FavPending {
         internal bool want;
         internal double until;
@@ -2340,6 +2490,7 @@ internal class ItemSync : CasualtiesTogetherSingleton {
         Net.Server_SendTo(DeliveryMethod.ReliableOrdered, writer, plr.playerId);
     }
 
+#endif
     public static bool TryGetItem(knetid syncid, out SyncInfo isi, out Item item) {
         if (NetIdToSyncInfoDict.TryGetValue(syncid, out var isii) && isii.go != null && isii.IsItem()) {
             isi = isii;

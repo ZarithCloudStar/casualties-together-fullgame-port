@@ -823,9 +823,13 @@ public static class PlayerCamera_HandleInput_MultiplayerPatch {
         }
 
         if (Net.IsRunning) {
-            // always allow to move on the end cuz other players might not have still
+            // Respect the host-synchronized native run setting at ordinary layer exits.
             if (ServerMain.DidHeFinishTheLayer(PlayerCamera.main.body)) {
+#if FULLGAME
+                PlayerCamera.main.body.forceWalk = !WorldGeneration.GetRunSettingBool("allowlayerendmovement");
+#else
                 PlayerCamera.main.body.forceWalk = false;
+#endif
             }
         }
 

@@ -68,7 +68,8 @@ internal static class ProsthesisRepairAuthority {
         } else limb.muscleHealth = UnityEngine.Mathf.Min(100f, limb.muscleHealth + amount);
         budget.left--;
         item.condition = UnityEngine.Mathf.Max(0f, item.condition - (1f / count - .0015f));
-        if (item.condition < .01f) item.condition = 0f;
+        // 1.0.2 consumes the final repair material at <= 0.02, in both native branches.
+        if (item.condition <= .02f) item.condition = 0f;
         if (NetObjectRegistry.TryGetSyncInfo(item, out var si)) si.WriteObjectIntoPacket();
         MedicalSync.Server_SendCharacterHealth(limb.GetNetBody(), true);
         MinigameMPManager.Note($"prosthesis accepted session={sessionId} step={sequence} bone={bone} muscle={before:F3}->{limb.muscleHealth:F3} condition={durability:F4}->{item.condition:F4}");

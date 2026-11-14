@@ -1,4 +1,4 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -622,6 +622,12 @@ public static class Util_BodyExtensions {
         //Only removed the noautopickup check
 
         if (!item.Stats.wearable) {
+            //1.0.2: non-wearables go to the thigh-back material pouch first.
+            Item materialPouch = body.GetWearableBySlotID("thighback");
+            if ((bool)materialPouch && materialPouch.container != null && materialPouch.container.CanHoldItem(item)) {
+                materialPouch.container.LoadItem(item);
+                return;
+            }
             int? num = body.FirstEmptySlot();
             if (!num.HasValue) {
                 foreach (Item surfaceInventoryItem in body.GetSurfaceInventoryItems()) {
