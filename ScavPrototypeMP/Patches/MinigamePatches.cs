@@ -1136,6 +1136,7 @@ public class MinigameMPManager : CasualtiesTogetherSingleton {
 
     [ServerReceiver((byte)NetmsgId.SERVER_MinigameStart)]
     static void ServerReceiver_MinigameStart(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
+        SessionLog.Event("REMOTE MINIGAME START", $"client={clientId}");
 #if DEBUG
         log.l($"MinigameStart received {DebugHelp.GetPlayerFullDebugString(clientId)} ");
 #endif
@@ -1266,6 +1267,7 @@ public class MinigameMPManager : CasualtiesTogetherSingleton {
 
     [ServerReceiver((byte)NetmsgId.SERVER_MinigameEnd)]
     static void ServerReceiver_MinigameEnd(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
+        SessionLog.Event("REMOTE MINIGAME END", $"client={clientId}");
 #if DEBUG
         Plugin.log.LogWarning($"ServerReceiver_MinigameEnd: {DebugHelp.GetPlayerFullDebugString(clientId)} ");
 #endif
@@ -1382,7 +1384,7 @@ public static class MinigameBase_StartMinigame_MultiplayerPatch {
 
     public static byte selfharmminigame_last_cuts_count = 0;
     public static bool ignore_next_mgstart_cuz_its_not_me = false;
-    public static Dictionary<string, OnBandageUse> known_bandages_onuse_lambdas = new Dictionary<string, OnBandageUse>();
+    public static Dictionary<(Item item, Limb limb), OnBandageUse> known_bandages_onuse_lambdas = new();
 
     static void ResetMinigameOverriderStates() {
         DislocationMinigame_CheckForHit_MultiplayerPatch.lastreceived_bonepos = new Vector2(500, 0);
@@ -1409,7 +1411,9 @@ public static class MinigameBase_StartMinigame_MultiplayerPatch {
 
 		if (is_medical_minigame) {
 			if (minigame is BandageMinigame bmini) {
-				known_bandages_onuse_lambdas[item.id] = bmini.OnUse;
+				foreach (var stale in known_bandages_onuse_lambdas.Keys.Where(k => k.item == null || k.limb == null || k.item == item).ToArray())
+                    known_bandages_onuse_lambdas.Remove(stale);
+                known_bandages_onuse_lambdas[(item, limb)] = bmini.OnUse;
 				BandageMinigame_DoBandageAction_MultiplayerPatch.bandagethingcounter = 14; // to make one sound as soone as the player starts rolling
 			}
 		}
@@ -1489,7 +1493,8 @@ public static class MinigameBase_StartMinigame_MultiplayerPatch {
         }
 #endif
 
-        if (__instance.currentMinigame && !Net.IsDedicatedServer) {
+        // A skipped remote StartMinigame must not change the host local session metadata.
+        if (__instance.currentMinigame == minigame && !Net.IsDedicatedServer) {
 
             var localsci = ScavPlayer.LocalPlayer;
             localsci.minigame_current_type = MinigameMPManager.GetMinigameTypeId(minigame.GetType());
@@ -1575,6 +1580,8 @@ public static class MinigameBase_EndMinigame_MultiplayerPatch {
                         } else if (__instance.currentMinigame is SyringeMinigame smgmini) {
                             var l = WaterContainerItem_Inject_MultiplayerPatch.listen_to_limb;
                             var pb = l.body.GetComponent<NetBody>();
+            if (pb == null) return false;
+            l.GetCoUtilsInstance().SelectForMPOverride();
                             if (l.shrapnel == 1 && l.pain > 20f) {
                                 if (NetObjectRegistry.TryGetSyncInfo(Minigame.game.currentItem.gameObject, out var si)) {
                                     SyringeMinigame_Update_MultiplayerPatch.Client_SendCurrentInjectedAmount(true);
@@ -2413,10 +2420,14 @@ public static class WaterContainerItem_Inject_MultiplayerPatch {
 [HarmonyPatch(typeof(BandageMinigame), nameof(BandageMinigame.DoBandageAction))]
 public static class BandageMinigame_DoBandageAction_MultiplayerPatch {
     
-    public static bool Prefix(BandageMinigame __instance) {
+    public static bool Prefix(BandageMinigame __instance, out CoUtils __state) {
+        __state = CoUtils_instance_MultiplayerPatch.cur_override_instance;
         if (Net.IsRunning) {
+            if (Minigame.game == null || Minigame.game.currentMinigame != __instance || Minigame.game.currentItem == null || __instance.limb?.body == null) return false;
             var l = __instance.limb;
             var pb = l.body.GetComponent<NetBody>();
+            if (pb == null) return false;
+            l.GetCoUtilsInstance().SelectForMPOverride();
 
 #if DEBUG
             log.l($"DoBandageAction called for: {l}  {l.body}  ");
@@ -2432,6 +2443,10 @@ public static class BandageMinigame_DoBandageAction_MultiplayerPatch {
     }
 
 
+    static void Finalizer(CoUtils __state) {
+        CoUtils_instance_MultiplayerPatch.cur_override_instance = __state;
+    }
+
     public static int bandagethingcounter = 0;
 
 
@@ -2446,16 +2461,23 @@ public static class BandageMinigame_DoBandageAction_MultiplayerPatch {
         reader.Get(out byte limbid);
 
         if (MedicalSync.Server_CheckCanHealerUseItemForLimb(clientId,targetplr,limbid,bandageid, out var healerPlr, out var targetnb, out var item_si)) {
-            if (MinigameBase_StartMinigame_MultiplayerPatch.known_bandages_onuse_lambdas.TryGetValue(item_si.item.id, out var onuse_lambda)) {
+            if (MinigameBase_StartMinigame_MultiplayerPatch.known_bandages_onuse_lambdas.TryGetValue((item_si.item, targetnb.body.limbs[limbid]), out var onuse_lambda)) {
                 if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(healerPlr.body.transform.position, $"S: bandaging bro {healerPlr.playerName} -> {targetnb.playerName} {item_si}");
 
                 var limb = targetnb.body.limbs[limbid];
 
                 if (!healerPlr.IsLocal) {
-                    healerPlr.GetCoUtilsInstance().SelectForMPOverride();
+
 
                     //OG: BandageMinigame.DoBandageAction   V5t4   it ends mingame
-                    onuse_lambda.Invoke(1f / 18f);
+                    var previousOverride = CoUtils_instance_MultiplayerPatch.cur_override_instance;
+                    try {
+                        limb.GetCoUtilsInstance().SelectForMPOverride();
+                        onuse_lambda.Invoke(1f / 18f);
+                    } finally {
+                        CoUtils_instance_MultiplayerPatch.cur_override_instance = previousOverride;
+                    }
+                    MedicalSync.Server_QueueSendCharacterHealth(targetnb);
                     // dressing divides the roll by 12 and subtracts that, so the last tick goes under 0
                     if (item_si.item != null && item_si.item.condition < 0f)
                         item_si.item.condition = 0f;
@@ -2817,6 +2839,9 @@ public static class AmputationMinigame_PhysicsUpdate_MultiplayerPatch {
 
 
 }
+
+
+
 
 
 

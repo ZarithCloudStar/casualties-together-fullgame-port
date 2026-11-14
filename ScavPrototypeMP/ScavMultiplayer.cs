@@ -611,12 +611,14 @@ public class Multiplayer : MonoBehaviour {
     
 
     public static void DoMultiplayerStatusMessageLog(string msg) {
+        SessionLog.Event("STATUS", msg);
         lastMultiplayerStatusMessageChangeTime = Time.realtimeSinceStartupAsDouble;
         multiplayerStatusMessage = msg;
         msg = "Status: " + msg;
         log.l(msg);
     }
     public static void DoMultiplayerStatusMessageError(string msg) {
+        SessionLog.Event("STATUS ERROR", msg);
         lastMultiplayerStatusMessageChangeTime = Time.realtimeSinceStartupAsDouble;
         multiplayerStatusMessage = msg;
         msg = "Status ERROR: " + msg;
@@ -1650,11 +1652,13 @@ S_LerpFactor: {_entityManager.LerpFactor}";
         try {
             if (Util.IsInWorld()) {
                 if (WorldGeneration.world != null) {
+                    SessionLog.Event("LAYER / WORLD SCENE", $"layer={WorldGeneration.world.biomeDepth}");
                     log.l($"SCENE CHANGE: Is In World,  Layer: {WorldGeneration.world.biomeDepth}");
                 } else {
                     log.l($"SCENE CHANGE: Is In World,  No world?");
                 }
             } else {
+                SessionLog.Mark("main menu");
                 log.l($"SCENE CHANGE: Is In Main Menu ");
             }
         } catch (Exception e) {
@@ -1696,9 +1700,10 @@ S_LerpFactor: {_entityManager.LerpFactor}";
         FULL_VERSION_TAG = Application.version + "_MPv" + Plugin.MOD_VERSION;
 #if FULLGAME
         // 必须全员更新的版本标识（替代原来的 _WS1_SC1）。
-        // 大厅列表显示为 V1.0.1_MPv5.5.0-cu-port-fix2；装其它版本的服务器会显示“版本错误”并禁止加入。
-        FULL_VERSION_TAG += "-fix2";
+        // 大厅列表显示为 V1.0.1_MPv5.5.0-cu-port-fix3；装其它版本的服务器会显示“版本错误”并禁止加入。
+        FULL_VERSION_TAG += "-fix3";
 #endif
+        SessionLog.Event("PROTOCOL", FULL_VERSION_TAG);
         log.l($"MP VERSION TAG: {FULL_VERSION_TAG}  |  BUILD: {KSteam.GetModBuildTag()} (同版本号但不同补丁包的 DLL 构建不同) ");
 
 #if !RELEASE

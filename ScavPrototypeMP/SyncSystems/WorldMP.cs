@@ -1,4 +1,4 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using CasualtiesTogetherUtils;
 using System;
 using System.IO;
@@ -431,6 +431,7 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
 
     static internal IEnumerator Patched_GenerateWorld(WorldGeneration world) {
+        SessionLog.Event("WORLD GENERATION BEGIN", $"layer={world.biomeDepth} client={Net.IsClient}");
 #if FULLGAME
         if (Net.IsServer) {
             WorldSnapshotTransfer.Reset(aaaaaaaaaaaaaaaaaaaaaaaaaaa != null);
@@ -855,6 +856,7 @@ public class WorldMP : CasualtiesTogetherSingleton {
         }
 
         try {
+            SessionLog.Event("WORLD GENERATION END", $"layer={WorldGeneration.world?.biomeDepth} client={Net.IsClient}");
             OnWorldgenFinish?.Invoke();
         } catch (Exception e) {
             log.error($"OnWorldgenFinish.Invoke()\n{e.ToString()}");

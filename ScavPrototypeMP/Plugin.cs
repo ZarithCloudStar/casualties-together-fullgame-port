@@ -1,4 +1,4 @@
-
+﻿
 
 
 using BepInEx;
@@ -170,6 +170,7 @@ namespace Together {
 
 
         private void Awake() {
+            SessionLogGame.Start();
 
             main = this;
             s = this.gameObject;
@@ -321,13 +322,16 @@ namespace Together {
 
 
 
+            SessionLog.Mark("Steam initialization starting");
             KSteam.CheckSteam();
+            SessionLog.Event("STEAM INIT", $"loaded={KSteam.Loaded}");
 
             UIMainMenu._USE_STEAM_MENU = KSteam.Loaded;
 
             if (!plrname_override) {
                 _PickUsername();
             }
+            SessionLogGame.Identity();
 
 #if !RELEASE
             Multiplayer.INPUT_PASSWORD = "AMOGUS";
@@ -458,6 +462,7 @@ namespace Together {
                 Net.ShutdownReset();
             } catch (Exception e) { }
             Together.log.l("Plugin.OnDestroy()");
+            SessionLog.CleanExit();
         }
 
         public static void SkipMainMenuIntro() {
@@ -1204,6 +1209,7 @@ namespace Together {
 
 
         private void Update() {
+            SessionLog.Heartbeat();
             FrameBuckets.NoteFrame(Time.unscaledDeltaTime);
             long tick = FrameBuckets.Start();
 #if FULLGAME

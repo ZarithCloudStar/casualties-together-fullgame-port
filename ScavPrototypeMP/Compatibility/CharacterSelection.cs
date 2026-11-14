@@ -1,4 +1,4 @@
-using CasualtiesTogetherUtils;
+﻿using CasualtiesTogetherUtils;
 using HarmonyLib;
 using System;
 using System.Reflection;
@@ -160,6 +160,7 @@ internal static class CharacterSelection {
             return false;
         }
 
+        SessionLog.Event("CHARACTER SELECTED", $"character={chr} chosen={chosen} persist={persist}");
         rememberedChoice = (byte)chr;
         PreRunScript.characterSelected = Local;
         if (persist) RememberAfterFrame(chr);

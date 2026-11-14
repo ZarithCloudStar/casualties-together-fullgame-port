@@ -1,4 +1,4 @@
-using CasualtiesMultiplayerAPI;
+﻿using CasualtiesMultiplayerAPI;
 using CasualtiesTogetherUtils;
 using K4os.Compression.LZ4;
 using LiteEntitySystem;
@@ -490,6 +490,8 @@ public static class Net {
     internal static void QuiesceForApplicationQuit() { IsRunning = false; }
 
     public static void ShutdownReset() {
+        SessionJoinLog.Reset();
+        SessionLog.Mark("network shutdown/reset");
 #if FULLGAME
         if (Util.GameIsFull()) {
             PendingCharacterAdmission.Reset();
@@ -664,6 +666,8 @@ public static class Net {
     }
 
     internal static void OnTransportConnected() {
+        SessionLog.Event("TRANSPORT CONNECTED", $"type={Type} steam={IsRunningSteam}");
+        if (IsServer) SessionLog.Event("HOST SUCCEEDED", $"type={Type} steam={IsRunningSteam}");
 
         LiteEntitySystemInit();
 #if FULLGAME
@@ -1010,6 +1014,7 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
             }
 
 
+            if (type == Net.NetType.Client) SessionJoinLog.DirectMetadata(ip, port);
             Net.TransportCreated(type);
             var transport = new TransportLiteNetLib(ip, port);
             Net.Transport = transport;
@@ -1056,11 +1061,14 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
 
     public static bool OnWantToConnect(string ipport_input, Net.NetType type) {
         Net.ShutdownReset();
+        if (type == Net.NetType.Client) SessionJoinLog.Begin("direct", ipport_input);
+        SessionLog.Event("DIRECT START", $"type={type} address={ipport_input}");
 
         if (_DoOnWantToConnect(ipport_input, type)) {
             Multiplayer.DoMultiplayerStatusMessageLog("Succesfully started: " + type.ToString());
             return true;
         } else {
+            if (type == Net.NetType.Client) SessionJoinLog.Failure("direct startup failed; see preceding status");
             Net.ShutdownReset();
             // all paths already announce the error
         }
@@ -1080,6 +1088,7 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
         }
 
         if (is_rejected) {
+            SessionLog.Event("CLIENT REJECTED", $"method=direct peer={request.RemoteEndPoint} reason={reject_reason}");
             var writer = new NetDataWriter();
             writer.Put(reject_reason);
 
@@ -1184,6 +1193,7 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
         if (log.verbose) log.l($"{this.GetType().Name}.INetEventListener.OnPeerConnected :peer: {peer}"); // it prints something like:  TransportLiteNetLib.INetEventListener.OnPeerConnected :peer: 127.0.0.1:51728
 #endif
         if (Net.IsClient) {
+            SessionJoinLog.Success();
             Multiplayer.DoMultiplayerStatusMessageLog("Connected!  :3");
 
             Net.OnTransportConnected();
@@ -1204,6 +1214,20 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
 
         try {
             if (peer == CLIENT_PEER) {
+                try {
+                    string rejection = "";
+                    // Use a separate reader: leave AdditionalData intact for the existing UI path.
+                    try {
+                        var data = disconnectInfo.AdditionalData;
+                        if (data != null && data.AvailableBytes > 0) {
+                            var copy = new NetDataReader(data.RawData, data.Position, data.Position + data.AvailableBytes);
+                            copy.TryGetString(out rejection);
+                        }
+                    } catch { rejection = "(unreadable disconnect detail)"; }
+                    string reason = disconnectInfo.Reason + " socket=" + disconnectInfo.SocketErrorCode;
+                    SessionLog.Event("DIRECT DISCONNECTED", reason + " detail=" + rejection);
+                    SessionJoinLog.Failure(reason, rejection, disconnectInfo.Reason == DisconnectReason.ConnectionRejected);
+                } catch { }
                 Multiplayer.ShutdownNetwork(); // to go back to main menu and shutdown
 
                 if (disconnectInfo.Reason == DisconnectReason.UnknownHost) {

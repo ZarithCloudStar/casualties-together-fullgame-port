@@ -1,4 +1,4 @@
-using CasualtiesMultiplayerAPI;
+﻿using CasualtiesMultiplayerAPI;
 using CasualtiesTogetherUtils;
 using HarmonyLib;
 using KrokV5Optimization;

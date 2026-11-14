@@ -343,7 +343,7 @@ public class KSteam : MonoBehaviour {
                         if (!Net.IsRunning) {
                             KSteam.steamtestlog($"CMD: Will join to lobby {newlobbysteamid.ToString()}");
 
-                            TransportSteamworks.OnWantToJoinLobby(newlobbysteamid);
+                            TransportSteamworks.OnWantToJoinLobby(newlobbysteamid, "invite");
                         }
                     }
                 }
@@ -391,6 +391,7 @@ public class KSteam : MonoBehaviour {
 
         try {
             var init_resultcode = SteamAPI.InitEx(out var outSteamErrMsg);
+            SessionLog.Event("STEAM INIT RESULT", $"result={init_resultcode} debug={outSteamErrMsg}");
             switch (init_resultcode) {
                 case ESteamAPIInitResult.k_ESteamAPIInitResult_OK: {
                     break;
@@ -401,6 +402,7 @@ public class KSteam : MonoBehaviour {
                 }
             }
         } catch (Exception e) {
+            SessionLog.Event("STEAM INIT EXCEPTION", e.ToString());
             Together.log.error($"Fatally failed to initialize Steam: {e}");
             return;
         }
@@ -1050,6 +1052,8 @@ public class KSteam : MonoBehaviour {
     static void OnLobbyEnter(LobbyEnter_t pCallback) {
 
         var enterresponse = (EChatRoomEnterResponse)pCallback.m_EChatRoomEnterResponse;
+        if (Net.IsClient && enterresponse != EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess)
+            SessionJoinLog.Failure("lobby enter rejected", enterresponse.ToString());
 
         // https://partner.steamgames.com/doc/api/ISteamMatchmaking#:~:text=RequestLobbyData%2C%20SetLobbyOwner-,LobbyEnter_t,-Received%20upon%20attempting  
         steamtestlog("[" + LobbyEnter_t.k_iCallback + " - LobbyEnter] - " + 
@@ -1111,6 +1115,7 @@ public class KSteam : MonoBehaviour {
 
             if (bIOFailure) {
                 ESteamAPICallFailure reason = SteamUtils.GetAPICallFailureReason(OnLobbyEnterCallResult.Handle);
+                SessionJoinLog.Failure("lobby IOFailure", reason.ToString());
                 Multiplayer.DoMultiplayerStatusMessageError("STEAM: OnLobbyEnter IOFailure: " + reason);
 
                 IS_IN_LOBBY = false;
@@ -1124,6 +1129,7 @@ public class KSteam : MonoBehaviour {
             var responseStr = m_LobbyEnterResponse.ToString().TrimStart("k_EChatRoomEnterResponse");
 
             if (m_LobbyEnterResponse != EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess) {
+                SessionJoinLog.Failure("lobby rejected", responseStr);
                 if (m_LobbyEnterResponse == EChatRoomEnterResponse.k_EChatRoomEnterResponseDoesntExist) {
                     Multiplayer.DoMultiplayerStatusMessageLog("STEAM: Lobby Enter Rejected: Lobby does not exist!");
                 } else {
@@ -1175,6 +1181,7 @@ public class KSteam : MonoBehaviour {
                     tsteam.SendClientIntroWhenConnected();
 
                 } else {
+                    SessionJoinLog.Failure("CreateClientSocket failed");
                     tsteam.RecordClientFailure();
                     LeaveLobbyAndResetNet((CSteamID)pCallback.m_ulSteamIDLobby);
                     IS_IN_LOBBY = false;
@@ -1183,6 +1190,7 @@ public class KSteam : MonoBehaviour {
             }
 
         } catch (Exception e) {
+            SessionJoinLog.Failure("lobby dispatch exception", e.ToString());
             if (Net.TryGetSteamTransport(out var failedTransport)) failedTransport.RecordClientFailure();
             Net.ShutdownReset();
             Together.log.error("STEAM: OnLobbyEnter_APIDispatch: " + e.ToString());
@@ -1275,6 +1283,8 @@ public class KSteam : MonoBehaviour {
                 }
 
                 if (isLocalUser) {
+                    SessionLog.Event("LOBBY REMOVED", stateChange.ToString());
+                    SessionJoinLog.Failure("removed from lobby", stateChange.ToString());
                     tsteam.RecordClientFailure();
                     Multiplayer.DoMultiplayerStatusMessageLog($"I got removed from the lobby.");
 
@@ -1307,7 +1317,11 @@ public class KSteam : MonoBehaviour {
                     + " closeP2P=" + (closeP2p ? 1 : 0)
                     + " method=TransportSteamworks.RemoveSteamUser "
                     + connSnap);
-                if (Net.IsClient && changedUser == CURRENT_LOBBY.ownerID.m_SteamID) tsteam.RecordClientFailure();
+                SessionLog.Event("LOBBY MEMBER LEFT", $"steam={changedUser} name={persona} flags={stateChange} {connSnap}");
+                if (Net.IsClient && changedUser == CURRENT_LOBBY.ownerID.m_SteamID) {
+                    SessionJoinLog.Failure("lobby owner left", stateChange + " " + connSnap);
+                    tsteam.RecordClientFailure();
+                }
                 tsteam.RemoveSteamUser(pCallback.m_ulSteamIDUserChanged);
 
 
@@ -1362,6 +1376,8 @@ public class KSteam : MonoBehaviour {
                 ulong targetId = ulong.Parse(msg);
 
                 if ( targetId == SteamUser.GetSteamID().m_SteamID ) {
+                    SessionLog.Event("KICKED", reason);
+                    SessionJoinLog.Failure("kicked", reason);
                     Multiplayer.DoMultiplayerStatusMessageLog("STEAM: Kicked: " + reason + Multiplayer.ExplainServerRejection(reason));
                     LeaveLobbyAndResetNet(true);
                 }
@@ -1429,10 +1445,13 @@ public class KSteam : MonoBehaviour {
     }
 
     static void OnLobbyKicked(LobbyKicked_t pCallback) {
+        SessionLog.Event("LOBBY KICKED", $"lobby={pCallback.m_ulSteamIDLobby} admin={pCallback.m_ulSteamIDAdmin} disconnected={pCallback.m_bKickedDueToDisconnect}");
+        SessionJoinLog.Failure("lobby kicked", "disconnect=" + pCallback.m_bKickedDueToDisconnect);
         steamtestlog("[" + LobbyKicked_t.k_iCallback + " - LobbyKicked] - " + pCallback.m_ulSteamIDLobby + " -- " + pCallback.m_ulSteamIDAdmin + " -- " + pCallback.m_bKickedDueToDisconnect);
     }
 
     static void OnLobbyCreated(LobbyCreated_t pCallback, bool bIOFailure) {
+        SessionLog.Event("LOBBY CREATE RESULT", $"lobby={pCallback.m_ulSteamIDLobby} result={pCallback.m_eResult} ioFailure={bIOFailure}");
         steamtestlog("[" + LobbyCreated_t.k_iCallback + " - LobbyCreated] - " + pCallback.m_eResult + " -- " + pCallback.m_ulSteamIDLobby);
 
         if (bIOFailure) {
@@ -1464,6 +1483,7 @@ public class KSteam : MonoBehaviour {
         }
 
         UpdateLobbyInfo((CSteamID)pCallback.m_ulSteamIDLobby, ref CURRENT_LOBBY);
+        SessionLog.Event("LOBBY CREATED", $"lobby={pCallback.m_ulSteamIDLobby} owner={CURRENT_LOBBY.ownerID} port=0");
 
         IS_IN_LOBBY = true;
 
@@ -1631,7 +1651,7 @@ public class KSteam : MonoBehaviour {
             Multiplayer.DoMultiplayerStatusMessageLog("GameLobbyJoinRequested: Nah, Already in a game.");
         } else {
             Multiplayer.DoMultiplayerStatusMessageLog($"GameLobbyJoinRequested: lobbyID:{pCallback.m_steamIDLobby}");
-            TransportSteamworks.OnWantToJoinLobby(pCallback.m_steamIDLobby.m_SteamID);
+            TransportSteamworks.OnWantToJoinLobby(pCallback.m_steamIDLobby.m_SteamID, "invite");
         }
     }
 
@@ -1929,7 +1949,7 @@ public class TransportSteamworks : NetTransportBase {
         if (_nextConnectingLog.TryGetValue(remote, out double next) && Time.realtimeSinceStartupAsDouble < next) { _suppressedConnectingLogs++; return; }
         if (_nextConnectingLog.Count >= 128) _nextConnectingLog.Clear();
         _nextConnectingLog[remote] = Time.realtimeSinceStartupAsDouble + 1;
-        log.l($"[steam-conn] connecting remote={callback.m_info.m_identityRemote.GetSteamID64()} handle={callback.m_hConn} ownDial={ownDial} isServer={Net.IsServer} type={Net.Type} listen={listenSocket} incomingListen={callback.m_info.m_hListenSocket} mapping={connectionMapping.Count} decision={decision} acceptResult={result} suppressed={_suppressedConnectingLogs}");
+        SessionLogGame.SteamConnection($"[steam-conn] connecting remote={callback.m_info.m_identityRemote.GetSteamID64()} handle={callback.m_hConn} ownDial={ownDial} isServer={Net.IsServer} type={Net.Type} listen={listenSocket} incomingListen={callback.m_info.m_hListenSocket} mapping={connectionMapping.Count} decision={decision} acceptResult={result} suppressed={_suppressedConnectingLogs}");
         _suppressedConnectingLogs = 0;
     }
 
@@ -1972,7 +1992,7 @@ public class TransportSteamworks : NetTransportBase {
                 LogConnecting(pCallback, false, result == EResult.k_EResultOK ? "accepted" : "accept-failed", result.ToString());
                 if (result != EResult.k_EResultOK) {
                     bool closed = CloseSteamConnection(pCallback.m_hConn, "accept failed: " + result);
-                    log.error($"[steam-conn] accept failed remote={remote} handle={pCallback.m_hConn} result={result} close={closed}");
+                    SessionLogGame.SteamConnection($"[steam-conn] accept failed remote={remote} handle={pCallback.m_hConn} result={result} close={closed}", true);
                     return;
                 }
                 connectionMapping[remote] = new SteamConnectionData((CSteamID)remote) {
@@ -1984,10 +2004,14 @@ public class TransportSteamworks : NetTransportBase {
                     CloseSteamConnection(pCallback.m_hConn, "obsolete connected handle");
                     return;
                 }
+                SessionLog.Event("STEAM CONNECTED", $"remote={remote} handle={pCallback.m_hConn}");
                 if (Net.IsClient) TryFlushPendingClientIntro();
             } else if (pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ClosedByPeer
                 || pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ProblemDetectedLocally) {
                 bool mapped = connectionMapping.TryGetValue(remote, out var data) && data.connection == pCallback.m_hConn;
+                if (currentTransport && Net.IsClient && ownDial && remote == KSteam.CURRENT_LOBBY.ownerID.m_SteamID)
+                    SessionJoinLog.Failure(pCallback.m_info.m_eState + ":" + pCallback.m_info.m_eEndReason, pCallback.m_info.m_szEndDebug, true);
+                SessionLog.Event("STEAM DISCONNECTED", $"remote={remote} state={pCallback.m_info.m_eState} end={pCallback.m_info.m_eEndReason} debug={OneLine(pCallback.m_info.m_szEndDebug)} mapped={mapped}");
                 log.l($"[lobby-left] trigger=OnConnectionStatusChanged steam={remote} handle={pCallback.m_hConn} state={pCallback.m_info.m_eState} old={pCallback.m_eOldState} end={(ESteamNetConnectionEnd)pCallback.m_info.m_eEndReason} ({pCallback.m_info.m_eEndReason}) debug=\"{OneLine(pCallback.m_info.m_szEndDebug)}\" mapped={mapped}");
                 // Always free the callback handle, including rejected/unmapped incoming requests.
                 CloseSteamConnection(pCallback.m_hConn, "connection ended");
@@ -2052,7 +2076,8 @@ public class TransportSteamworks : NetTransportBase {
     readonly List<SteamConnectionData> _pollConnections = new List<SteamConnectionData>(4);
 
     const string P2PPortKey = "cu_p2p_port";
-    int _listenPort;
+    const int FixedP2PPort = 0;
+    const int _listenPort = FixedP2PPort;
     bool _listenerRebuildPending;
     readonly List<HSteamListenSocket> _retiredListeners = new();
 
@@ -2069,22 +2094,25 @@ public class TransportSteamworks : NetTransportBase {
         }
     }
 
+    // 始终使用虚拟端口 0。之前每次断线把端口 %999+1 轮换后，大厅数据里的
+    // cu_p2p_port 与真实监听会不一致（Steam 的 SetLobbyData 有限频/失败可能），
+    // 客机就会永久拨一个没人监听的端口，表现为“大厅能进、连接 10 秒超时”。
+
+
     void RebuildServerListener() {
         _listenerRebuildPending = false;
         // CloseListenSocket kills accepted connections. Retain occupied listeners
-        // until their final peer leaves; publish a fresh port for subsequent joins.
+        // until their final peer leaves.
         var previous = listenSocket;
-        int previousPort = _listenPort;
         listenSocket = HSteamListenSocket.Invalid;
-        _listenPort = _listenPort % 999 + 1;
+
         if (CreateServerSocket()) {
             if (previous != HSteamListenSocket.Invalid) _retiredListeners.Add(previous);
             CloseUnusedRetiredListeners();
-            log.l($"[steam-conn] listener rebuilt old={previous} new={listenSocket} port={_listenPort} retained={_retiredListeners.Count}");
+            SessionLogGame.SteamConnection($"[steam-conn] listener rebuilt old={previous} new={listenSocket} port={_listenPort} retained={_retiredListeners.Count}");
         } else {
             listenSocket = previous;
-            _listenPort = previousPort;
-            log.error("[steam-conn] listener rebuild failed; previous listener retained");
+            SessionLogGame.SteamConnection("[steam-conn] listener rebuild failed; previous listener retained", true);
         }
     }
 
@@ -2095,7 +2123,7 @@ public class TransportSteamworks : NetTransportBase {
         int count = Math.Min(failure.count + 1, 5);
         double delay = Math.Min(30, Math.Pow(2, count));
         _joinFailures[_clientLobbyId] = (count, Time.realtimeSinceStartupAsDouble + delay);
-        log.l($"[steam-conn] join failed lobby={_clientLobbyId} failures={count} retryDelay={delay}s");
+        SessionLogGame.SteamConnection($"[steam-conn] join failed lobby={_clientLobbyId} failures={count} retryDelay={delay}s");
     }
     static readonly Dictionary<ulong, (int count, double retryAt)> _joinFailures = new();
     ulong _clientLobbyId;
@@ -2103,12 +2131,15 @@ public class TransportSteamworks : NetTransportBase {
 
     IEnumerator JoinLobbyAfterBackoff(ulong lobby) {
         if (_joinFailures.TryGetValue(lobby, out var waiting) && waiting.retryAt > Time.realtimeSinceStartupAsDouble)
-            log.l($"[steam-conn] delaying retry lobby={lobby} remaining={waiting.retryAt - Time.realtimeSinceStartupAsDouble:0.0}s");
+            SessionLogGame.SteamConnection($"[steam-conn] delaying retry lobby={lobby} remaining={waiting.retryAt - Time.realtimeSinceStartupAsDouble:0.0}s");
         while (ReferenceEquals(Net.Transport, this) && Net.IsClient
             && _joinFailures.TryGetValue(lobby, out var failure) && Time.realtimeSinceStartupAsDouble < failure.retryAt)
             yield return null;
         if (ReferenceEquals(Net.Transport, this) && Net.IsClient)
+        {
+            SessionLog.Mark("Steam JoinLobby API request lobby=" + lobby);
             KSteam.OnLobbyEnterCallResult.Set(SteamMatchmaking.JoinLobby(new CSteamID(lobby)));
+        }
     }
 
     public byte hostLobbyBucket;
@@ -2137,18 +2168,19 @@ public class TransportSteamworks : NetTransportBase {
 
 
         if (listenSocket == HSteamListenSocket.Invalid) {
-            log.error($"[steam-conn] CreateListenSocketP2P failed port={_listenPort}");
+            SessionLogGame.SteamConnection($"[steam-conn] CreateListenSocketP2P failed port={_listenPort}", true);
             return false;
         }
         if (!SteamMatchmaking.SetLobbyData(LobbyId, P2PPortKey, _listenPort.ToString(System.Globalization.CultureInfo.InvariantCulture))) {
             CloseListenSocket();
-            log.error("[steam-conn] could not publish P2P port");
+            SessionLogGame.SteamConnection("[steam-conn] could not publish P2P port", true);
             return false;
         }
-        log.l($"[steam-conn] listening handle={listenSocket} port={_listenPort}");
+        SessionLogGame.SteamConnection($"[steam-conn] listening handle={listenSocket} port={_listenPort}");
         return true;
     }
     internal bool CreateClientSocket() {
+        SessionJoinLog.SteamMetadata(LobbyId.m_SteamID);
         if (listenSocket != HSteamListenSocket.Invalid) {
             log.error($"{this.GetType().Name}.CreateClientSocket : Socket already exists! {listenSocket}");
             return false;
@@ -2179,12 +2211,16 @@ public class TransportSteamworks : NetTransportBase {
             else
                 serverUser.connection = SteamNetworkingSockets.ConnectP2P(ref smi, remotePort, options.Length, options);
 
-            if (serverUser.connection == HSteamNetConnection.Invalid) return false;
+            if (serverUser.connection == HSteamNetConnection.Invalid) {
+                SessionJoinLog.Failure("ConnectP2P returned invalid handle");
+                return false;
+            }
             connectionMapping.Add((ulong)ConnectToSteamID, serverUser);
-            log.l($"[steam-conn] dialing owner={serverUser.id.m_SteamID} handle={serverUser.connection} port={remotePort} relayInit=ok");
+            SessionLogGame.SteamConnection($"[steam-conn] dialing owner={serverUser.id.m_SteamID} handle={serverUser.connection} port={remotePort} relayInit=ok");
 
             return true;
         } catch (Exception ex) {
+            SessionJoinLog.Failure("CreateClientSocket exception", ex.ToString());
             log.error($"{this.GetType().Name}.CreateClientSocket : Client could not be started !! {ex.Message}");
             return false;
         }
@@ -2234,6 +2270,7 @@ public class TransportSteamworks : NetTransportBase {
 
 
     internal bool CreateLobby(ELobbyType lobbyType) {
+        SessionLog.Event("HOST BEGIN", $"method=steam type={lobbyType} port={FixedP2PPort}");
 
 #if PLAYTEST 
         lobbyType = ELobbyType.k_ELobbyTypePublic; 
@@ -2301,12 +2338,15 @@ public class TransportSteamworks : NetTransportBase {
         return false;
     }
 
-    public static bool OnWantToJoinLobby(ulong lobby_steamID) {
+    public static bool OnWantToJoinLobby(ulong lobby_steamID, string joinMethod = "steam") {
         Net.ShutdownReset();
+        SessionJoinLog.Begin(joinMethod, lobby_steamID.ToString());
+        SessionJoinLog.SteamMetadata(lobby_steamID);
 
         KSteam.CURRENT_LOBBY.locked = true;
 
         if (!KSteam.Loaded) {
+            SessionJoinLog.Failure("Steam is not loaded");
             log.error($"Steam is not loaded!");
             return false;
         }
@@ -2319,6 +2359,7 @@ public class TransportSteamworks : NetTransportBase {
             Net.Transport = t;
 
             if (!t.IsInitialized) {
+                SessionJoinLog.Failure("Steam transport initialization failed");
                 log.error($"STEAM: IsInitialized is false!");
                 Net.ShutdownReset();
                 return false;
@@ -2330,6 +2371,7 @@ public class TransportSteamworks : NetTransportBase {
             return true;
 
         } catch (Exception e) {
+            SessionJoinLog.Failure("Steam join exception", e.ToString());
             log.error("TransportSteamworks.OnWantToConnect: " + e.ToString());
             Net.ShutdownReset();
         }
@@ -2366,16 +2408,16 @@ public class TransportSteamworks : NetTransportBase {
         try {
             if (_listenerRebuildPending) RebuildServerListener();
             if (listenSocket == HSteamListenSocket.Invalid) {
-                if (CreateServerSocket()) log.l("[steam-conn] listen socket was missing; recreated");
-                else log.error("[steam-conn] listen socket was missing and could not be recreated");
+                if (CreateServerSocket()) SessionLogGame.SteamConnection("[steam-conn] listen socket was missing; recreated");
+                else SessionLogGame.SteamConnection("[steam-conn] listen socket was missing and could not be recreated", true);
             }
             if (onConnectionChange == null) {
                 if (is_steamserver) onConnectionChange = Callback<SteamNetConnectionStatusChangedCallback_t>.CreateGameServer(OnConnectionStatusChanged);
                 else onConnectionChange = Callback<SteamNetConnectionStatusChangedCallback_t>.Create(OnConnectionStatusChanged);
-                log.l("[steam-conn] connection callback was missing; re-registered");
+                SessionLogGame.SteamConnection("[steam-conn] connection callback was missing; re-registered");
             }
         } catch (Exception e) {
-            log.error("[steam-conn] server socket health check: " + e);
+            SessionLogGame.SteamConnection("[steam-conn] server socket health check: " + e, true);
         }
     }
 
@@ -2561,6 +2603,7 @@ public class TransportSteamworks : NetTransportBase {
             steamtestlog($"Rejected player {BetterToStringFromSteamID(steamID)} for {reject_reason}");
 #endif
 
+            SessionLog.Event("CLIENT REJECTED", $"method=steam peer={steamID} reason={reject_reason}");
             KickMember((CSteamID)steamID, reject_reason);
 
             Util.DelayCallLambda(0.4f, () => {
@@ -3111,6 +3154,7 @@ public class TransportSteamworks : NetTransportBase {
 
 
 }
+
 
 
 

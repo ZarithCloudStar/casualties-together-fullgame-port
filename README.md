@@ -8,7 +8,7 @@
 
 ## 这个分支包含什么
 
-- 同层存档 / 读档 / 存档槽
+- 同层存档 / 读档（含未探索区域背景与结构）
 - 三结局多人触发规则优化
 - 旁观相机与输入修复
 - 医疗面板 / 假肢状态同步与权威修复
@@ -25,6 +25,7 @@
 1. 安装正式版 1.0.1
 2. 运行 `python scripts/prepare_workspace.py`
 3. 用 Visual Studio 2022 打开 `CasualtiesTogether.sln` 编译
+
 
 <div align="center">
 <a href="https://www.nexusmods.com/scavprototype/mods/67">

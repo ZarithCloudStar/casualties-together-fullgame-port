@@ -1,4 +1,4 @@
-#if FULLGAME
+﻿#if FULLGAME
 using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteNetLib;
@@ -89,13 +89,14 @@ internal static class WorldSnapshotTransfer {
     }
     internal static bool SpawnAllowed(knetid id) => !Failed && (!SnapshotMode || (Applied && acknowledged.TryGetValue(id, out var token) && token == Token));
     internal static void Fail(string reason) {
+        SessionLog.Event("WORLD SNAPSHOT FAILED", reason);
         if (Failed) return;
         Failed = true; Applying = false; incoming = null; received = null;
 #if TESTING
         WorldCheckpointRegression.RecordFailure(reason);
 #endif
         string message = "当前层快照同步失败，已中止进入世界；请确认双方使用同一个安装包。 / Checkpoint sync aborted (both peers must use the same build): " + reason;
-        log.error("WORLD-SNAPSHOT: " + message);
+        SessionLogGame.WorldSnapshot("WORLD-SNAPSHOT: " + message, true);
         Multiplayer.DoMultiplayerStatusMessageLog(message);
         if (Net.IsClient) {
             var w = Net.CreateWriter(NetmsgId.SERVER_WorldSnapshot);
@@ -146,7 +147,7 @@ internal static class WorldSnapshotTransfer {
         // Newly created gameplay objects also need their fresh key in LES.
         foreach (var pair in NetObjectRegistry.SyncRegistry.ToArray())
             if (pair.Key != null && pair.Value != null && !pair.Value.IsDestroyed) pair.Value.WriteObjectIntoPacket();
-        log.l("WORLD-SNAPSHOT: refreshed live checkpoint for late join");
+        SessionLogGame.WorldSnapshot("WORLD-SNAPSHOT: refreshed live checkpoint for late join");
     }
     internal static void Publish() {
         // The staged records now carry stable IDs; recapture normalises v2 -> v3
@@ -156,10 +157,11 @@ internal static class WorldSnapshotTransfer {
 #if TESTING
         WorldCheckpointRegression.RecordApplied(published);
 #endif
-        log.l($"WORLD-SNAPSHOT: publish token={Token} tiles={published[0].Length} fluids={published[1].Length} objects={published[2].Length} before WorldPlacePlayer");
+        SessionLogGame.WorldSnapshot($"WORLD-SNAPSHOT: publish token={Token} tiles={published[0].Length} fluids={published[1].Length} objects={published[2].Length} before WorldPlacePlayer");
         foreach (var id in ServerMain.AllClientIdsExceptHost) Send(id);
     }
     internal static void Send(knetid id) {
+        SessionLog.Event("WORLD SNAPSHOT SEND BEGIN", $"client={id} token={Token}");
         if (published == null || Failed || !sending.Add(id)) return;
         acknowledged.Remove(id);
         Util.StartCoroutine(SendFragments(id, Token, published, Session));
@@ -215,12 +217,12 @@ internal static class WorldSnapshotTransfer {
         }
         w = Net.CreateWriter(NetmsgId.CLIENT_WorldSnapshot); w.Put((byte)2); w.Put(token); w.Put(chunks); w.Put(expectedAck[id]);
         Net.Server_SendTo(DeliveryMethod.ReliableOrdered, w, id);
-        log.l($"WORLD-SNAPSHOT: sent client={id} token={token} bytes={bytes.Length} chunks={chunks} sha256={Hash(bytes)}");
+        SessionLogGame.WorldSnapshot($"WORLD-SNAPSHOT: sent client={id} token={token} bytes={bytes.Length} chunks={chunks} sha256={Hash(bytes)}");
         while (Net.IsServer && ReferenceEquals(owner, Session) && Token == token && !acknowledged.ContainsKey(id) && Time.realtimeSinceStartup - start < Timeout) yield return null;
         if (Token != token || !ReferenceEquals(owner, Session)) yield break;
         sending.Remove(id);
         if (Net.IsServer && Token == token && !acknowledged.ContainsKey(id)) {
-            log.error($"WORLD-SNAPSHOT: client={id} apply ACK timeout; spawn denied");
+            SessionLogGame.WorldSnapshot($"WORLD-SNAPSHOT: client={id} apply ACK timeout; spawn denied", true);
             AbortPeer(id, "Checkpoint apply ACK timeout / 快照应用确认超时，未允许出生。");
         }
     }
@@ -243,6 +245,7 @@ internal static class WorldSnapshotTransfer {
                 if (width == 0 || height == 0 || (long)width * height > 16 * 1024 * 1024 ||
                     expectedBytes < 12 || expectedBytes > MaxBytes || expectedChunks != (expectedBytes + FragmentBytes - 1) / FragmentBytes || digest.Length != 64)
                     throw new InvalidDataException("Invalid snapshot manifest bounds.");
+                SessionLog.Event("WORLD SNAPSHOT RECEIVE BEGIN", $"token={token} bytes={expectedBytes} chunks={expectedChunks} layer={biome}");
                 incoming = new byte[expectedBytes]; offset = sequence = 0;
             } else {
                 if (r.GetString() != Token) return; // delayed frame from a previous layer
@@ -264,7 +267,7 @@ internal static class WorldSnapshotTransfer {
                     }
                     if (stream.Position != stream.Length) throw new InvalidDataException("Trailing checkpoint data.");
                     received = parts; incoming = null;
-                    log.l($"WORLD-SNAPSHOT: received token={Token} bytes={expectedBytes} chunks={sequence} sha256={digest}");
+                    SessionLogGame.WorldSnapshot($"WORLD-SNAPSHOT: received token={Token} bytes={expectedBytes} chunks={sequence} sha256={digest}");
                 } else throw new InvalidDataException("Unknown checkpoint operation.");
             }
             if (r.AvailableBytes != 0) throw new InvalidDataException("Trailing snapshot frame data.");
@@ -282,18 +285,18 @@ internal static class WorldSnapshotTransfer {
                 string hash = r.GetString();
                 if (!expectedAck.TryGetValue(id, out var expected) || hash != expected) throw new InvalidDataException("Checkpoint ACK digest mismatch.");
                 acknowledged[id] = token;
-                log.l($"WORLD-SNAPSHOT: client={id} applied ACK token={token} sha256={hash}; spawn unlocked");
+                SessionLogGame.WorldSnapshot($"WORLD-SNAPSHOT: client={id} applied ACK token={token} sha256={hash}; spawn unlocked");
             } else if (op == 2) {
-                log.error($"WORLD-SNAPSHOT: client={id} rejected snapshot: {r.GetString()}; spawn denied");
+                SessionLogGame.WorldSnapshot($"WORLD-SNAPSHOT: client={id} rejected snapshot: {r.GetString()}; spawn denied", true);
             }
         } catch (Exception ex) {
-            log.error("WORLD-SNAPSHOT: invalid client ACK: " + ex.Message);
+            SessionLogGame.WorldSnapshot("WORLD-SNAPSHOT: invalid client ACK: " + ex.Message, true);
             AbortPeer(id, ex.Message);
         }
     }
     internal static IEnumerator ClientLoad() {
         var world = WorldGeneration.world;
-        log.l("WORLD-SNAPSHOT: client waiting for authoritative checkpoint; seed terrain generation bypassed");
+        SessionLogGame.WorldSnapshot("WORLD-SNAPSHOT: client waiting for authoritative checkpoint; seed terrain generation bypassed");
         world.loadingText.text = "等待主机完整地形快照 / Waiting for checkpoint...";
         var request = Net.CreateWriter(NetmsgId.SERVER_WorldSnapshot); request.Put((byte)0); request.Put(Token);
         Net.Client_Send(DeliveryMethod.ReliableOrdered, request);
@@ -323,7 +326,7 @@ internal static class WorldSnapshotTransfer {
         Applied = true;
         var ack = Net.CreateWriter(NetmsgId.SERVER_WorldSnapshot); ack.Put((byte)1); ack.Put(Token); ack.Put(digest);
         Net.Client_Send(DeliveryMethod.ReliableOrdered, ack);
-        log.l("WORLD-SNAPSHOT: client applied checkpoint before WorldPlacePlayer");
+        SessionLogGame.WorldSnapshot("WORLD-SNAPSHOT: client applied checkpoint before WorldPlacePlayer");
         yield return WorldMP.Patched_WorldPlacePlayer();
         if (!Failed) yield return WorldMP.Patched_FinishWorldGeneration();
     }

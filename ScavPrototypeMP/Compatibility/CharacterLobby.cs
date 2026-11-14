@@ -1,4 +1,4 @@
-#if FULLGAME
+﻿#if FULLGAME
 using CasualtiesTogetherUtils;
 using System.Collections;
 using System.Collections.Generic;
@@ -73,6 +73,7 @@ internal static class CharacterLobby {
         LogRoster(player);
         if (!ClientSession || !Net.IsClient || player == null || !player.IsLocal) return;
         ChipState.AdoptLocal(player.modUnchipped);
+        SessionJoinLog.Success();
         playerReady = true;
         // Server registration can finish after OnTransportConnected. Replay
         // once after our player snapshot, preserving confirm/dismiss decisions.

@@ -1,4 +1,4 @@
-using CasualtiesTogetherUtils;
+﻿using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteNetLib;
 using System;
@@ -868,6 +868,7 @@ static class WoundView_HLayerTimerDisplay_MultiplayerPatch {
 [HarmonyPatch(typeof(WoundView), "Start")]
 internal static class WoundView_Start_RestoreInspectionTargetPatch {
     static void Postfix(WoundView __instance) {
+        SessionLogGame.ObserveMedicalPanel(__instance);
         if (!Net.IsRunning || __instance.body == null) return;
         log.l($"[woundview] initialized body={PlayerCamera_ToggleWoundView_MultiplayerPatch.DescribeBody(__instance.body)} nativeName={__instance.nameText.text}");
         PlayerCamera_ToggleWoundView_MultiplayerPatch.WoundView_SetTargetBody(__instance.body);
@@ -1445,6 +1446,7 @@ public static class PlayerCamera_ToggleWoundView_MultiplayerPatch {
     }
 
     static void Postfix() {
+        SessionLogGame.MedicalPanel();
         if (Net.IsRunning && WoundView.view != null)
             log.l($"[woundview] after-toggle open={IsOpen()} view.body={DescribeBody(WoundView.view.body)} name={WoundView.view.nameText.text}");
     }
@@ -1571,6 +1573,7 @@ public static class PlayerCamera_ToggleWoundView_MultiplayerPatch {
     }
 
     public static void CloseHealthPanel(PlayerCamera cam) {
+        SessionLog.Mark("medical panel close (target unavailable)");
         body_to_open = null;
         if (cam == null) return;
         if (cam.woundView != null)
