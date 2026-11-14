@@ -1,4 +1,4 @@
-using CasualtiesTogetherUtils;
+﻿using CasualtiesTogetherUtils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -42,7 +42,7 @@ public class SharedMain : MonoBehaviour {
         max_recorded_dist = 0;
 
         // theyre already dead, dont do anything
-        if (!plr.IsAlive() || plr.levelPlayTime < 20) {
+        if (plr == null || !plr.IsAlive() || plr.levelPlayTime < 20) {
             return false;
         }
 
@@ -81,6 +81,7 @@ public class SharedMain : MonoBehaviour {
         var pos = plr.body.transform.position;
         count_plrs_in_range = 0;
         foreach (var x in ScavPlayer.AllLivingPlayers) {
+            if (x == null || x.body == null) continue;
             var d = KM.DistanceSqr(x.body.transform.position, pos);
             if (d < presqr) {
                 count_plrs_in_range++;

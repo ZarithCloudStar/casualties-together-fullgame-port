@@ -1,4 +1,4 @@
-using CasualtiesTogetherUtils;
+﻿using CasualtiesTogetherUtils;
 using UnityEngine;
 
 namespace Together;
@@ -48,10 +48,22 @@ public class Spectator : CasualtiesTogetherSingletonWorldOnly {
         cam.radialOpen = false;
     }
 
+    // Rebind while the removed Body is still a valid Unity object. Waiting for
+    // LateUpdate leaves vanilla Update/GUI readers pointing at a destroyed body.
+    internal static void OnBodyRemoved(Body removed) {
+        var cam = PlayerCamera.main;
+        if (!Net.IsRunning || !UIInGame.SpectatorModeActive || cam == null ||
+            (targetBody != removed && cam.body != removed)) return;
+        SetCameraFollow(null);
+        UIInGame.Spectator_ClearTargets();
+        UIInGame.Spectator_SelectDefaultTarget();
+        log.l("[spectator] removed target; camera rebound to " + (cam.body != null ? cam.body.name : "no body"));
+    }
+
     internal static bool FollowCamera(PlayerCamera cam) {
         if (!UIInGame.SpectatorModeActive || Con._DEV_FREECAM || cam == null) return false;
         if (targetBody == null || !targetBody.gameObject.activeInHierarchy) {
-            targetBody = null;
+            SetCameraFollow(null);
             UIInGame.Spectator_SelectDefaultTarget();
             if (targetBody == null) return false;
         }

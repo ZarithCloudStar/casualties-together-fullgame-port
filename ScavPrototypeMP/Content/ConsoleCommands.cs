@@ -796,8 +796,14 @@ public class Con : CasualtiesTogetherSingleton {
                     }
 
                 } else {
-                    PlayerCamera.main.body.ResetHealth();
-                    con.LogToConsole("Healed the player.");
+                    if (Net.IsRunning && Net.IsClient) {
+                        var writer = Net.CreateWriter(NetmsgId.SERVER_PlayerHealRequest);
+                        Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
+                        con.LogToConsole("Requested heal from server.");
+                    } else {
+                        PlayerCamera.main.body.ResetHealth();
+                        con.LogToConsole("Healed the player.");
+                    }
                 }
 
             };
@@ -2926,6 +2932,25 @@ public class Con : CasualtiesTogetherSingleton {
 
         }
         return true;
+    }
+
+    [ServerReceiver((byte)NetmsgId.SERVER_PlayerHealRequest)]
+    static void ServerReceiver_PlayerHealRequest(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
+        if (!ScavPlayer.TryGetPlayerFromClientId(clientId, out var plr)) {
+            return;
+        }
+        if (!Multiplayer.rules.AllowClientCheatCommands &&
+            !plr.ServerPlayerState.admin_privilege && !server_admins.Contains(plr)) {
+            log.warn($"[heal] denied player={plr.playerName} from client={clientId}");
+            return;
+        }
+        if (plr.body == null || plr.netBody == null) {
+            return;
+        }
+
+        plr.body.ResetHealth();
+        MedicalSync.Server_QueueSendCharacterHealth(plr.netBody, true);
+        log.l($"[heal] player={plr.playerName} from client={clientId}");
     }
 
     [ServerReceiver((byte)NetmsgId.SERVER_Console_TryExecuteCommand)]

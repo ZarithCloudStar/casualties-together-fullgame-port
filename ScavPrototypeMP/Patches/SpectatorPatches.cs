@@ -1,4 +1,4 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using System.Collections.Generic;
 using System.Reflection;
 
@@ -11,6 +11,10 @@ internal static class SpectatorCameraPositionPatch {
 
 [HarmonyPatch(typeof(PlayerCamera), "LateUpdate")]
 internal static class SpectatorCameraLatePatch {
+    [HarmonyPriority(Priority.First)]
+    static void Prefix(PlayerCamera __instance) {
+        if (Net.IsRunning) Spectator.FollowCamera(__instance);
+    }
     // Apply after network interpolation and vanilla camera/UI readers.
     [HarmonyPriority(Priority.Last)]
     static void Postfix(PlayerCamera __instance) {

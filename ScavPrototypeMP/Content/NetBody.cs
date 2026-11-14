@@ -1,4 +1,4 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using Together;
 using CasualtiesTogetherUtils;
 using LiteEntitySystem;
@@ -888,6 +888,10 @@ public class NetBody : MonoBehaviour {
 
         NetBody._PRIV_NetIdToNetBody.Remove(netId);
         ScavPlayer.BodyToPlayerDict.Remove(body);
+        // ScavPlayer.OnDestroy can refresh these caches before its Body dies.
+        // Remove that stale living entry now, before the next same-frame reader.
+        SharedMain.ForceUpdatePlayerLists();
+        Spectator.OnBodyRemoved(body);
 
         if (MoodleManager.main != null && MoodleManager.main.body == body && Util.TryGetLocalBody(out var locbody)) { // fix nullreference if player disconnects
             MoodleManager.main.body = locbody;

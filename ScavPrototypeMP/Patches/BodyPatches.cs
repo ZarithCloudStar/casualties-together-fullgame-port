@@ -1,4 +1,4 @@
-using CasualtiesTogetherUtils;
+﻿using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteEntitySystem;
 using LiteNetLib;
@@ -291,6 +291,35 @@ public static class Body_PlaceBody_MultiplayerPatch {
     public static bool has_spawn_location = false;
     public static Vector2 SpawnLocation = new Vector2(0,500);
 
+#if FULLGAME
+    internal static bool IsValidLayerSpawn(Vector2 point) {
+        var world = WorldGeneration.world;
+        return world != null && !float.IsNaN(point.x) && !float.IsInfinity(point.x) &&
+            !float.IsNaN(point.y) && !float.IsInfinity(point.y) &&
+            Mathf.Abs(point.x) <= world.halfWidth && Mathf.Abs(point.y) <= world.halfHeight;
+    }
+
+    // Called only after server placement, or after a generated-world timeout.
+    // Never use a corpse/old layer pose; the vanilla scan owns layers 10/11 too.
+    internal static bool EnsureLayerSpawn(string reason) {
+        if (!Net.IsServer || WorldGeneration.world == null) return false;
+        if (has_spawn_location && IsValidLayerSpawn(SpawnLocation)) return true;
+        has_spawn_location = false;
+        if (Util.IsTutorialWorld()) return false; // SandboxMode publishes its room.
+        try {
+            var point = Util.PlaceBody_FindSpawnLocation(0f);
+            if (!IsValidLayerSpawn(point)) throw new InvalidOperationException("Invalid layer-start position: " + point);
+            SpawnLocation = point;
+            has_spawn_location = true;
+            log.warn($"[spawn] layer-start fallback layer={WorldGeneration.world.biomeDepth} reason={reason} at={point:F3}");
+            return true;
+        } catch (Exception ex) {
+            log.error("[spawn] layer-start fallback failed: " + ex);
+            return false;
+        }
+    }
+#endif
+
     static Vector2 ogcampos;
     static Vector2 ogbodypos;
 
@@ -326,6 +355,12 @@ public static class Body_PlaceBody_MultiplayerPatch {
             if (Net.IsClient) {
                 __instance.transform.position = ogbodypos;
             } else {
+#if FULLGAME
+                // PlaceBody may still be invoked on a dead local body. Its pose
+                // is not an authoritative living-player spawn and must not fan
+                // out to every guest (including saved poses / spectators).
+                if (Util.GameIsFull() && (!body.alive || !IsValidLayerSpawn(body.transform.position))) return;
+#endif
                 has_spawn_location = true;
                 foreach (var item in NetBody.all_instances) {
                     if (item.IsPlayer && !item.IsBodyLocal()) {

@@ -1,4 +1,4 @@
-using CasualtiesTogetherUtils;
+﻿using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteEntitySystem;
 using LiteEntitySystem.Extensions;
@@ -557,6 +557,9 @@ public class ServerMain : MonoBehaviour {
         ScavPlayer plr;
         NetBody pb;
 
+        double spawnWaitStart = Time.realtimeSinceStartupAsDouble;
+        var spawnSession = Net.ServerEntityManager;
+        var spawnWorld = WorldGeneration.world;
         while (!ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out plr, out pb) || !Util.IsWorldGenerated() || !Body_PlaceBody_MultiplayerPatch.has_spawn_location
 #if FULLGAME
             || (Util.GameIsFull() && Util.IsTutorialWorld() && !SandboxMode.SpawnReady)
@@ -565,6 +568,31 @@ public class ServerMain : MonoBehaviour {
 
             if (plr != null) {
                 plr.ResetEntropy();
+            }
+
+            // Never complete an old request in a new session/generation.
+            if (!Net.IsServer || !ReferenceEquals(spawnSession, Net.ServerEntityManager) ||
+                spawnWorld != WorldGeneration.world
+#if FULLGAME
+                || snapshotToken != WorldSnapshotTransfer.Token || WorldSnapshotTransfer.Failed
+#endif
+            ) yield break;
+
+            double elapsed = Time.realtimeSinceStartupAsDouble - spawnWaitStart;
+#if FULLGAME
+            // Repair only the missing shared point. Do not bypass ready-body,
+            // world-generation, WS1, or tutorial-room prerequisites on timeout.
+            if (elapsed > 20.0 && Util.IsWorldGenerated() &&
+                !Body_PlaceBody_MultiplayerPatch.has_spawn_location && !Util.IsTutorialWorld()) {
+                if (Body_PlaceBody_MultiplayerPatch.EnsureLayerSpawn("spawn request waited 20s")) continue;
+                if (plr != null) plr.ServerPlayerState.did_give_spawn_location = false;
+                yield break; // A new client request can retry, without orphaning a coroutine.
+            }
+#endif
+            if (elapsed > 120.0) {
+                log.error($"[spawn] prerequisites timeout clientId={clientId}; request may retry");
+                if (plr != null) plr.ServerPlayerState.did_give_spawn_location = false;
+                yield break;
             }
 
             yield return null;
@@ -620,6 +648,7 @@ public class ServerMain : MonoBehaviour {
                 log.l($"SERVER: Sending a spawn location for {pb} to {pb.transform.position} ");
 
                 pb.body.SetVelocity(Vector2.zero);
+                pb.body.forceWalk = false;
                 pb.Server_RemindPlayersCurrentState();
             } else {
 #if !RELEASE

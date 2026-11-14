@@ -1,4 +1,4 @@
-using CasualtiesTogetherUtils;
+﻿using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteNetLib;
 using System;
@@ -1541,13 +1541,15 @@ public class UIInGame : MonoBehaviour {
         }
     }
 
+    internal static void Spectator_ClearTargets() => SpectatorCurrentTarget = SpectatorLastTarget = null;
+
     internal static void Spectator_SelectDefaultTarget() {
         var players = ScavPlayer.BodyToPlayerDict.Values;
         // CLIENT_forcespectator can precede the local death health snapshot.
         // Prefer another living player even if our stale local body says alive.
-        var target = players.FirstOrDefault(p => !p.IsLocal && p.body != null && p.body.gameObject.activeInHierarchy && p.body.alive);
-        if (target == null) target = players.FirstOrDefault(p => p.body != null && p.body.gameObject.activeInHierarchy && p.body.alive);
-        if (target == null) target = players.FirstOrDefault(p => p.body != null && p.body.gameObject.activeInHierarchy);
+        var target = players.FirstOrDefault(p => p != null && !p.IsLocal && p.body != null && p.body.gameObject.activeInHierarchy && p.body.alive);
+        if (target == null) target = players.FirstOrDefault(p => p != null && p.body != null && p.body.gameObject.activeInHierarchy && p.body.alive);
+        if (target == null) target = players.FirstOrDefault(p => p != null && p.body != null && p.body.gameObject.activeInHierarchy);
         if (target != null) Spectator_SetTarget(target.body);
         else if (ScavPlayer.LocalPlayer?.body != null && ScavPlayer.LocalPlayer.body.gameObject.activeInHierarchy) Spectator_SetTarget(ScavPlayer.LocalPlayer.body);
         else { curspectatefolowingname = "NOBODY"; curspectatefolowing = 0; }

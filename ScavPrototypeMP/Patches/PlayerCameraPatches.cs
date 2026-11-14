@@ -824,7 +824,8 @@ public static class PlayerCamera_HandleInput_MultiplayerPatch {
 
         if (Net.IsRunning) {
             // Respect the host-synchronized native run setting at ordinary layer exits.
-            if (ServerMain.DidHeFinishTheLayer(PlayerCamera.main.body)) {
+            if (!WorldGeneration.world.generatingWorld && !WorldGeneration.world.doingRegen &&
+                ServerMain.DidHeFinishTheLayer(PlayerCamera.main.body)) {
 #if FULLGAME
                 PlayerCamera.main.body.forceWalk = !WorldGeneration.GetRunSettingBool("allowlayerendmovement");
 #else

@@ -50,6 +50,7 @@ public enum NetmsgId : byte {
     SERVER_Console_ActivateAdminMode,
     CLIENT_Console_Log,
     SERVER_Console_TryExecuteCommand,
+    SERVER_PlayerHealRequest,
     CLIENT_EmptyDebugEvent,
     SERVER_CPR_PRESSED,
     SERVER_AED_CHAAAARGEE,
@@ -221,7 +222,6 @@ public enum NetmsgId : byte {
     ___27,
     ___28,
     ___29,
-    ___30,
 
     // the byte enum is full
 

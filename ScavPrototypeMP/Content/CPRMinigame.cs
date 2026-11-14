@@ -1,4 +1,4 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using Together;
 using CasualtiesTogetherUtils;
 using LiteNetLib;
@@ -224,7 +224,7 @@ public class CPRHandler : MonoBehaviour {
     }
     public static bool IsCPRBeingPerformedOnThisBody(Body b, out ScavPlayer who) {
         foreach (var plr in ScavPlayer.AllLivingPlayers) {
-            if (plr.body.conscious && PlayerIsPerformingCPR(plr) && plr.minigame_targetobject.TryGetNetBody(out var nb) && nb.body == b) {
+            if (plr != null && plr.body != null && plr.body.conscious && PlayerIsPerformingCPR(plr) && plr.minigame_targetobject.TryGetNetBody(out var nb) && nb.body == b) {
                 who = plr;
                 return true;
             }

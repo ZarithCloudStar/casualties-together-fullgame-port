@@ -1,4 +1,4 @@
-using CasualtiesTogetherUtils;
+﻿using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteEntitySystem;
 using LiteNetLib;
@@ -162,7 +162,10 @@ public class ScavPlayer : MonoBehaviour {
 
     public Vector2 CursorWorldPos { get { return BasePlayer.LookPos.Value; } set { BasePlayer.LookPos.Value = value; } }
     public Vector2 CursorScreenPos => BasePlayer.CursorPos.InterpolatedValue;
-    public Vector2 CameraViewPos => BasePlayer.CameraPos.Value;
+    // The network entity can be torn down before this component/body leaves
+    // the scene dictionaries. Dead-player readers must tolerate that window.
+    public Vector2 CameraViewPos => BasePlayer != null ? BasePlayer.CameraPos.Value :
+        body != null ? (Vector2)body.transform.position : Vector2.zero;
 
 
     #region PLAYER_COMPONENTS

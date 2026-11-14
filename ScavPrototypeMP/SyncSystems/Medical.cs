@@ -2072,7 +2072,7 @@ public static class Limb_OnCollisionEnter2D_MultiplayerPatch {
 
         if (__instance.IsBodyLocal()) {
             var go = col.gameObject;
-            if (go != null && go.TryGetTracker(out var tracker)) {
+            if (go != null && go.TryGetTracker(out var tracker) && tracker != null && tracker.syncInfo != null) {
                 if (tracker.syncInfo.IsContactDangerous()) {
                     tracker.syncInfo.relaxed_combat_sync = true;
                     //tracker.syncInfo.SetIgnoreTimeForRoundTrip(0);

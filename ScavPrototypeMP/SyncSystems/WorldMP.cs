@@ -608,6 +608,7 @@ public class WorldMP : CasualtiesTogetherSingleton {
                 if (ClientMain._last_reminderpack_while_generating_received) {
                     if (ScavPlayer.TryGetLocalNetBody(out var lpb)) {
                         lpb.OnReceiveSyncPacket(ClientMain._last_reminderpack_while_generating, true);
+                        if (lpb.body != null) lpb.body.forceWalk = false;
                     } 
                 }
                 log.l("CLIENT: Received location for WorldPlacePlayer.");
@@ -615,15 +616,39 @@ public class WorldMP : CasualtiesTogetherSingleton {
         }
 
 #if FULLGAME
-        if (WorldSnapshotTransfer.SnapshotMode) {
+        if (Net.IsServer && (ScavPlayer.LocalPlayer?.body == null || !ScavPlayer.LocalPlayer.body.alive)) {
+            // A spectator camera can point at a guest. Never place that guest as
+            // if it were the host, nor publish the host corpse's old-layer pose.
+            // The server publishes a layer start independently below.
+            yield return null;
+        } else if (WorldSnapshotTransfer.SnapshotMode) {
             // Vanilla placement creates a fresh starting pod and carves terrain
             // and fluids. A checkpoint owns those cells/objects already.
             yield return null;
-            PlayerCamera.main.body.PlaceBody();
+            if (PlayerCamera.main != null && PlayerCamera.main.body != null) PlayerCamera.main.body.PlaceBody();
+        } else if (Net.IsServer && (PlayerCamera.main == null || PlayerCamera.main.body == null)) {
+            // Dedicated servers can have no local body to run vanilla placement.
+            yield return null;
         } else
 #endif
         yield return WorldGeneration_WorldPlacePlayer_MultiplayerPatch.WorldPlacePlayer(world); 
         log.l("WorldGeneration.WorldPlacePlayer");
+
+#if FULLGAME
+        if (Net.IsServer) {
+            bool neededSpawn = !Body_PlaceBody_MultiplayerPatch.has_spawn_location;
+            if (Body_PlaceBody_MultiplayerPatch.EnsureLayerSpawn("server placement completed without a living host spawn") &&
+                neededSpawn && !WorldSnapshotTransfer.SnapshotMode && !Util.IsTutorialWorld() && FluidManager.main != null) {
+                // The bodyless/dead-host path skipped vanilla WorldPlacePlayer.
+                // Preserve its 16-cell fluid clearing around the actual guest
+                // start, but never alter a loaded checkpoint's fluid snapshot.
+                var center = world.WorldToBlockPos(Body_PlaceBody_MultiplayerPatch.SpawnLocation);
+                for (int x = Math.Max(0, center.x - 16); x <= Math.Min(world.width - 1, center.x + 16); x++)
+                    for (int y = Math.Max(1, center.y - 16); y <= Math.Min(world.height - 2, center.y + 16); y++)
+                        FluidManager.main.SetLiquid(x, y, 0);
+            }
+        }
+#endif
     }
 
     static float WORLDCLEAR_MAX_HALT_TIME = 0.04f;

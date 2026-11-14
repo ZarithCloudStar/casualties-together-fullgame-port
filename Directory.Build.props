@@ -1,4 +1,4 @@
-<Project>
+﻿<Project>
 	<Import Project="CasualtiesTogether.Local.props" Condition="Exists('CasualtiesTogether.Local.props')" />
   
 	<PropertyGroup>
@@ -6,7 +6,7 @@
 		<ModVersion>5.5.0-cu-port</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
-		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.0-cu-port-bugfix4</UpdateReleaseVersion>
+		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.0-cu-port-bugfix5</UpdateReleaseVersion>
 
 		<SlnRoot>$(SolutionDir)</SlnRoot>
 
