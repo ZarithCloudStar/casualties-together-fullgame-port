@@ -1,4 +1,4 @@
-
+﻿
 
 
 using BepInEx;
@@ -363,7 +363,8 @@ namespace Together {
             // MULTIPLAYER
             // also create my global object that will track everything
 
-            var mainsingleton = this.AddComponent<Multiplayer>();
+            this.AddComponent<SettingsAutoSaver>();
+        var mainsingleton = this.AddComponent<Multiplayer>();
 
 
             try {

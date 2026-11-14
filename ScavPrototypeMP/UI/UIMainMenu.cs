@@ -1,4 +1,4 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using CasualtiesTogetherUtils;
 using Steamworks;
 using System;
@@ -54,6 +54,7 @@ public class SettingDeclarerThingyFloatAttribute : SettingDeclarerThingyBaseAttr
 
         if (allow_saving)
             SettingsJsonThing.json.SetFloat(this.GetPrefKey(f), newval);
+            SettingsJsonThing.MarkDirty();
 
         f.SetValue(null, newval);
     }
@@ -82,6 +83,7 @@ public class SettingDeclarerThingyBoolAttribute : SettingDeclarerThingyBaseAttri
 
         if (allow_saving)
             SettingsJsonThing.json.SetBool(this.GetPrefKey(f), newval);
+            SettingsJsonThing.MarkDirty();
         
         f.SetValue(null, newval);
     }
@@ -107,6 +109,7 @@ public class SettingDeclarerThingyChoiceAttribute : SettingDeclarerThingyBaseAtt
 
         if (allow_saving)
             SettingsJsonThing.json.SetInt(this.GetPrefKey(f), newval);
+            SettingsJsonThing.MarkDirty();
         
         f.SetValue(null, Convert.ChangeType(newval,f.FieldType));
     }

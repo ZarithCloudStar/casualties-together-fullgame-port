@@ -134,6 +134,46 @@ public static class SettingsJsonThing {
         }
     }
     static JsonConfigThingy thing;
+
+    // Settings live only in memory inside JsonConfigThingy until Save() is called.
+    // The classic settings tab saved only when the Apply button was pressed and
+    // the modern tab never saved, so values silently reverted on the next launch.
+    static bool dirty;
+    static float last_change;
+
+    public static void MarkDirty() {
+        dirty = true;
+        last_change = Time.realtimeSinceStartup;
+    }
+
+    public static void Flush(bool force = false) {
+        if (thing == null || !dirty) {
+            return;
+        }
+        if (!force && Time.realtimeSinceStartup - last_change < 0.75f) {
+            return;
+        }
+        dirty = false;
+        thing.Save();
+    }
+
+    public static void FlushNow() {
+        if (thing == null) {
+            return;
+        }
+        dirty = false;
+        thing.Save();
+    }
+}
+
+internal class SettingsAutoSaver : MonoBehaviour {
+    void Update() {
+        SettingsJsonThing.Flush();
+    }
+
+    void OnApplicationQuit() {
+        SettingsJsonThing.FlushNow();
+    }
 }
 
 

@@ -1,4 +1,4 @@
-
+﻿
 using HarmonyLib;
 using Together;
 using CasualtiesTogetherUtils;
@@ -971,7 +971,12 @@ public class Voicechat :  CasualtiesTogetherSingleton {
 
         if (!VoiceChatIsEnabled()) {
             _push_to_talk_pushed = false;
-            _toggle_to_talk_toggled = false;
+            // Layer transitions disable voice while the new world generates.
+            // Keeping the toggle state lets toggle-to-talk stay enabled across
+            // layers instead of silently turning itself off.
+            if (!IsMicModeToggleToTalk()) {
+                _toggle_to_talk_toggled = false;
+            }
             return false;
         }
 
@@ -1276,6 +1281,7 @@ public class Voicechat :  CasualtiesTogetherSingleton {
 #if DEBUG
 #else
         SettingsJsonThing.json.SetString(_PREF_MICNAME, micName);
+        SettingsJsonThing.MarkDirty();
 #endif
         StartRecording(micName);
     }
@@ -1283,6 +1289,7 @@ public class Voicechat :  CasualtiesTogetherSingleton {
     public static void SetMicrophoneMode(int mode) => SetMicrophoneMode((byte)mode);
     public static void SetMicrophoneMode(byte mode) {
         SettingsJsonThing.json.SetInt(_PREF_MICMODE, mode);
+        SettingsJsonThing.MarkDirty();
         current_microphone_mode = mode;
     }
 
