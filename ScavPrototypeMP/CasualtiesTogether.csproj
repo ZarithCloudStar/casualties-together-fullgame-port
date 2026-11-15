@@ -149,8 +149,13 @@
 		<Reference Include="LiteEntitySystem">
 			<HintPath>$(LibsDir)\LiteEntitySystem.dll</HintPath>
 		</Reference>
-		<Reference Include="Steamworks.NET">
+		<Reference Include="Steamworks.NET" Condition="'$(GameType)' != 'Fullgame'">
 			<HintPath>$(LibsDir)\Steamworks.NET.dll</HintPath>
+		</Reference>
+		<!-- Fullgame and its mod must share one Steam callback dispatcher. -->
+		<Reference Include="com.rlabrecque.steamworks.net" Condition="'$(GameType)' == 'Fullgame'">
+			<HintPath>$(GameManagedDir)\com.rlabrecque.steamworks.net.dll</HintPath>
+			<Private>false</Private>
 		</Reference>
 
 
@@ -486,6 +491,8 @@
 
 		<ItemGroup>
 			<LibraryFiles Include="$(SlnRoot)\libs\dlls\*" />
+			<!-- Fullgame supplies its managed Steamworks wrapper and native Steam API. -->
+			<LibraryFiles Remove="@(LibraryFiles)" Condition="'$(GameType)' == 'Fullgame' and ('%(LibraryFiles.Filename)' == 'Steamworks.NET' or '%(LibraryFiles.Filename)' == 'steam_api64')" />
 		</ItemGroup>
 
 		<Copy SourceFiles="@(LibraryFiles)" DestinationFolder="$(ModPluginOutputDir)" SkipUnchangedFiles="true" />

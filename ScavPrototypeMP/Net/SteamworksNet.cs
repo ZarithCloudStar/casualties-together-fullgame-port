@@ -429,6 +429,7 @@ public class KSteam : MonoBehaviour {
         }
 
         if (Together.log.verbose) Together.log.l($"Steamworks initialized: {KSteam.GetLocalUsername()} - {KSteam.GetLocalUserSteamID()}");
+        Together.log.l($"[steam-sdk] assembly={typeof(SteamAPI).Assembly.FullName} location={typeof(SteamAPI).Assembly.Location}");
         Multiplayer.DoMultiplayerStatusMessageLog($"Steamworks initialized!");
 
     }
@@ -762,7 +763,9 @@ public class KSteam : MonoBehaviour {
 #endif 
                 return null;
             }
-            if (VERSION.Length > Net.MAX_SERVER_NAME_LENGTH) {
+            // Protocol tags include fork/test suffixes and are not lobby names (max 32).
+            const int MaxLobbyVersionLength = 64;
+            if (VERSION.Length > MaxLobbyVersionLength) {
 #if TESTING 
                 if (Together.log.verbose) Together.log.warn($"Version string too long: lobbyId:{slobby.lobby_steamID}");
 #endif 
@@ -1996,7 +1999,7 @@ public class TransportSteamworks : NetTransportBase {
                     return;
                 }
                 connectionMapping[remote] = new SteamConnectionData((CSteamID)remote) {
-                    connection = pCallback.m_hConn, acceptedListenSocket = pCallback.m_info.m_hListenSocket
+                    connection = pCallback.m_hConn
                 };
             } else if (pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connected) {
                 // A queued callback for an obsolete handle must never overwrite a new session.
@@ -2021,15 +2024,12 @@ public class TransportSteamworks : NetTransportBase {
                     if (!connectionMapping.ContainsKey(remote)) RemoveSteamUser(remote);
                     return;
                 }
-                bool accepted = data.acceptedListenSocket != HSteamListenSocket.Invalid;
                 bool clientFailed = Net.IsClient && ownDial;
                 if (clientFailed) RecordClientFailure();
                 RemoveSteamUser(remote);
                 if (clientFailed) {
                     Multiplayer.ShutdownNetwork(); // includes ShutdownReset, even after an established session fails
                     Multiplayer.DoMultiplayerStatusMessageLog("与房主的连接已断开，请稍后重新连接。");
-                } else if (Net.IsServer && accepted) {
-                    RebuildServerListener();
                 }
             }
         } catch (Exception e) {
@@ -2051,7 +2051,6 @@ public class TransportSteamworks : NetTransportBase {
         internal SteamNetConnectionRealTimeStatus_t connectionStatus = new();
         internal CSteamID id;
         internal HSteamNetConnection connection;
-        internal HSteamListenSocket acceptedListenSocket;
 
 
 
@@ -2075,46 +2074,9 @@ public class TransportSteamworks : NetTransportBase {
     IntPtr[] _pollPtrs;
     readonly List<SteamConnectionData> _pollConnections = new List<SteamConnectionData>(4);
 
-    const string P2PPortKey = "cu_p2p_port";
+    // Match upstream: one listener on virtual port 0 for the lifetime of the lobby.
+    // Peer departures close only that peer; closing a listener would drop all its peers.
     const int FixedP2PPort = 0;
-    const int _listenPort = FixedP2PPort;
-    bool _listenerRebuildPending;
-    readonly List<HSteamListenSocket> _retiredListeners = new();
-
-    void CloseListener(HSteamListenSocket socket) {
-        if (is_steamserver) SteamGameServerNetworkingSockets.CloseListenSocket(socket);
-        else SteamNetworkingSockets.CloseListenSocket(socket);
-    }
-
-    void CloseUnusedRetiredListeners() {
-        foreach (var socket in _retiredListeners.ToArray()) {
-            if (connectionMapping.Values.Any(data => data.acceptedListenSocket == socket)) continue;
-            CloseListener(socket);
-            _retiredListeners.Remove(socket);
-        }
-    }
-
-    // 始终使用虚拟端口 0。之前每次断线把端口 %999+1 轮换后，大厅数据里的
-    // cu_p2p_port 与真实监听会不一致（Steam 的 SetLobbyData 有限频/失败可能），
-    // 客机就会永久拨一个没人监听的端口，表现为“大厅能进、连接 10 秒超时”。
-
-
-    void RebuildServerListener() {
-        _listenerRebuildPending = false;
-        // CloseListenSocket kills accepted connections. Retain occupied listeners
-        // until their final peer leaves.
-        var previous = listenSocket;
-        listenSocket = HSteamListenSocket.Invalid;
-
-        if (CreateServerSocket()) {
-            if (previous != HSteamListenSocket.Invalid) _retiredListeners.Add(previous);
-            CloseUnusedRetiredListeners();
-            SessionLogGame.SteamConnection($"[steam-conn] listener rebuilt old={previous} new={listenSocket} port={_listenPort} retained={_retiredListeners.Count}");
-        } else {
-            listenSocket = previous;
-            SessionLogGame.SteamConnection("[steam-conn] listener rebuild failed; previous listener retained", true);
-        }
-    }
 
     internal void RecordClientFailure() {
         if (_clientFailureRecorded || _clientLobbyId == 0) return;
@@ -2162,21 +2124,16 @@ public class TransportSteamworks : NetTransportBase {
             options = new SteamNetworkingConfigValue_t[0];
 
         if (is_steamserver)
-            listenSocket = SteamGameServerNetworkingSockets.CreateListenSocketP2P(_listenPort, options.Length, options);
+            listenSocket = SteamGameServerNetworkingSockets.CreateListenSocketP2P(FixedP2PPort, options.Length, options);
         else
-            listenSocket = SteamNetworkingSockets.CreateListenSocketP2P(_listenPort, options.Length, options);
+            listenSocket = SteamNetworkingSockets.CreateListenSocketP2P(FixedP2PPort, options.Length, options);
 
 
         if (listenSocket == HSteamListenSocket.Invalid) {
-            SessionLogGame.SteamConnection($"[steam-conn] CreateListenSocketP2P failed port={_listenPort}", true);
+            SessionLogGame.SteamConnection($"[steam-conn] CreateListenSocketP2P failed port={FixedP2PPort}", true);
             return false;
         }
-        if (!SteamMatchmaking.SetLobbyData(LobbyId, P2PPortKey, _listenPort.ToString(System.Globalization.CultureInfo.InvariantCulture))) {
-            CloseListenSocket();
-            SessionLogGame.SteamConnection("[steam-conn] could not publish P2P port", true);
-            return false;
-        }
-        SessionLogGame.SteamConnection($"[steam-conn] listening handle={listenSocket} port={_listenPort}");
+        SessionLogGame.SteamConnection($"[steam-conn] listening handle={listenSocket} port={FixedP2PPort}");
         return true;
     }
     internal bool CreateClientSocket() {
@@ -2193,8 +2150,6 @@ public class TransportSteamworks : NetTransportBase {
                 onConnectionChange = Callback<SteamNetConnectionStatusChangedCallback_t>.Create(OnConnectionStatusChanged);
 
         var ConnectToSteamID = KSteam.CURRENT_LOBBY.ownerID;
-        int.TryParse(SteamMatchmaking.GetLobbyData(LobbyId, P2PPortKey), out int remotePort);
-        if (remotePort < 0 || remotePort > 999) remotePort = 0;
 
         serverUser = new SteamConnectionData( (CSteamID)(ConnectToSteamID));
 
@@ -2207,16 +2162,16 @@ public class TransportSteamworks : NetTransportBase {
             SteamNetworkingIdentity smi = new SteamNetworkingIdentity();
             smi.SetSteamID(serverUser.id);
             if (is_steamserver)
-                serverUser.connection = SteamGameServerNetworkingSockets.ConnectP2P(ref smi, remotePort, options.Length, options);
+                serverUser.connection = SteamGameServerNetworkingSockets.ConnectP2P(ref smi, FixedP2PPort, options.Length, options);
             else
-                serverUser.connection = SteamNetworkingSockets.ConnectP2P(ref smi, remotePort, options.Length, options);
+                serverUser.connection = SteamNetworkingSockets.ConnectP2P(ref smi, FixedP2PPort, options.Length, options);
 
             if (serverUser.connection == HSteamNetConnection.Invalid) {
                 SessionJoinLog.Failure("ConnectP2P returned invalid handle");
                 return false;
             }
             connectionMapping.Add((ulong)ConnectToSteamID, serverUser);
-            SessionLogGame.SteamConnection($"[steam-conn] dialing owner={serverUser.id.m_SteamID} handle={serverUser.connection} port={remotePort} relayInit=ok");
+            SessionLogGame.SteamConnection($"[steam-conn] dialing owner={serverUser.id.m_SteamID} handle={serverUser.connection} port={FixedP2PPort} relayInit=requested");
 
             return true;
         } catch (Exception ex) {
@@ -2400,13 +2355,10 @@ public class TransportSteamworks : NetTransportBase {
     float one_second_timer = -1;
 
     public SteamNetConnectionRealTimeStatus_t client_status = new();
-    // 断线后偶发：监听 socket 或 Steam 回调丢失，导致新的连接请求没人 accept，
-    // Steam 等到超时（"App didn't accept or close incoming connection in time"）。
-    // 主机每秒自检一次，缺什么补什么，并记录日志。
+    // Recover missing state only. Keep a valid lobby listener across peer disconnects.
     void EnsureServerSocketHealthy() {
         if (!Net.IsServer || !Net.IsRunning || !IS_IN_LOBBY) return;
         try {
-            if (_listenerRebuildPending) RebuildServerListener();
             if (listenSocket == HSteamListenSocket.Invalid) {
                 if (CreateServerSocket()) SessionLogGame.SteamConnection("[steam-conn] listen socket was missing; recreated");
                 else SessionLogGame.SteamConnection("[steam-conn] listen socket was missing and could not be recreated", true);
@@ -2800,8 +2752,6 @@ public class TransportSteamworks : NetTransportBase {
             serverUser = null;
         }
         if (connectionMapping.TryGetValue(steamID, out var conndata)) {
-            // Lobby departure may arrive before the socket's terminal callback.
-            if (conndata.acceptedListenSocket != HSteamListenSocket.Invalid) _listenerRebuildPending = true;
             bool res2;
             if (is_steamserver) {
                 res2 = SteamGameServerNetworkingSockets.CloseConnection(conndata.connection, 0, "disconnected", false);
@@ -2811,7 +2761,6 @@ public class TransportSteamworks : NetTransportBase {
 
 
             connectionMapping.Remove(steamID);
-            CloseUnusedRetiredListeners();
 #if TESTING
             log.warn($"OnLobbyMemberListChanged: removing {steamID} from connectionMapping ");
 #endif
@@ -2871,8 +2820,6 @@ public class TransportSteamworks : NetTransportBase {
 
         CloseP2PSessions();
         CloseListenSocket();
-        foreach (var socket in _retiredListeners) CloseListener(socket);
-        _retiredListeners.Clear();
 
         if (reset_net) {
             if (CURRENT_LOBBY.lobby_steamID != CSteamID.Nil || KSteam.IS_IN_LOBBY) {
@@ -2911,7 +2858,6 @@ public class TransportSteamworks : NetTransportBase {
 #if FULLGAME
         pendingCharacterIds.Clear();
 #endif
-        _listenerRebuildPending = false;
         if (log.verbose)
             KSteam.steamtestlog($"{this.GetType().Name}.CloseP2PSessions - has Closed P2P Sessions With all Users");
 
