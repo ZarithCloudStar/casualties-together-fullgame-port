@@ -293,7 +293,7 @@ namespace Together {
             if (!SupportsGameVersion(Application.version)) {
                 LoadErrorNotifier.errorstr += $"Mismatching version detected: TARGET: {TARGET_GAME_VERSION} - CURRENT: {Application.version}";
 
-                if (Util.GameIsFull()) LoadErrorNotifier.errorstr += "\n请更新游戏至 1.0.2，并确保所有玩家安装 bugfix5。Please update the game to 1.0.2 and install bugfix5 on every peer.";
+                if (Util.GameIsFull()) LoadErrorNotifier.errorstr += "\n请更新游戏至 1.0.2，并确保所有玩家安装 bugfix6。Please update the game to 1.0.2 and install bugfix6 on every peer.";
                 Together.log.error(LoadErrorNotifier.errorstr);
 
                 LoadErrorNotifier.errorstr += "\n";

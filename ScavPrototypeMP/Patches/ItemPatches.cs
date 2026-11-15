@@ -174,13 +174,18 @@ public static class Item_DoAmputate_MultiplayerPatch {
 
         if (PlayerCamera_ApplyWoundItem_MultiplayerPatch.last_wounditem_user != null && PlayerCamera_ApplyWoundItem_MultiplayerPatch.last_wounditem_user.IsBodyLocal()) {
 
+            // Check both self-amputation and amputation of another body before starting a minigame.
+            if (!limb.CanAmputate()) {
+                PlayerCamera.main.DoAlert("无法截肢：这个肢体当前不允许截断 / Cannot amputate this limb right now");
+                PlayerCamera.main.PlayUISound(PlayerCamera.UISoundType.Deny);
+                return false;
+            }
+
             // allow cannibalism
             if (limb.body != PlayerCamera_ApplyWoundItem_MultiplayerPatch.last_wounditem_user) {
-                if (limb.CanAmputate()) {
-                    //OG: Item.DoAmputate V5t5
-                    MinigameBase.main.StartMinigame(new AmputationMinigame(limb), item);
-                    return false;
-                }
+                //OG: Item.DoAmputate V5t5
+                MinigameBase.main.StartMinigame(new AmputationMinigame(limb), item);
+                return false;
             }
 
             // do the default amputation checks

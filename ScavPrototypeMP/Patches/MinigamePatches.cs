@@ -1397,26 +1397,32 @@ public static class MinigameBase_StartMinigame_MultiplayerPatch {
         }
     }
 
-    static bool Prefix(MinigameBase __instance, Minigame minigame, Item item, ref bool __state) {
+    static void RegisterBandageCallback(Minigame minigame, Item item) {
+        if (minigame is BandageMinigame bmini) {
+            AnyObjectNetId objnet = MinigameMPManager.GetMinigameTargetObjectNetId(minigame);
+            if (objnet.TryGetLimb(out var limb)) {
+                foreach (var stale in known_bandages_onuse_lambdas.Keys.Where(k => k.item == null || k.limb == null || k.item == item).ToArray())
+                    known_bandages_onuse_lambdas.Remove(stale);
+                known_bandages_onuse_lambdas[(item, limb)] = bmini.OnUse;
+                BandageMinigame_DoBandageAction_MultiplayerPatch.bandagethingcounter = 14; // to make one sound as soone as the player starts rolling
+            }
+        }
+    }
 
+    static bool Prefix(MinigameBase __instance, Minigame minigame, Item item, ref bool __state) {
+        __state = __instance.currentMinigame == null;
+
+        // Remote wound requests need the callback even while the host is spectating.
+        // Keep other target registration and local minigame state behind the spectator guard.
+        RegisterBandageCallback(minigame, item);
         if (Net.IsRunning && UIInGame.SpectatorModeActive) { __state = false; return false; }
 
-        __state = __instance.currentMinigame == null;
 #if FULLGAME
         if (EndingFlow.Active && minigame is CargoMinigame) { __state = false; return EndingFlow.AllowCargoMinigame(); }
 #endif
 
         AnyObjectNetId objnet = MinigameMPManager.GetMinigameTargetObjectNetId(minigame);
 		var is_medical_minigame = objnet.TryGetLimb(out var limb);
-
-		if (is_medical_minigame) {
-			if (minigame is BandageMinigame bmini) {
-				foreach (var stale in known_bandages_onuse_lambdas.Keys.Where(k => k.item == null || k.limb == null || k.item == item).ToArray())
-                    known_bandages_onuse_lambdas.Remove(stale);
-                known_bandages_onuse_lambdas[(item, limb)] = bmini.OnUse;
-				BandageMinigame_DoBandageAction_MultiplayerPatch.bandagethingcounter = 14; // to make one sound as soone as the player starts rolling
-			}
-		}
 
 		if (!Net.IsRunning) return true;
 
@@ -1664,15 +1670,7 @@ public static class MinigameBase_EndMinigame_MultiplayerPatch {
             return CombatStuff.CheckIfItsOkeyToDismemberThatLimb(limb);
         } else {
             //OG: Item.DoAmputate V5t5
-            bool anyLegGone = false;
-            for (int i = 9; i < 15; i++) {
-                if (limb.body.limbs[i].dismembered) {
-                    anyLegGone = true;
-                    break;
-                }
-            }
-
-            if (limb.infectionAmount > 60f && Array.IndexOf(limb.body.limbs, limb) > 2 && (!anyLegGone || !limb.isLegLimb)) {
+            if (limb.infectionAmount > 60f && Array.IndexOf(limb.body.limbs, limb) > 2) {
                 return true;
             }
             return false;

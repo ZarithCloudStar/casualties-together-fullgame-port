@@ -6,7 +6,7 @@
 		<ModVersion>5.5.0-cu-port</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
-		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.0-cu-port-bugfix5</UpdateReleaseVersion>
+		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.0-cu-port-bugfix6</UpdateReleaseVersion>
 
 		<SlnRoot>$(SolutionDir)</SlnRoot>
 

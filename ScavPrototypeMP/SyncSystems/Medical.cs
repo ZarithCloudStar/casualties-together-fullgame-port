@@ -2829,71 +2829,92 @@ internal class MedicalSync : CasualtiesTogetherSingleton {
     [ServerReceiver((byte)NetmsgId.SERVER_PlayerCamera_ApplyWoundItem)]
     static void ServerReceiver_ApplyWoundItem(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
 
+        reader.Get(out LimbNetId targetlimb);
+        reader.Get(out knetid item_syncid);
+        // Keep the player reference even if their body cannot be resolved below.
+        ScavPlayer.TryGetPlayerFromClientId(clientId, out var requestHealer);
+
+        void Reject(string reason) {
+            Plugin.log.LogWarning($"Server receives: PlayerCamera.ApplyWoundItem FAILED: {reason}; healer={requestHealer} clientId={clientId} targetBody={targetlimb.bodyNetId} targetLimb={targetlimb.limbId} item={item_syncid}");
+            if (requestHealer != null) {
+                requestHealer.Server_DoAlertSingle(Lang.MarkMsgAsLocaleKey("minigame_deny_server"));
+                MinigameMPManager.Server_ForceEndMinigameForPlayer(requestHealer);
+            }
+        }
+
         if (!CanSyncHealth()) {
+            Reject("CanSyncHealth returned false");
             return;
         }
 
-        reader.Get(out LimbNetId targetlimb);
-        reader.Get(out knetid item_syncid);
-
-        if (
-            ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out var healer, out var healer_nb) && healer.body.conscious &&
-            targetlimb.TryGetNetBodyAndLimbSafe(out var target_nb, out var limb) &&
-            ItemSync.TryGetItemSyncInfo(item_syncid, out var isi) 
-        ) {
+        if (!ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out var healer, out var healer_nb)) {
+            Reject("TryGetPlayerAndNetBodyFromClientId failed");
+            return;
+        }
+        if (!healer.body.conscious) {
+            Reject("healer.body.conscious is false");
+            return;
+        }
+        if (!targetlimb.TryGetNetBodyAndLimbSafe(out var target_nb, out var limb)) {
+            Reject("TryGetNetBodyAndLimbSafe failed");
+            return;
+        }
+        if (!ItemSync.TryGetItemSyncInfo(item_syncid, out var isi)) {
+            Reject("TryGetItemSyncInfo failed");
+            return;
+        }
 
 #if !RELEASE // these are for verbose output why shit gets denied
-            // all of this gets checked in the DoApplyWoundItemChecks
-            if (healer_nb != target_nb) {
-                if (!KM.DistanceCheck(healer.body, target_nb.body, SharedMain.max_player_interaction_distance * 1.3f)) {
-                    Plugin.log.LogWarning($"Server receives: PlayerCamera.ApplyWoundItem FAILED: TOO FAR {healer} -> {targetlimb} {isi}  ");
-                    return;
-                }
-                if (!Util.AccurateRaycastInteractionCheckObstruction(healer.body, target_nb.body, false)) {
-                    Plugin.log.LogWarning($"Server receives: PlayerCamera.ApplyWoundItem FAILED: OBSTRUCTED {healer} -> {targetlimb} {isi}  ");
-                    return;
-                }
-            }
-#endif 
-
-            // but this is needed here
-            if (!ItemSync.CheckIfBodyReachThisItem(isi, healer.body, 20f, true)) {
-                Plugin.log.LogWarning($"Server receives: PlayerCamera.ApplyWoundItem FAILED: CANT REACH {healer} -> {targetlimb} si:{isi}  ");
+        // all of this gets checked in the DoApplyWoundItemChecks
+        if (healer_nb != target_nb) {
+            if (!KM.DistanceCheck(healer.body, target_nb.body, SharedMain.max_player_interaction_distance * 1.3f)) {
+                Reject("KM.DistanceCheck failed: TOO FAR");
                 return;
             }
-
-
-            if (PlayerCamera_ApplyWoundItem_MultiplayerPatch.DoApplyWoundItemChecks(healer.body, limb, isi.item)) {
-
-
-
-                // tell everyone to use this item (so that visuals and sounds apply)
-                var writer = Net.CreateWriter(NetmsgId.CLIENT_PlayerCamera_ApplyWoundItem_Relay);
-
-                writer.Put(clientId);
-                writer.Put(targetlimb);
-                writer.Put(item_syncid);
-
-                if (log.verbose) log.l($"Server receives: PlayerCamera.ApplyWoundItem {healer.playerName} -> {targetlimb} si:{isi}  ");
-
-                Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.GetListOfClientIdsExceptThisAndHost(clientId));
-                // WRITER END;
-
-
-                MinigameBase_StartMinigame_MultiplayerPatch.ignore_next_mgstart_cuz_its_not_me = !Util.IsBodyLocal(healer.body);
-                //OG: PlayerCamera.ApplyWoundItem
-                PlayerCamera_ApplyWoundItem_MultiplayerPatch.ForceApplyWoundItem(healer.body, limb, isi.item);
-                MinigameBase_StartMinigame_MultiplayerPatch.ignore_next_mgstart_cuz_its_not_me = false;
-
-
-
-                Server_QueueSendCharacterHealth(target_nb);
-
-
-            } else {
-
-                Plugin.log.LogWarning($"Server receives: PlayerCamera.ApplyWoundItem FAILED {healer} -> {targetlimb} {isi}  ");
+            if (!Util.AccurateRaycastInteractionCheckObstruction(healer.body, target_nb.body, false)) {
+                Reject("AccurateRaycastInteractionCheckObstruction failed: OBSTRUCTED");
+                return;
             }
+        }
+#endif 
+
+        // but this is needed here
+        if (!ItemSync.CheckIfBodyReachThisItem(isi, healer.body, 20f, true)) {
+            Reject("ItemSync.CheckIfBodyReachThisItem failed: CANT REACH");
+            return;
+        }
+
+
+        if (PlayerCamera_ApplyWoundItem_MultiplayerPatch.DoApplyWoundItemChecks(healer.body, limb, isi.item)) {
+
+
+
+            // tell everyone to use this item (so that visuals and sounds apply)
+            var writer = Net.CreateWriter(NetmsgId.CLIENT_PlayerCamera_ApplyWoundItem_Relay);
+
+            writer.Put(clientId);
+            writer.Put(targetlimb);
+            writer.Put(item_syncid);
+
+            if (log.verbose) log.l($"Server receives: PlayerCamera.ApplyWoundItem {healer.playerName} -> {targetlimb} si:{isi}  ");
+
+            Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.GetListOfClientIdsExceptThisAndHost(clientId));
+            // WRITER END;
+
+
+            MinigameBase_StartMinigame_MultiplayerPatch.ignore_next_mgstart_cuz_its_not_me = !Util.IsBodyLocal(healer.body);
+            //OG: PlayerCamera.ApplyWoundItem
+            PlayerCamera_ApplyWoundItem_MultiplayerPatch.ForceApplyWoundItem(healer.body, limb, isi.item);
+            MinigameBase_StartMinigame_MultiplayerPatch.ignore_next_mgstart_cuz_its_not_me = false;
+
+
+
+            Server_QueueSendCharacterHealth(target_nb);
+
+
+        } else {
+
+            Reject("DoApplyWoundItemChecks returned false");
         }
 
 

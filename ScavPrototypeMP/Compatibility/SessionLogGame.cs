@@ -16,7 +16,7 @@ internal static class SessionLogGame {
         try {
             string protocol = Application.version + "_MPv" + Plugin.MOD_VERSION;
 #if FULLGAME
-            protocol += "-fix5";
+            protocol += "-fix6";
 #endif
             string fallbackFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + "Low",
                 "Orsoniks", "CasualtiesUnknown", "mp_save", "logs");

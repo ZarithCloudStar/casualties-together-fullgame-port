@@ -2686,35 +2686,8 @@ internal class CombatStuff : CasualtiesTogetherSingleton {
                     }
                 }
             }
-        } else { // is legs or arms 
-            if (limb.body.alive) { // if theyre alive dont allow amputating more than once (arms and legs separate). to keep at least one set of limbs full and keep the game playable 
-
-                bool any_leg_removed = false;
-                for (int i = (int)Body.LimbNum.LegF; i < 15; i++) {
-                    if (limb.body.limbs[i].dismembered) {
-                        any_leg_removed = true;
-                        break;
-                    }
-                }
-
-                bool any_arm_removed = false;
-                for (int i = (int)Body.LimbNum.ArmF; i < (int)Body.LimbNum.LegF; i++) {
-                    if (limb.body.limbs[i].dismembered) {
-                        any_arm_removed = true;
-                        break;
-                    }
-                }
-
-                if (limb.isArm && any_arm_removed) {
-                    return false;
-                }
-
-                if (limb.isLegLimb && any_leg_removed) {
-                    return false;
-                }
-
-            }
         }
+        // Arms and legs may both be amputated, matching the base game (e.g. two PEO prostheses).
         return true;
     }
 
