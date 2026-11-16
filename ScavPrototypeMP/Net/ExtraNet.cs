@@ -1,4 +1,4 @@
-﻿using CasualtiesTogetherUtils;
+using CasualtiesTogetherUtils;
 using System;
 using System.Collections;
 using System.Collections.Generic;

@@ -420,6 +420,19 @@ static class Sound_Play_MultiplayerPatch {
             return false;
         }
 
+        // Upstream owner-only feedback: relayed attacks/attachments run on every peer.
+        if (clip == "prostheticapply") {
+            Body attached = Limb_AchievementOwner_MultiplayerPatch.AttachingBody;
+            if (attached != null && !Util.IsBodyLocal(attached)) {
+                pos = attached.transform.position;
+                twoDimensional = false;
+            }
+        }
+        if (clip == "animalhitsweet") {
+            var attacker = Body_Attack_MultiplayerPatch.LastAttacker;
+            if (attacker == null || !Util.IsBodyLocal(attacker)) return false;
+        }
+        if (clip == "mushroombounce") twoDimensional = false;
         var og_twoDimensional = twoDimensional;
 
         if (clip.StartsWith("exert") || clip == "Saw") {
@@ -539,3 +552,22 @@ static class Sound_Play2_MultiplayerPatch {
 
 
 
+
+[HarmonyPatch(typeof(LiquidAffect), "FixedUpdate")]
+static class LiquidAffect_FixedUpdate_NullGuard_MultiplayerPatch {
+    static bool Prefix(LiquidAffect __instance) {
+        Traverse tr = Traverse.Create(__instance);
+        if (tr.Field("rb").GetValue<Rigidbody2D>() == null) {
+            return false;
+        }
+        if (WorldGeneration.world == null || FluidManager.main == null) {
+            return false;
+        }
+        Limb limb = tr.Field("limb").GetValue<Limb>();
+        if (limb != null && (limb.body == null || limb.body.talker == null)) {
+            // acid branch calls talker.FinishedTalking(); skip until talker exists
+            return false;
+        }
+        return true;
+    }
+}

@@ -1,4 +1,5 @@
 using CasualtiesTogetherUtils;
+using HarmonyLib;
 using LiteNetLib;
 using LiteNetLib.Utils;
 using System;
@@ -91,13 +92,11 @@ internal static class TraderCommit {
         }
         TraderScript live = trader.trader;
         if ((live.items == null) || (index >= live.items.Count)) {
-            log.l($"[trader] buy deny sync={trader.syncId} index={index} id={itemId}");
             Publish(live, actor);
             return;
         }
         TraderItem offer = live.items[index];
         if ((offer is null) || (offer.id != itemId) || ((ushort)offer.value != value) || Reserved(trader.syncId, index)) {
-            log.l($"[trader] buy deny sync={trader.syncId} index={index} id={itemId}");
             Publish(live, actor);
             return;
         }
@@ -122,7 +121,6 @@ internal static class TraderCommit {
             sellFrame = Time.frameCount;
         }
         if (ReservedSell.Contains(sold)) {
-            log.l($"[trader] sell deny sync={trader.syncId} item={sold}");
             Publish(trader.trader, actor);
             return;
         }
@@ -141,10 +139,8 @@ internal static class TraderCommit {
         }
         SyncInfo si = tt.si;
         if ((si == null) || (si.syncId == 0)) {
-            FindTheBugInator.TraderAsk(tt);
             return;
         }
-        FindTheBugInator.TraderAsk(tt);
         Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_RequestTraderSnapshot, si.syncId, true);
     }
 
@@ -162,9 +158,6 @@ internal static class TraderCommit {
             ids.Add(acting.playerId);
         }
         if (ids.Count == 0) {
-            if (Multiplayer.verbose) {
-                FindTheBugInator.Trader("publish-none", FindTheBugInator.TraderState(trader));
-            }
             return;
         }
         Send(trader, ids);
@@ -250,6 +243,7 @@ internal static class TraderCommit {
             trader.items.Clear();
         }
         trader.items.AddRange(items);
+        trader.GetOrAddComponent<TrackerTrader>().received_their_inv = true;
         RefreshOpen(trader);
     }
 
@@ -276,6 +270,86 @@ internal static class TraderCommit {
         ServerMain.Server_AnnounceSound(pos, name, ids);
     }
 
+    // all in-range clients get the slash. victims skip stock Swing; host owns the damage.
+    internal static void RelaySwing(TraderScript trader, Vector2 aim, knetid exceptClient = default) {
+        if (!Net.IsServer || (trader == null)) {
+            return;
+        }
+        knetid id = IdOf(trader);
+        if (id == 0) {
+            return;
+        }
+        List<knetid> ids = ClientsInRange(trader);
+        if (exceptClient != 0) {
+            ids.Remove(exceptClient);
+        }
+        if (ids.Count == 0) {
+            return;
+        }
+        NetDataWriter writer = Net.CreateWriter(PortMsgId.CLIENT_TraderSwing);
+        writer.Put(id);
+        writer.Put(aim.x);
+        writer.Put(aim.y);
+        Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ids);
+    }
+
+    internal static void PlaySwingFx(TraderScript trader, Vector2 aim) {
+        if ((trader == null) || (trader.torso == null) || (trader.attackAnimation == null)) {
+            return;
+        }
+        Vector2 to = (aim - (Vector2)trader.torso.position).normalized;
+        if (to.sqrMagnitude < 0.0001f) {
+            to = Vector2.right;
+        }
+        GameObject slash = UnityEngine.Object.Instantiate(trader.attackAnimation);
+        slash.transform.eulerAngles = new Vector3(0f, 0f, Vector2.SignedAngle(Vector3.right, to));
+        slash.transform.localScale = new Vector3(1f, (to.x > 0f) ? 1f : (-1f), 1f);
+        slash.transform.position = trader.torso.position + trader.torso.up * 0.8f;
+        UnityEngine.Object.Destroy(slash, 2f);
+        Sound.Play("BSSwing1", trader.transform.position);
+        Traverse arms = Traverse.Create(trader).Field("bonusArmRot");
+        float[] bonusArmRot = arms.GetValue<float[]>();
+        if ((bonusArmRot != null) && (bonusArmRot.Length > 1)) {
+            bonusArmRot[(to.x > 0f) ? 1 : 0] = (to.x > 0f) ? 90f : (-90f);
+            arms.SetValue(bonusArmRot);
+        }
+        trader.bonusRot += (to.x > 0f) ? (-10f) : 10f;
+        Traverse.Create(trader).Field("lastAttackTime").SetValue(Time.time + UnityEngine.Random.Range(-0.5f, 0.5f));
+        if ((PlayerCamera.main != null) && (Vector2.Distance(trader.transform.position, PlayerCamera.main.transform.position) < 24f)) {
+            PlayerCamera.main.threatMusicTime = 10f;
+            PlayerCamera.main.currentThreatTheme = 12;
+        }
+    }
+
+    // stock Swing steps desiredPos toward the victim. host cosmetic path needs the same nudge.
+    internal static void ApplySwingLunge(TraderScript trader, Vector2 aim) {
+        if (trader == null) {
+            return;
+        }
+        Vector2 to = (aim - (Vector2)trader.transform.position).normalized;
+        if (to.sqrMagnitude < 0.0001f) {
+            to = Vector2.right;
+        }
+        Vector3 position = trader.transform.position;
+        position.x += to.x * UnityEngine.Random.Range(0.125f, 0.5f)
+            * ((UnityEngine.Random.value < 0.25f) ? (-1.6f) : 1f)
+            * ((UnityEngine.Random.value < 0.2f) ? 5f : 1f);
+        position.x = Mathf.Clamp(position.x, trader.MoveRange.min, trader.MoveRange.max);
+        trader.desiredPos = position;
+    }
+
+    [ClientReceiver((ushort)PortMsgId.CLIENT_TraderSwing, false)]
+    private static void Client_Swing(knetid _, NetDataReader reader) {
+        reader.Get(out knetid traderId);
+        float x = reader.GetFloat();
+        float y = reader.GetFloat();
+        if (!NetObjectRegistry.TryGetSyncInfoLive(traderId, out SyncInfo si) || (si is null) || (si.trader == null)) {
+            return;
+        }
+        // clients skip stock Swing. host damage lands via ForceHealth. this is slash/sound for everyone.
+        PlaySwingFx(si.trader, new Vector2(x, y));
+    }
+
     private static List<knetid> ClientsInRange(TraderScript trader) {
         List<knetid> ids = new();
         Vector2 pos = trader.transform.position;
@@ -296,7 +370,6 @@ internal static class TraderCommit {
             NetObjectRegistry.NewGO(trader.gameObject);
             id = IdOf(trader);
             if (id == 0) {
-                FindTheBugInator.Trader("send-skip", "id=0 " + FindTheBugInator.TraderState(trader));
                 return;
             }
         }
@@ -328,9 +401,6 @@ internal static class TraderCommit {
             writer.Put((item is not null) && item.bought);
             writer.Put((ushort)(item is null ? 0 : item.value));
             writer.Put((byte)(item is null ? 0 : (byte)item.preference));
-        }
-        if (Multiplayer.verbose) {
-            FindTheBugInator.Trader("send", FindTheBugInator.TraderState(trader) + " " + FindTheBugInator.IdList(ids));
         }
         Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, clientIds: ids);
     }
@@ -395,6 +465,9 @@ internal static class TraderCommit {
         if ((trader == null) || (actor == null)) {
             return;
         }
+        // first trade must lock first-impression. otherwise the host walking up later MeetPlayer-wipes live rep.
+        TraderScript_MeetPlayer_MultiplayerPatch.EnsureFirstMeet(trader, actor);
+        trader.startedConvo = true;
         TrackerTrader tt = trader.GetOrAddComponent<TrackerTrader>();
         Body previous = tt.focused_body;
         tt.focused_body = actor;
@@ -414,6 +487,12 @@ internal static class TraderCommit {
                 trader.TryHaggle();
                 if (bite) {
                     RelaySound(trader, actor, "eatFlesh", biteAt);
+                    // stock wrote the limbs on the host copy. living players upload their own
+                    // health, so without a confirm the owner never keeps the bite.
+                    if (actor != null && actor.TryGetNetBody(out NetBody bitten)) {
+                        bitten.OnDamageEvent(new BodyDamageEvent(trader.build, bitten, 30));
+                        MedicalSync.ForceHealth(bitten);
+                    }
                 }
                 break;
                 case Op.Threaten:
@@ -451,12 +530,10 @@ internal static class TraderCommit {
 
     private static void RunBuy(TraderScript trader, Body actor, Job job) {
         if ((trader.items == null) || (job.index >= trader.items.Count)) {
-            log.l($"[trader] buy deny sync={job.trader.syncId} index={job.index} id={job.itemId}");
             return;
         }
         TraderItem offer = trader.items[job.index];
         if ((offer is null) || (offer.id != job.itemId) || ((ushort)offer.value != job.value)) {
-            log.l($"[trader] buy deny sync={job.trader.syncId} index={job.index} id={job.itemId}");
             return;
         }
         Item bought = TraderScript_TryPurchase_MultiplayerPatch.TryPurchase_rewritten(trader, offer, actor);
@@ -467,13 +544,17 @@ internal static class TraderCommit {
 
     private static void RunSell(TraderScript trader, Body actor, Job job) {
         if (!ItemSync.TryGetItemSyncInfo(job.sold, out SyncInfo itemsi) || (itemsi.item == null)) {
-            log.l($"[trader] sell deny sync={job.trader.syncId} item={job.sold}");
             return;
         }
         if (!ItemSync.CheckIfBodyReachThisItem(itemsi, actor) || (trader.reputation < 30f)) {
-            log.l($"[trader] sell deny sync={job.trader.syncId} item={job.sold}");
             return;
         }
+#if FULLGAME
+        // full marks many shared mats untradeable. stock roll already skips them; sell must too.
+        if (itemsi.item.Stats != null && itemsi.item.Stats.untradeable) {
+            return;
+        }
+#endif
         trader.GiveItem(itemsi.item);
     }
 
@@ -524,14 +605,12 @@ internal static class TraderCommit {
         int left = 0;
         try { left = reader.AvailableBytes; } catch (Exception) { }
         if (!NetObjectRegistry.TryGetSyncInfoLive(traderId, out SyncInfo si) || (si is null)) {
-            FindTheBugInator.Trader("drop", "no-sync id=" + traderId.id + " bytes=" + left + " side=" + FindTheBugInator.Side());
             return;
         }
         TraderScript trader;
         try {
             trader = si.trader;
         } catch (Exception ex) {
-            FindTheBugInator.Trader("drop", "trader-throw id=" + traderId.id + " bytes=" + left + " " + ex.GetType().Name);
             return;
         }
         if (trader == null) {
@@ -541,16 +620,13 @@ internal static class TraderCommit {
                     go = "go=" + si.go.name;
                 }
             } catch (Exception) { }
-            FindTheBugInator.Trader("drop", "no-trader id=" + traderId.id + " bytes=" + left + " " + go);
             return;
         }
         try {
             Apply(trader, reader);
         } catch (Exception ex) {
-            FindTheBugInator.Trader("apply-fail", "id=" + traderId.id + " bytes=" + left + " " + ex.GetType().Name + " " + ex.Message);
             throw;
         }
-        FindTheBugInator.Trader("apply", "bytes=" + left + " " + FindTheBugInator.RefreshText(trader) + " " + FindTheBugInator.TraderState(trader));
     }
 
     [ServerReceiver((byte)NetmsgId.SERVER_RequestTraderSnapshot)]
@@ -570,9 +646,11 @@ internal static class TraderCommit {
                 fail = "no-trader";
             }
         }
-        string state = (live == null) ? "" : (" " + FindTheBugInator.TraderState(live));
-        FindTheBugInator.Trader("request", "from=" + clientId.id + " id=" + traderId.id + " " + fail + state);
-        if (live != null) {
+        if (live != null && live.items != null) {
+            Body body = null;
+            ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out _, out body);
+            // First impression may already exist; an inventory request must still receive a reply.
+            TraderScript_MeetPlayer_MultiplayerPatch.EnsureFirstMeet(live, body);
             PublishTo(live, clientId);
         }
     }

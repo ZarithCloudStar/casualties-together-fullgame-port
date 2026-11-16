@@ -24,6 +24,10 @@ internal static class EndingFlowTests {
     static float lobbyReadyAt;
     internal static void Tick() {
         if (!Environment.GetCommandLineArgs().Contains("--mp-ending-test")) return;
+        // Isolated, user-driven sessions keep the fixture save/preferences but
+        // must never start a run, change layers or execute scripted assertions.
+        if (Scenario == "manual-structure") { SteamManager.disableAchievements = true; return; }
+        if (Scenario == "port551") { Port551Smoke.Tick(); return; }
         Release14EndingTests.Tick();
         Release18EndingTests.Tick();
         if (DropChipRegression.Active) DropSourceRegression.Tick();

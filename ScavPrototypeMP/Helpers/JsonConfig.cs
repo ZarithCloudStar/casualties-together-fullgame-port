@@ -1,4 +1,4 @@
-﻿
+
 using CasualtiesTogetherUtils;
 using Newtonsoft.Json;
 using System;

@@ -411,23 +411,24 @@ public class SyncBody : PredictableEntityLogic {
 
     }
     bool _RagdollReadIndividualLimb(Limb limb, ref SyncVar<Vector2_4byte_512> syncpos, ref SyncVar<FloatAngle> syncrot, ref SyncVar<Vector2_4byte_200> syncvel, ref SyncVar<short> syncangvel) {
-        var limb_rb_position = syncpos.InterpolatedValue;
-        if (!limb.dismembered) {
-            if (Net.IsServer) {
-                if ((Vector2.SqrMagnitude(limb_rb_position - nb.GetPosition()) < 100)) {
-                } else {
-#if !RELEASE
-                    log.sus($"{DebugHelp.GetPlayerFullDebugString(nb.body)} something is sus about {DebugHelp.GetGameObjectFullDebugString(limb)} ");
-#endif
-                    return false;
-                }
-            }
-            limb.transform.position = limb_rb_position;
-            limb.rb.rotation = syncrot.InterpolatedValue;
-            limb.rb.velocity = syncvel.InterpolatedValue;
-            limb.rb.angularVelocity = Util_MPExtensions.UnquantizeFloatFromShort(syncangvel.InterpolatedValue, _RAGDOLL_ANGVEL_QUANTIZE);
+        Vector2 position = syncpos.InterpolatedValue;
+        if (limb == null || limb.dismembered || limb.rb == null) return true;
+        if (!limb.rb.isKinematic) {
+            limb.rb.velocity = Vector2.zero;
+            limb.rb.angularVelocity = 0f;
+            limb.rb.isKinematic = true;
         }
+        limb.transform.position = position;
+        limb.rb.rotation = syncrot.InterpolatedValue;
         return true;
+    }
+
+    static void ReleaseRemoteLimbs(Body body) {
+        if (body == null || body.limbs == null) return;
+        foreach (Limb limb in body.limbs) {
+            if (limb != null && limb.rb != null && limb.rb.isKinematic)
+                limb.rb.isKinematic = false;
+        }
     }
 
     internal void ReadRagdollData() {
@@ -697,6 +698,7 @@ public class SyncBody : PredictableEntityLogic {
                     }
                     if (body.standing != _standing.Value) {
                         if (_standing.Value) {
+                            ReleaseRemoteLimbs(body);
                             body.ForceStand(); // force Stand
                         } else {
                             body.Ragdoll(); // ragdoll is guranteed to work
@@ -726,6 +728,7 @@ public class SyncBody : PredictableEntityLogic {
 
             } else {
                 Vector2 raw = _position.Value;
+                ReleaseRemoteLimbs(nb.body);
                 nb.body.ForceStand();
                 nb.SetBodyPosition(raw);
                 EnemyMoveProbe.Note(this, EnemyMoveProbe.SimOut, raw);
@@ -733,7 +736,7 @@ public class SyncBody : PredictableEntityLogic {
 
         }
 
-        readingRagdollData = IsSyncGroupEnabled(SyncGroup.SyncGroup3) && !nb.body.standing;
+        readingRagdollData = !Net.IsServer && IsSyncGroupEnabled(SyncGroup.SyncGroup3) && !nb.body.standing && !nb.IsPiggybacking();
         if (readingRagdollData) {
             ReadRagdollData();
         }
@@ -2660,6 +2663,7 @@ public struct PlayerInputPacket {
     public bool IsChatFocused;
     public bool IsInCraftingMenu;
     public bool IsInTradingMenu;
+    public bool IsInInventory;
 
     public bool ButtonAttack;
     public bool ButtonIteminteract;
@@ -2692,6 +2696,7 @@ public struct PlayerInputPacket {
         IsChatFocused = Chat.CHAT_textbox_input_focused;
         IsInCraftingMenu = Util.IsInCraftingMenu();
         IsInTradingMenu = Util.IsInTradingMenu();
+        IsInInventory = PlayerCamera.main != null && PlayerCamera.main.radialOpen;
         IsInPauseMenu = Util.IsInPauseMenu() || UIMainMenu.IsOpen();
 
         ButtonAttack = Input.GetKey(KeyBinds.GetBind("attack"));
@@ -2778,6 +2783,7 @@ public struct PlayerInputPacket {
         plr.IsChatFocused.Value = IsChatFocused;
         plr.IsInCraftingMenu.Value = IsInCraftingMenu;
         plr.IsInTradingMenu.Value = IsInTradingMenu;
+        plr.IsInInventory.Value = IsInInventory;
         plr.ButtonAttack.Value = ButtonAttack;
         plr.ButtonIteminteract.Value = ButtonIteminteract;
         plr.WoundviewTargetNetBodyId.Value = WoundviewTargetNetBodyId;
@@ -2869,6 +2875,7 @@ public class BasePlayer : PawnLogic {
     public SyncVar<bool> MuteTC;
 #if FULLGAME
     public SyncVar<bool> modUnchipped;
+    public SyncVar<bool> IsInInventory;
 #endif
 
     //public SyncVar<int> testCounter;
@@ -2885,6 +2892,7 @@ public class BasePlayer : PawnLogic {
         player.ButtonIteminteract = ButtonIteminteract.Value;
 
         player.IsInTradingMenu = IsInTradingMenu.Value;
+        player.IsInInventory = IsInInventory.Value;
         player.WoundviewTargetNetBodyId = WoundviewTargetNetBodyId.Value;
         player.DragItemId = DragItemId.Value;
 

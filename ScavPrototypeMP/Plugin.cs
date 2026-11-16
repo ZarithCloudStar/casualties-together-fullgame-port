@@ -1,4 +1,4 @@
-﻿
+
 
 
 using BepInEx;
@@ -293,7 +293,7 @@ namespace Together {
             if (!SupportsGameVersion(Application.version)) {
                 LoadErrorNotifier.errorstr += $"Mismatching version detected: TARGET: {TARGET_GAME_VERSION} - CURRENT: {Application.version}";
 
-                if (Util.GameIsFull()) LoadErrorNotifier.errorstr += "\n请更新游戏至 1.0.2，并确保所有玩家安装 bugfix7。Please update the game to 1.0.2 and install bugfix7 on every peer.";
+                if (Util.GameIsFull()) LoadErrorNotifier.errorstr += "\n请更新游戏至 1.0.2，并确保所有玩家安装 5.5.2-cu-port。Please update the game to 1.0.2 and install 5.5.2-cu-port on every peer.";
                 Together.log.error(LoadErrorNotifier.errorstr);
 
                 LoadErrorNotifier.errorstr += "\n";
@@ -364,7 +364,9 @@ namespace Together {
             // also create my global object that will track everything
 
             this.AddComponent<SettingsAutoSaver>();
+        try { SpriteReplacerPlugin.EnsureLoaded(); } catch (Exception e) { log.LogError("Skin boot: " + e); }
         var mainsingleton = this.AddComponent<Multiplayer>();
+        UI.TeammateList.TeammateListHost.Init(this);
 
 
             try {
@@ -1214,6 +1216,7 @@ namespace Together {
         }
 
 
+        private float nextDuneBite;
         private void Update() {
             SessionLog.Heartbeat();
             FrameBuckets.NoteFrame(Time.unscaledDeltaTime);
@@ -1228,6 +1231,12 @@ namespace Together {
             SaveCurrentLayerExit.TickLoadTestHook();
 #endif
             PlayerCheckpoint.Tick();
+            TorchWet.Tick();
+            if (Net.IsRunning && Net.IsServer && Time.time >= nextDuneBite) {
+                nextDuneBite = Time.time + 1f;
+                NetBody.DuneBiteSessionTick();
+            }
+            UI.TeammateList.TeammateListHost.Tick();
             CraftCommit.Tick();
             MoveCommit.Tick();
             FrameBuckets.Add(FrameBuckets.IdTick, tick);
@@ -1238,6 +1247,7 @@ namespace Together {
 
         private void FixedUpdate() {
             BagSleep.WriteHost();
+            FallCatch.Tick();
         }
 
         private void LateUpdate() {

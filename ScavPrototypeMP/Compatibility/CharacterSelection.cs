@@ -1,4 +1,4 @@
-﻿using CasualtiesTogetherUtils;
+using CasualtiesTogetherUtils;
 using HarmonyLib;
 using System;
 using System.Reflection;
@@ -95,6 +95,12 @@ internal static class CharacterSelection {
 
     // The server's save binding wins over a local lobby pick; follow it so the
     // local preview and spawn use the same character the server will create.
+    internal static void AdoptForced(byte chr) {
+        if (chr > 2) throw new ArgumentOutOfRangeException(nameof(chr));
+        CommandLineOverride = null;
+        rememberedChoice = chr;
+        PreRunScript.characterSelected = chr;
+    }
     internal static void AdoptBound(byte chr) {
         if (!Util.GameIsFull() || chr > 2) return;
         if (rememberedChoice == chr) return;

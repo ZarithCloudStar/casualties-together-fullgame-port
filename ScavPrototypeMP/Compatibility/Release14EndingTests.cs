@@ -1,4 +1,4 @@
-﻿#if FULLGAME && TESTING
+#if FULLGAME && TESTING
 using CasualtiesTogetherUtils;
 using LiteNetLib;
 using System;

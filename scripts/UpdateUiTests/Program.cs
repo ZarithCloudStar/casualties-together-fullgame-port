@@ -23,6 +23,8 @@ static class Program {
         Check(ReleaseUpdate.Compare(local+"+buildA",local+"+buildB")==0,"unordered build hashes do not create update loops");
         Check(ReleaseUpdate.Compare("5.6.0-rc2","5.6.0")<0,"release candidate precedes stable");
         Check(ReleaseUpdate.Compare("5.6.0-beta10","5.6.0-beta2")>0,"numeric prerelease ordering");
+        Check(ReleaseUpdate.Compare("5.5.1-cu-port-test2","5.5.1-cu-port-test1")>0,"numeric test package ordering");
+        Check(ReleaseUpdate.Compare("5.5.1-cu-port","5.5.1-cu-port-test1")>0,"stable port follows test package");
         Throws(()=>ReleaseUpdate.Compare("nightly",local),"unknown tag cannot claim newest");
         Throws(()=>ReleaseUpdate.Compare(new string('9',200)+".1.1",local),"overflow version rejected");
         Check(ReleaseUpdate.NormalizeSource(null)==ReleaseUpdate.DefaultSource,"production default without config file");

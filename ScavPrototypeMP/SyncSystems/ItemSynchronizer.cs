@@ -2106,7 +2106,56 @@ internal class ItemSync : CasualtiesTogetherSingleton {
 
         }
     }
-    public static void BetterUseItem( Body body, Item item) {
+    internal static bool TooSpentToUse(Item item) {
+        if (item == null) {
+            return true;
+        }
+        if (Net.IsRunning && TryGetSyncInfo(item, out SyncInfo si) && si != null && si.IsDestroyed) {
+            return true;
+        }
+        if (item.Stats != null && item.Stats.wearable && !item.Stats.usable) {
+            return false;
+        }
+        // empty bags sit at condition 0. their use draws blood into them.
+        if (item.id == "bloodbag" || item.id == "bloodbaghuman") {
+            return false;
+        }
+        return item.condition <= 0.0001f;
+    }
+public static void ApplyWearableSpriteSwap(Item item, Body body) {
+        if (item == null || body == null) {
+            return;
+        }
+        if (!item.TryGetComponent<WearableSpriteSwap>(out var swap) || swap == null) {
+            return;
+        }
+        int chr = CharacterSpawn.ClampChar(body.charType);
+        SpriteRenderer sr = item.GetComponent<SpriteRenderer>();
+        if (sr != null && swap.sprites != null && swap.sprites.Count > chr && swap.sprites[chr] != null) {
+            sr.sprite = swap.sprites[chr];
+        }
+        float scale = 1f;
+        if (swap.customScale != null && swap.customScale.Count > chr && swap.customScale[chr] != 0f) {
+            scale = swap.customScale[chr];
+        }
+        item.transform.localScale = Vector3.one * scale;
+    }
+public static void RefreshWearableSpeciesSprites(Body body) {
+        if (body == null) {
+            return;
+        }
+        foreach (Item item in body.GetAllWearables()) {
+            if (item == null) {
+                continue;
+            }
+            ApplyWearableSpriteSwap(item, body);
+            if (item.TryGetComponent<Wearable>(out var wearable)) {
+                item.TryGetComponent(out WearableSpriteSwap swap);
+                wearable.CreateSprites(body, swap);
+            }
+        }
+    }
+public static void BetterUseItem( Body body, Item item) {
         ItemSync.SetBodyOverride(item, body);
         if (item.Stats.wearable) {
             ItemSync.Body_ForceWearWearable(body, item);
@@ -3258,4 +3307,84 @@ internal class ItemSync : CasualtiesTogetherSingleton {
 
 
 
+}
+
+static class TorchWet {
+    static readonly Dictionary<int, Item> Noted = new Dictionary<int, Item>();
+    static readonly Dictionary<int, float> NextReport = new Dictionary<int, float>();
+    static readonly List<int> Drop = new List<int>();
+
+    [CTPostInit]
+    static void Init() {
+        ServerMain.ServerCustomCommandsDict["torch_wet"] = (plr, cmd, args) => {
+            if (args.Length < 2 || !ushort.TryParse(args[1], out ushort raw))
+                return;
+            if (!NetObjectRegistry.TryGetSyncInfo((knetid)raw, out SyncInfo si) || si == null || si.IsDestroyed || si.item == null)
+                return;
+            Item item = si.item;
+            if (item.id != "torch")
+                return;
+            bool near = plr != null && plr.body != null && Vector2.Distance(plr.body.transform.position, item.transform.position) <= 10f;
+            if (!near && !InWetLiquid(item))
+                return;
+            item.wetTime = Time.time;
+            Note(item);
+            if (!item.gameObject.activeInHierarchy)
+                si.WriteObjectIntoPacket();
+        };
+    }
+
+    public static bool InWetLiquid(Item item) {
+        if (item == null || WorldGeneration.world == null || FluidManager.main == null)
+            return false;
+        Vector2 p = item.transform.position;
+        if (Mathf.Abs(p.x) >= WorldGeneration.world.halfWidth || Mathf.Abs(p.y) >= WorldGeneration.world.halfHeight)
+            return false;
+        return FluidManager.main.HasWetLiquid(WorldGeneration.world.WorldToBlockPos(p));
+    }
+
+    public static void Note(Item item) {
+        if (item != null)
+            Noted[item.GetInstanceID()] = item;
+    }
+
+    public static void Report(Item item) {
+        if (!Net.IsClient || Net.IsServer || item == null || item.id != "torch")
+            return;
+        if (!NetObjectRegistry.TryGetSyncInfo(item, out SyncInfo si) || si == null || si.IsDestroyed)
+            return;
+        int id = item.GetInstanceID();
+        float now = Time.unscaledTime;
+        if (NextReport.TryGetValue(id, out float at) && now < at)
+            return;
+        NextReport[id] = now + 0.5f;
+        LiteNetLib.Utils.NetDataWriter writer = Multiplayer.CreateNamedWriter("CustomCommand");
+        writer.Put("torch_wet " + si.syncId.id);
+        Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
+    }
+
+    // the mesh is off on the host, so CustomItemBehaviour never subtracts. catch up here.
+    public static void Tick() {
+        if (!Net.IsServer || Noted.Count == 0)
+            return;
+        float now = Time.time;
+        float dt = Time.deltaTime;
+        Drop.Clear();
+        foreach (var pair in Noted) {
+            Item item = pair.Value;
+            if (item == null || now - item.wetTime >= 120f) {
+                Drop.Add(pair.Key);
+                continue;
+            }
+            if (item.gameObject.activeInHierarchy || item.condition <= 0f)
+                continue;
+            item.condition = Mathf.Max(0f, item.condition - dt);
+            if (NetObjectRegistry.TryGetSyncInfo(item, out SyncInfo si) && si != null && !si.IsDestroyed)
+                si.WriteObjectIntoPacket();
+        }
+        for (int i = 0; i < Drop.Count; i++) {
+            Noted.Remove(Drop[i]);
+            NextReport.Remove(Drop[i]);
+        }
+    }
 }

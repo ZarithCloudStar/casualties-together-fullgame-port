@@ -1,4 +1,4 @@
-﻿using CasualtiesTogetherUtils;
+using CasualtiesTogetherUtils;
 using UnityEngine;
 
 namespace Together;

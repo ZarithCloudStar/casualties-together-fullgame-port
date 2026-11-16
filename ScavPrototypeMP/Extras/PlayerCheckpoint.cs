@@ -384,6 +384,9 @@ public static class PlayerCheckpoint {
             dict["SAVEID"] = WoundView.view.cInfo[2];
             dict["LEVEL"] = midlevel;
             dict["RULES"] = Multiplayer.rules;
+            dict[AchievementBreakSync.SaveHeaderKey] = SteamManager.disableAchievements;
+            dict["PLRCHARS"] = ScavPlayer.ClientIdToPlayerDict.Values.Where(p => p != null && p.body != null)
+                .ToDictionary(p => p.GetPersistentId(), p => p.body.charType);
             dict["MODIFIER"] = midlevel ? (WorldMP.GetLayerModifier()?.modifierIndex ?? -1) : -1;
             // Keep everyone's coordinates so a mid-layer save resumes exactly there.
             var positions = new Dictionary<string, (float, float)>();

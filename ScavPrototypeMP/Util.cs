@@ -1,4 +1,4 @@
-﻿using HarmonyLib;
+using HarmonyLib;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -415,7 +415,32 @@ public static class Util_LimbExtensions {
     public static Vector2 GetPosition(this Limb limb) {
         return limb.transform.position;
     }
-    public static bool IsBodyLocal(this Limb limb) {
+    public static bool HasProsthetic(this Limb limb) {
+        if (limb == null) {
+            return false;
+        }
+        try {
+            Traverse info = Traverse.Create(limb).Field("prostheticInfo");
+            if (!info.FieldExists()) {
+                return false;
+            }
+            object boxed = info.GetValue();
+            if (boxed == null) {
+                return false;
+            }
+            return Traverse.Create(boxed).Field("hasProsthetic").GetValue<bool>();
+        } catch {
+            return false;
+        }
+    }
+public static string UnitsDistance(float meters) {
+#if FULLGAME
+        return $"{Mathf.RoundToInt((float)Units.ConvertDistance(meters))}{Units.DistanceUnit()}";
+#else
+        return $"{Mathf.RoundToInt(meters)}m";
+#endif
+    }
+public static bool IsBodyLocal(this Limb limb) {
         return limb.body.IsBodyLocal();
     }
 
@@ -721,6 +746,13 @@ public static class Util_BodyExtensions {
 }
 
 public static class Util {
+public static string UnitsDistance(float meters) {
+#if FULLGAME
+        return $"{Mathf.RoundToInt((float)Units.ConvertDistance(meters))}{Units.DistanceUnit()}";
+#else
+        return $"{Mathf.RoundToInt(meters)}m";
+#endif
+    }
 
     public static WorldGeneration world => WorldGeneration.world;
     public static ushort[,] worldBlocks => WorldGeneration.world.worldBlocks;

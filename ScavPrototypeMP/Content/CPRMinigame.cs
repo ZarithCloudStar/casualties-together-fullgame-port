@@ -1,4 +1,4 @@
-﻿using HarmonyLib;
+using HarmonyLib;
 using Together;
 using CasualtiesTogetherUtils;
 using LiteNetLib;

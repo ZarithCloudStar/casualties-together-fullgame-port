@@ -159,6 +159,7 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
                         dict["SAVEID"] = WoundView.view.cInfo[2];
                         dict["LEVEL"] = midlevel;
                         dict["RULES"] = Multiplayer.rules;
+                dict[AchievementBreakSync.SaveHeaderKey] = SteamManager.disableAchievements;
                         dict["MODIFIER"] = midlevel ? (WorldMP.GetLayerModifier()?.modifierIndex ?? -1) : -1;
                         dict["PLRPOS"] = ScavPlayer.BodyToPlayerDict.ToDictionary(x => x.Value.GetPersistentId(), x => (x.Key.transform.position.x, x.Key.transform.position.y));
 #if FULLGAME
@@ -373,6 +374,7 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
 
                                 if (jObject.TryGetValue("RULES", out var RULES)) {
                                     Multiplayer.rules = RULES.ToObject<MultiplayerGameRules>();
+                    if (jObject.Value<bool?>(AchievementBreakSync.SaveHeaderKey) == true) AchievementBreakSync.ApplyLocal(true);
                                 }
                             }
 

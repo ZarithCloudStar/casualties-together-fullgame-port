@@ -51,6 +51,13 @@ internal static class DropSourceRegression {
 
     internal static IEnumerator Run() {
         yield return Wait(() => ScavPlayer.ClientIdToPlayerDict.Values.Count(p => p?.body != null) == 2 && !DeferredPlayerSaveRestore.InProgress, "two ready restored bodies");
+        bool coreLoaded = BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey("net.cucorelib");
+        log.l($"[drop-test] BACKEND cucorelibLoaded={coreLoaded} sharedSpawnHook={CuCoreFreshDropCompatibility.FindTarget() != null}");
+        if (coreLoaded) {
+            var target = CuCoreFreshDropCompatibility.FindTarget();
+            Check(target != null && Harmony.GetPatchInfo(target)?.Prefixes.Any(p => p.PatchMethod.DeclaringType == typeof(CuCoreFreshDropCompatibility)) == true,
+                "bundled CUCoreLib shared drop producer is patched");
+        }
         yield return new WaitForSecondsRealtime(2f);
         var guest = ScavPlayer.ClientIdToPlayerDict.Values.First(p => !p.IsHost);
         bool expectedChip = !(Environment.GetEnvironmentVariable("CT_ENDING_TEST_SCENARIO") ?? "").Contains("legacy");
@@ -144,6 +151,7 @@ internal static class DropSourceRegression {
         host.Server_TeleportCharacter(hostAt);
         yield return new WaitForSecondsRealtime(.5f);
         foreach (var name in new[] { "dropcapsule", "medcrate", "leadbush", "host-control" }) {
+            int coreDropsBefore = CuCoreFreshDropCompatibility.ServerDropsSeen;
             var point = hostAt + Vector2.right * (name == "host-control" ? 3f : 40f) + Vector2.up * 3f;
             // Generated rock can eject a teleported test body between physics
             // and Start. Make a real empty arena instead of testing inside rock.
@@ -152,8 +160,10 @@ internal static class DropSourceRegression {
                 for (int y = -12; y <= 12; y++)
                     WorldGeneration.world.SetBlock(center + new Vector2Int(x, y), 0);
             guest.body.Heal(); guest.body.forceNoMovement = true;
-            guest.Server_TeleportCharacter(point + Vector2.left * 2f);
-            heldGuest = guest; heldAt = point + Vector2.left * 2f;
+            // Cover the actual keypad reach beyond the native 8m float radius.
+            var guestOffset = Vector2.left * (name == "dropcapsule" ? 12f : 2f);
+            guest.Server_TeleportCharacter(point + guestOffset);
+            heldGuest = guest; heldAt = point + guestOffset;
             guest.body.SetVelocity(Vector2.zero);
             yield return new WaitForSecondsRealtime(.5f);
             var source = Utils.Create(name == "host-control" ? "medcrate" : name, point, 0f);
@@ -173,6 +183,8 @@ internal static class DropSourceRegression {
             var loot = UnityEngine.Object.FindObjectsOfType<Item>().Where(i => !before.Contains(i.GetInstanceID()) && i.transform.parent == null && Vector2.Distance(i.transform.position, point) < 12f).ToArray();
             log.l($"[drop-test] {name} loose loot={string.Join(",", loot.Select(i => i.id + ":" + (i.GetComponent<FreshItemDrop>() != null)))}");
             Check(loot.Length > 0 && loot.All(i => i.GetComponent<FreshItemDrop>() != null), name + " server producer created native float components");
+            if (BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey("net.cucorelib") && name != "leadbush")
+                Check(CuCoreFreshDropCompatibility.ServerDropsSeen > coreDropsBefore, name + " exercised CUCoreLib shared drop producer");
             foreach (var item in loot) NetObjectRegistry.Server_EnsureItemIsNetworkRegistered(item.gameObject);
             var items = loot.Select(i => { NetObjectRegistry.TryGetSyncInfo(i, out var si); return si; }).ToArray();
             Announce(name, items);
@@ -223,7 +235,7 @@ internal static class DropSourceRegression {
         // Pin the local body too: server teleporting a remote body does not stop
         // its owner simulating gravity and leaving the minigame during typing.
         heldGuest = ScavPlayer.LocalPlayer;
-        heldAt = (Vector2)building.go.transform.position + Vector2.left * 2f;
+        heldAt = (Vector2)building.go.transform.position + Vector2.left * 12f;
         building.go.GetComponent<Openable>().OnUse();
         yield return Wait(() => MinigameBase.main.currentMinigame is KeypadMinigame keypad && !string.IsNullOrEmpty(keypad.match) && keypad.match.All(char.IsDigit), "server keypad code");
         var game = (KeypadMinigame)MinigameBase.main.currentMinigame;

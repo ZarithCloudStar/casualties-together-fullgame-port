@@ -1,4 +1,4 @@
-﻿using HarmonyLib;
+using HarmonyLib;
 using CasualtiesTogetherUtils;
 using System;
 using System.IO;
@@ -698,6 +698,11 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
             foreach (var item in ScavPlayer.BodyToPlayerDict) {
                 item.Value.ResetEntropy();
+#if FULLGAME
+                // Clear the previous layer's exit restriction on owned bodies,
+                // including a host corpse that the spectator camera left behind.
+                if (Util.GameIsFull() && item.Key != null) item.Key.forceWalk = false;
+#endif
                 item.Value.levelPlayTime = 0;
             }
 
@@ -827,11 +832,25 @@ public class WorldMP : CasualtiesTogetherSingleton {
                     // people still in the lobby are respawned from the body they already have.
 
                     var did_respawn_someone = false;
-                    foreach (var item in ScavPlayer.BodyToPlayerDict) {
-                        if (!item.Key.alive) {
+                    var respawnPosition = Vector2.zero;
+#if FULLGAME
+                    // Camera.body can be a spectated companion, or the corpse's
+                    // old-layer position. Revival belongs at this layer's start.
+                    bool canRespawn = !Util.GameIsFull() || Body_PlaceBody_MultiplayerPatch.EnsureLayerSpawn("next-layer revival");
+                    if (Util.GameIsFull() && canRespawn)
+                        respawnPosition = Body_PlaceBody_MultiplayerPatch.SpawnLocation;
+                    else if (!Util.GameIsFull())
+                        respawnPosition = PlayerCamera.main.body.transform.position;
+#else
+                    bool canRespawn = true;
+                    respawnPosition = PlayerCamera.main.body.transform.position;
+#endif
+                    foreach (var item in ScavPlayer.BodyToPlayerDict.ToArray()) {
+                        if (canRespawn && item.Key != null && !item.Key.alive) {
                             did_respawn_someone = true;
                             Plugin.log.LogInfo($"Respawed {item.Value.playerName} ");
-                            item.Value.Server_RespawnCharacter(PlayerCamera.main.body.transform.position, true);
+                            item.Value.Server_RespawnCharacter(respawnPosition, true);
+                            log.l($"[spawn] layer revival player={item.Value.GetPersistentId()} layer={world.biomeDepth} at={respawnPosition:F3} forceWalk={item.Key.forceWalk}");
                         }
                     }
                     if (did_respawn_someone) {

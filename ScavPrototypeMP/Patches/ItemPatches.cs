@@ -20,14 +20,14 @@ namespace Together;
 
 [HarmonyPatch(typeof(Item), nameof(Item.OnCollisionEnter2D))]
 public static class Item_OnCollisionEnter2D_MultiplayerPatch {
-    public static bool Prefix(Item __instance, Collision2D collision) {
-        if (collision.collider.TryGetComponent(out Item oitem)) { // item against item dont make the noise
-            if (collision.relativeVelocity.magnitude < 20f) {
-                return false;
-            }
-        }
-        return true;
-    }
+public static bool Prefix(Item __instance, Collision2D collision) {
+if (collision.collider.TryGetComponent(out Item oitem)) { // item against item dont make the noise
+if (collision.relativeVelocity.magnitude < 20f) {
+return false;
+}
+}
+return true;
+}
 
 }
 
@@ -40,36 +40,36 @@ public static class Item_OnCollisionEnter2D_MultiplayerPatch {
 
 [HarmonyPatch(typeof(GeigerCounterAudio), nameof(GeigerCounterAudio.Update))]
 internal static class GeigerCounterAudio_Update_MultiplayerPatch {
-    internal static bool Prefix(GeigerCounterAudio __instance) {
-        if (Net.IsRunning) {
-            if (!__instance.item.battery.hasCharge) {
-                __instance.active = false;
-            }
-            if (!__instance.active) {
-                __instance.audioSource.Stop();
-                return false;
-            }
-            if (!__instance.audioSource.isPlaying) {
-                __instance.audioSource.Play();
-            }
-            float irradiateIntensity = 0;
+internal static bool Prefix(GeigerCounterAudio __instance) {
+if (Net.IsRunning) {
+if (!__instance.item.battery.hasCharge) {
+__instance.active = false;
+}
+if (!__instance.active) {
+__instance.audioSource.Stop();
+return false;
+}
+if (!__instance.audioSource.isPlaying) {
+__instance.audioSource.Play();
+}
+float irradiateIntensity = 0;
 
-            var overider = __instance.GetOrAddComponent<BodyGetterOverrider>();
-            if (overider.TryGetBodyFromParent(out var body) && body.TryGetNetBody(out var nb)) {
-                irradiateIntensity = nb.irradiateIntensity;
-            }
+var overider = __instance.GetOrAddComponent<BodyGetterOverrider>();
+if (overider.TryGetBodyFromParent(out var body) && body.TryGetNetBody(out var nb)) {
+irradiateIntensity = nb.irradiateIntensity;
+}
 
-            int clipIndex = __instance.GetClipIndex(irradiateIntensity);
-            if (__instance.audioSource.clip != __instance.radiationClips[clipIndex]) {
-                __instance.audioSource.clip = __instance.radiationClips[clipIndex];
-                __instance.audioSource.Play();
-            }
+int clipIndex = __instance.GetClipIndex(irradiateIntensity);
+if (__instance.audioSource.clip != __instance.radiationClips[clipIndex]) {
+__instance.audioSource.clip = __instance.radiationClips[clipIndex];
+__instance.audioSource.Play();
+}
 
-            return false;
-        }
+return false;
+}
 
-        return true;
-    }
+return true;
+}
 }
 
 
@@ -83,43 +83,45 @@ internal static class GeigerCounterAudio_Update_MultiplayerPatch {
 [HarmonyPatch(typeof(AutoPump), nameof(AutoPump.Update))]
 static class AutoPump_Update_MultiplayerPatch {
 
-    static void AutoPump_Update_Rewritten(AutoPump ap) {
 
-        ap.coolDown -= Time.deltaTime;
-        ap.wearCheckTime -= Time.deltaTime;
+static void AutoPump_Update_Rewritten(AutoPump ap) {
 
-        if (ap.transform.transform.parent == null) {
-            ap.worn = false;
-            return;
-        }
-        var bgo = ap.GetOrAddComponent<BodyGetterOverrider>();
-        var body = bgo.GetBody();
+ap.coolDown -= Time.deltaTime;
+ap.wearCheckTime -= Time.deltaTime;
 
-        if (ap.wearCheckTime < 0f) {
-            ap.wearCheckTime = 1f;
-            ap.worn = bgo.TryGetBodyFromParent(out body) && body.HasWearable(ap.item);
-        }
+if (ap.transform.transform.parent == null) {
+ap.worn = false;
+return;
+}
+var bgo = ap.GetOrAddComponent<BodyGetterOverrider>();
+var body = bgo.GetBody();
 
-        if (ap.worn && ap.item.battery.hasCharge) {
-            ap.item.battery.DrainCharge(Time.deltaTime / 1200f);
-            if (body.bloodPressure < 85f) {
-                body.bloodPressure += 44f;
-                ap.item.battery.DrainCharge(0.002f);
-                Sound.Play("autopump", ap.item.transform.position, body.IsBodyLocal(), pitchShift: true, null, 0.6f);
-            }
-        }
+if (ap.wearCheckTime < 0f) {
+ap.wearCheckTime = 1f;
+ap.worn = bgo.TryGetBodyFromParent(out body) && body.HasWearable(ap.item);
+}
+
+if (ap.worn && ap.item.battery.hasCharge) {
+ap.item.battery.DrainCharge(Time.deltaTime / 1200f);
+if (body.bloodPressure < 85f && ap.coolDown <= 0f) {
+ap.coolDown = 0.3f;
+body.bloodPressure += 44f;
+ap.item.battery.DrainCharge(0.002f);
+Sound.Play("autopump", ap.item.transform.position, body.IsBodyLocal(), pitchShift: true, null, 0.6f);
+}
+}
 
 
-    }
+}
 
 
-    static bool Prefix(AutoPump __instance) {
-        if (!Net.IsRunning) return true;
+static bool Prefix(AutoPump __instance) {
+if (!Net.IsRunning) return true;
 
-        AutoPump_Update_Rewritten(__instance);
+AutoPump_Update_Rewritten(__instance);
 
-        return false;
-    }
+return false;
+}
 
 }
 
@@ -128,33 +130,33 @@ static class AutoPump_Update_MultiplayerPatch {
 
 [HarmonyPatch(typeof(WatchScript), nameof(WatchScript.Update))]
 static class WatchScriptUpdate_MultiplayerPatch {
-    static bool Prefix(WatchScript __instance) {
-        if (!Net.IsRunning) return true;
-        var bovr = __instance.GetOrAddComponent<BodyGetterOverrider>();
-        var b = bovr.GetBody();
-        if (b != null) {
-            if (!b.IsBodyLocal()) {
-                return false; // make the watch not work on remote peers 
-            }
-        }
-        return true;
-    }
+static bool Prefix(WatchScript __instance) {
+if (!Net.IsRunning) return true;
+var bovr = __instance.GetOrAddComponent<BodyGetterOverrider>();
+var b = bovr.GetBody();
+if (b != null) {
+if (!b.IsBodyLocal()) {
+return false; // make the watch not work on remote peers
+}
+}
+return true;
+}
 }
 
 
 [HarmonyPatch(typeof(GrapplingHook), nameof(GrapplingHook.Use))]
 internal static class GrapplingHook_Use_MultiplayerPatch {
-    static void Prefix(GrapplingHook __instance, Body body, ref JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState __state) {
-        __state = new JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState(PlayerCamera.main.shaker);
-    }
-    static void Postfix(GrapplingHook __instance, Body body, ref JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState __state) {
-        if (!body.IsBodyLocal()) { // reset the camera shake
-            __state.Apply(PlayerCamera.main.shaker);
-        }
-        // the hook is its own rigidbody. the gun staying in hand does not keep the chunk the hook flies into.
-        if (__instance.hook != null)
-            SimKeep.Arm(__instance.hook.gameObject);
-    }
+static void Prefix(GrapplingHook __instance, Body body, ref JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState __state) {
+__state = new JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState(PlayerCamera.main.shaker);
+}
+static void Postfix(GrapplingHook __instance, Body body, ref JumpPadScript_OnCollisionEnter2D_MultiplayerPatch.ShakerState __state) {
+if (!body.IsBodyLocal()) { // reset the camera shake
+__state.Apply(PlayerCamera.main.shaker);
+}
+// the hook is its own rigidbody. the gun staying in hand does not keep the chunk the hook flies into.
+if (__instance.hook != null)
+SimKeep.Arm(__instance.hook.gameObject);
+}
 }
 
 
@@ -165,36 +167,110 @@ internal static class GrapplingHook_Use_MultiplayerPatch {
 // rewritten
 [HarmonyPatch(typeof(Item), nameof(Item.DoAmputate))]
 public static class Item_DoAmputate_MultiplayerPatch {
-    public static readonly HashSet<string> ItemsThatCanAmputate = new();
+public static readonly HashSet<string> ItemsThatCanAmputate = new();
 
-    static bool Prefix(Item item, Limb limb) {
-        ItemsThatCanAmputate.Add(item.id);
+// vanilla: prosthetic limbs skip AmputationMinigame and call Limb.Dismember() immediately.
+// flesh limbs use the minigame + SERVER_AmputationMinigame_success.
+public static bool IsAmputateTool(Item item) {
+if (item == null || string.IsNullOrEmpty(item.id)) {
+return false;
+}
+if (ItemsThatCanAmputate.Contains(item.id)) {
+return true;
+}
+try {
+ItemInfo.UseLimb action = item.Stats != null ? item.Stats.useLimbAction : null;
+if (action?.Method == null) {
+return false;
+}
+if (MethodCallsDoAmputate(action.Method)) {
+ItemsThatCanAmputate.Add(item.id);
+return true;
+}
+} catch {
+}
+return false;
+}
 
-        if (!Net.IsRunning) return true;
+static bool MethodCallsDoAmputate(System.Reflection.MethodInfo method) {
+if (method == null) {
+return false;
+}
+System.Reflection.MethodBody body = method.GetMethodBody();
+if (body == null) {
+return false;
+}
+byte[] il = body.GetILAsByteArray();
+if (il == null || il.Length < 5) {
+return false;
+}
+System.Reflection.Module module = method.Module;
+for (int i = 0; i < il.Length - 4; i++) {
+// call / callvirt
+if (il[i] != 0x28 && il[i] != 0x6F) {
+continue;
+}
+int token = il[i + 1] | (il[i + 2] << 8) | (il[i + 3] << 16) | (il[i + 4] << 24);
+try {
+System.Reflection.MethodBase resolved = module.ResolveMethod(token);
+if (resolved != null && resolved.Name == nameof(Item.DoAmputate) && resolved.DeclaringType == typeof(Item)) {
+return true;
+}
+} catch {
+}
+}
+return false;
+}
 
-        if (PlayerCamera_ApplyWoundItem_MultiplayerPatch.last_wounditem_user != null && PlayerCamera_ApplyWoundItem_MultiplayerPatch.last_wounditem_user.IsBodyLocal()) {
+public static void SeedAmputateToolsFromGlobalItems() {
+if (Item.GlobalItems == null) {
+return;
+}
+foreach (var kv in Item.GlobalItems) {
+ItemInfo info = kv.Value;
+if (info?.useLimbAction?.Method == null) {
+continue;
+}
+if (MethodCallsDoAmputate(info.useLimbAction.Method)) {
+ItemsThatCanAmputate.Add(kv.Key);
+}
+}
+}
 
-            // Check both self-amputation and amputation of another body before starting a minigame.
-            if (!limb.CanAmputate()) {
-                PlayerCamera.main.DoAlert("无法截肢：这个肢体当前不允许截断 / Cannot amputate this limb right now");
-                PlayerCamera.main.PlayUISound(PlayerCamera.UISoundType.Deny);
-                return false;
-            }
+static bool Prefix(Item item, Limb limb) {
+ItemsThatCanAmputate.Add(item.id);
 
-            // allow cannibalism
-            if (limb.body != PlayerCamera_ApplyWoundItem_MultiplayerPatch.last_wounditem_user) {
-                //OG: Item.DoAmputate V5t5
-                MinigameBase.main.StartMinigame(new AmputationMinigame(limb), item);
-                return false;
-            }
+if (!Net.IsRunning) return true;
 
-            // do the default amputation checks
-            return true;
-        }
+// prosthetic removal is host-authoritative via ApplyWoundItem -> vanilla DoAmputate
+// (instant Dismember, no minigame). Clients must not run it or they spawn duplicate scrap.
+if (limb != null && limb.HasProsthetic()) {
+return Net.IsServer;
+}
+
+if (PlayerCamera_ApplyWoundItem_MultiplayerPatch.last_wounditem_user != null && PlayerCamera_ApplyWoundItem_MultiplayerPatch.last_wounditem_user.IsBodyLocal()) {
+
+// Check both self-amputation and amputation of another body before starting a minigame.
+if (!limb.CanAmputate()) {
+PlayerCamera.main.DoAlert("无法截肢：这个肢体当前不允许截断 / Cannot amputate this limb right now");
+PlayerCamera.main.PlayUISound(PlayerCamera.UISoundType.Deny);
+return false;
+}
+
+// allow cannibalism
+if (limb.body != PlayerCamera_ApplyWoundItem_MultiplayerPatch.last_wounditem_user) {
+//OG: Item.DoAmputate V5t5
+MinigameBase.main.StartMinigame(new AmputationMinigame(limb), item);
+return false;
+}
+
+// do the default amputation checks
+return true;
+}
 
 
-        return false;
-    }
+return false;
+}
 }
 
 
@@ -208,71 +284,75 @@ public static class Item_DoAmputate_MultiplayerPatch {
 
 [HarmonyPatch(typeof(FreshItemDrop), "Awake")]
 static class FreshItemDrop_Awake_MultiplayerPatch {
-    static bool Prefix(FreshItemDrop __instance) {
-        if (!Net.IsRunning || !Net.IsClient) return true;
-        // The server's FreshItemDrop already opted into floating; a client's
-        // local itemfloating setting must not destroy this replicated state.
-        __instance.timeLeft = 10f;
-        // Inventory reseating can temporarily parent a replica. Its authoritative
-        // lifetime must survive that until the server sends the pickup state.
-        __instance.forceOn = true;
-        __instance.rb = __instance.GetComponent<Rigidbody2D>();
-        if (__instance.rb != null) __instance.rb.gravityScale = 0f;
-        return false;
-    }
+#if FULLGAME
+static void Postfix(FreshItemDrop __instance) {
+FreshDropRelevance.MarkValidatedCapsuleDrop(__instance);
+}
+#endif
+static bool Prefix(FreshItemDrop __instance) {
+if (!Net.IsRunning || !Net.IsClient) return true;
+// The server's FreshItemDrop already opted into floating; a client's
+// local itemfloating setting must not destroy this replicated state.
+__instance.timeLeft = 10f;
+// Inventory reseating can temporarily parent a replica. Its authoritative
+// lifetime must survive that until the server sends the pickup state.
+__instance.forceOn = true;
+__instance.rb = __instance.GetComponent<Rigidbody2D>();
+if (__instance.rb != null) __instance.rb.gravityScale = 0f;
+return false;
+}
 }
 
 [HarmonyPatch(typeof(FreshItemDrop), nameof(FreshItemDrop.Start))]
 static class FreshItemDrop_Start_MultiplayerPatch {
 
-    //OG: BuildingEntity.Update() V5t4  where it spawns the item drops after becoming condition 0
-    const float max_distance_to_keep = 8f;
+//OG: BuildingEntity.Update() V5t4  where it spawns the item drops after becoming condition 0
+const float max_distance_to_keep = 8f;
 
-    static void Postfix(FreshItemDrop __instance) {
-        if (Net.IsRunning && Net.IsClient) return; // lifetime/relevance belongs to the server
-        if (Net.IsRunning && log.verbose) log.l($"[drop] server fresh drop id={__instance.GetComponent<Item>()?.id} at={__instance.transform.position} lifetime={__instance.timeLeft:0.0}s");
-        if (Net.IsRunning) {
-            var np = ScavPlayer.GetDistanceToNearestLivingPlayer(__instance.transform.position);
-            if (np.Item2 > max_distance_to_keep * max_distance_to_keep) {
-                UnityEngine.Object.Destroy(__instance);
-            }
-        } else {
-            if (!KM.DistanceCheck(__instance.transform.position, PlayerCamera.main.body.transform.position, max_distance_to_keep)) {
-                UnityEngine.Object.Destroy(__instance);
-            }
-        }
-    }
+static void Postfix(FreshItemDrop __instance) {
+if (Net.IsRunning && Net.IsClient) return; // lifetime/relevance belongs to the server
+if (Net.IsRunning && log.verbose) log.l($"[drop] server fresh drop id={__instance.GetComponent<Item>()?.id} at={__instance.transform.position} lifetime={__instance.timeLeft:0.0}s");
+#if FULLGAME
+// Start runs after the opening scope ends. Keep its validated relevance so
+// this second eight-metre check cannot immediately remove the component.
+if (FreshDropRelevance.TakeValidatedCapsuleDrop(__instance)) return;
+#endif
+if (Net.IsRunning) {
+var np = ScavPlayer.GetDistanceToNearestLivingPlayer(__instance.transform.position);
+if (np.Item2 > max_distance_to_keep * max_distance_to_keep) {
+UnityEngine.Object.Destroy(__instance);
+}
+} else {
+if (!KM.DistanceCheck(__instance.transform.position, PlayerCamera.main.body.transform.position, max_distance_to_keep)) {
+UnityEngine.Object.Destroy(__instance);
+}
+}
+}
 
 }
 
 
 [HarmonyPatch(typeof(FreshItemDrop), nameof(FreshItemDrop.OnDestroy))]
 static class FreshItemDrop_OnDestroy_ErrorfixPatch {
-    static bool Prefix(FreshItemDrop __instance) {
+static bool Prefix(FreshItemDrop __instance) {
+#if FULLGAME
+FreshDropRelevance.TakeValidatedCapsuleDrop(__instance);
+#endif
 
-        // Publish the terminal edge now, before a sleeping/inactive object can
-        // stop its tracker and leave the last positive tenth in the snapshot.
-        if (Net.IsRunning && Net.IsServer && NetObjectRegistry.TryGetSyncInfo(__instance.gameObject, out var si))
-            si.EndFreshDrop();
+// Publish the terminal edge now, before a sleeping/inactive object can
+// stop its tracker and leave the last positive tenth in the snapshot.
+if (Net.IsRunning && Net.IsServer && NetObjectRegistry.TryGetSyncInfo(__instance.gameObject, out var si))
+si.EndFreshDrop();
 
-        if (__instance.rb != null) __instance.rb.gravityScale = 1;
+if (__instance.rb != null) __instance.rb.gravityScale = 1;
 
-        if (__instance.part != null) {
-            Component.Destroy(__instance.part.gameObject);
-        }
-        if (__instance.outline != null) { // cuz this part causes unecessary errors
-            Component.Destroy(__instance.outline.gameObject);
-        }
-
-        return false;
-    }
+if (__instance.part != null) {
+Component.Destroy(__instance.part.gameObject);
+}
+if (__instance.outline != null) { // cuz this part causes unecessary errors
+Component.Destroy(__instance.outline.gameObject);
 }
 
-
-
-
-
-
-
-
-
+return false;
+}
+}

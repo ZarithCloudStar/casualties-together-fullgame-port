@@ -22,130 +22,130 @@ namespace Together;
 [HarmonyPatch(typeof(Body), nameof(Body.UseItemInHand))]
 public static class Body_UseItemInHand_MultiplayerPatch {
 
-    public static bool IsUsingItemInHand = false;
+public static bool IsUsingItemInHand = false;
 
-    private static bool _hostLight;
-    private static ushort _hostLightId;
+private static bool _hostLight;
+private static ushort _hostLightId;
 
-    private struct StateHold {
-        public byte state;
-        public float until;
-    }
+private struct StateHold {
+public byte state;
+public float until;
+}
 
-    struct PendingUse {
-        public bool on;
-        public ushort item;
-        public knetid body;
-    }
+struct PendingUse {
+public bool on;
+public ushort item;
+public knetid body;
+}
 
-    static PendingUse _pending;
-    static readonly Dictionary<ushort, StateHold> StateHolds = new Dictionary<ushort, StateHold>();
+static PendingUse _pending;
+static readonly Dictionary<ushort, StateHold> StateHolds = new Dictionary<ushort, StateHold>();
 
-    // true while this byte is older than the click. the hold stays up for the whole wait,
-    // so a matching byte does not let an older one through afterwards.
-    internal static bool StaleState(ushort id, byte incoming) {
-        byte held;
-        if (!HeldState(id, out held)) {
-            return false;
-        }
-        return incoming != held;
-    }
+// true while this byte is older than the click. the hold stays up for the whole wait,
+// so a matching byte does not let an older one through afterwards.
+internal static bool StaleState(ushort id, byte incoming) {
+byte held;
+if (!HeldState(id, out held)) {
+return false;
+}
+return incoming != held;
+}
 
-    internal static void HoldState(ushort id, byte state) {
-        if (id == 0) {
-            return;
-        }
-        StateHolds[id] = new StateHold { state = state, until = Time.realtimeSinceStartup + 2f };
-    }
+internal static void HoldState(ushort id, byte state) {
+if (id == 0) {
+return;
+}
+StateHolds[id] = new StateHold { state = state, until = Time.realtimeSinceStartup + 2f };
+}
 
-    internal static bool HeldState(ushort id, out byte state) {
-        state = 0;
-        StateHold hold;
-        if (!StateHolds.TryGetValue(id, out hold)) {
-            return false;
-        }
-        if (Time.realtimeSinceStartup >= hold.until) {
-            StateHolds.Remove(id);
-            return false;
-        }
-        state = hold.state;
-        return true;
-    }
+internal static bool HeldState(ushort id, out byte state) {
+state = 0;
+StateHold hold;
+if (!StateHolds.TryGetValue(id, out hold)) {
+return false;
+}
+if (Time.realtimeSinceStartup >= hold.until) {
+StateHolds.Remove(id);
+return false;
+}
+state = hold.state;
+return true;
+}
 
-    // the click already ran. tell the host, and hold this copy until that round trip lands.
-    internal static void AnnouncePredictedUse(ushort itemId, knetid bodyNet) {
-        if (Net.IsServer || (itemId == 0)) {
-            return;
-        }
-        if (ItemSync.TryGetItemSyncInfo((knetid)itemId, out SyncInfo si) && (si is not null)) {
-            si.ArmPredictedUse();
-            if ((si.item is not null) && si.item.TryGetComponent(out CustomItemBehaviour cib) && ItemSync.CustomItemBehaviourStateCanBeJustByte(si.item)) {
-                HoldState(itemId, (byte)cib.state);
-            }
-        }
-        Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_RequestUseItem, (knetid)itemId, bodyNet, true);
-    }
+// the click already ran. tell the host, and hold this copy until that round trip lands.
+internal static void AnnouncePredictedUse(ushort itemId, knetid bodyNet) {
+if (Net.IsServer || (itemId == 0)) {
+return;
+}
+if (ItemSync.TryGetItemSyncInfo((knetid)itemId, out SyncInfo si) && (si is not null)) {
+si.ArmPredictedUse();
+if ((si.item is not null) && si.item.TryGetComponent(out CustomItemBehaviour cib) && ItemSync.CustomItemBehaviourStateCanBeJustByte(si.item)) {
+HoldState(itemId, (byte)cib.state);
+}
+}
+Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_RequestUseItem, (knetid)itemId, bodyNet, true);
+}
 
-    public static bool Prefix(Body __instance) {
-        _hostLight = false;
-        if (!Util.IsWorldGenerated()) { return false; }
+public static bool Prefix(Body __instance) {
+_hostLight = false;
+if (!Util.IsWorldGenerated()) { return false; }
 
-        if (!Net.IsRunning) return true;
-        
-        var body = __instance;
-        _pending.on = false;
+if (!Net.IsRunning) return true;
 
-        if (Util.IsBodyLocal(body)) { // its local 
+var body = __instance;
+_pending.on = false;
 
-            //OG: Body.UseItemInHand
-            if (body.conscious && body.GetItem(body.handSlot) is var item && item != null && item.Stats != null && item.Stats.usable && item.Stats.usableWithLMB) {
-                // guns still skip the next health snapshot. their shots already go out on their own.
-                if (CombatStuff.ItemIsUsedForAttacking(item) && NetObjectRegistry.TryGetSyncInfoOrRegister(item.gameObject, out var si))
-                    si.SetIgnoreTimeForRoundTrip();
-                else if (!Net.IsServer && !CombatStuff.ItemIsUsedForAttacking(item)
-                    && body.TryGetNetBody(out var nb) && nb.IsLocal
-                    && ItemSync.TryGetSyncInfo(item, out var useSi)) {
-                    // run the use here. the host confirms the same click after.
-                    _pending.on = true;
-                    _pending.item = useSi.syncId;
-                    _pending.body = nb.netId;
-                } else if (Net.IsServer && ItemSync.CustomItemBehaviourStateCanBeJustByte(item) && ItemSync.TryGetSyncInfo(item, out SyncInfo lightSi)) {
-                    // the host click never takes the request path. other clients still need the mode it landed on.
-                    _hostLight = true;
-                    _hostLightId = lightSi.syncId;
-                }
-            }
+if (Util.IsBodyLocal(body)) { // its local
 
-            IsUsingItemInHand = true;
-        } 
-        
-        return true;
-    }
-    public static void Postfix(Body __instance) {
-        if (!Net.IsRunning) return;
-        
-        if (_pending.on) {
-            AnnouncePredictedUse(_pending.item, _pending.body);
-            _pending.on = false;
-        }
-        if (_hostLight) {
-            _hostLight = false;
-            SyncInfo lightSi;
-            NetBody nb;
-            if (ItemSync.TryGetItemSyncInfo((knetid)_hostLightId, out lightSi) && __instance.TryGetNetBody(out nb)) {
-                Body_UseItem_MultiplayerPatch.SendLightMode(lightSi, nb);
-            }
-        }
-        
-        var body = __instance;
+//OG: Body.UseItemInHand
+if (body.conscious && body.GetItem(body.handSlot) is var item && item != null && item.Stats != null && item.Stats.usable && item.Stats.usableWithLMB) {
+// guns still skip the next health snapshot. their shots already go out on their own.
+if (CombatStuff.ItemIsUsedForAttacking(item) && NetObjectRegistry.TryGetSyncInfoOrRegister(item.gameObject, out var si))
+si.SetIgnoreTimeForRoundTrip();
+else if (!Net.IsServer && !CombatStuff.ItemIsUsedForAttacking(item)
+&& body.TryGetNetBody(out var nb) && nb.IsLocal
+&& ItemSync.TryGetSyncInfo(item, out var useSi)) {
+// run the use here. the host confirms the same click after.
+_pending.on = true;
+_pending.item = useSi.syncId;
+_pending.body = nb.netId;
+} else if (Net.IsServer && ItemSync.CustomItemBehaviourStateCanBeJustByte(item) && ItemSync.TryGetSyncInfo(item, out SyncInfo lightSi)) {
+// the host click never takes the request path. other clients still need the mode it landed on.
+_hostLight = true;
+_hostLightId = lightSi.syncId;
+}
+}
 
-        if (Net.IsServer) // is host or server
-        {
-        } else if (Util.GetLocalBody() == body) { // its local 
-            IsUsingItemInHand = false;
-        }
-        
-    }
+IsUsingItemInHand = true;
+}
+
+return true;
+}
+public static void Postfix(Body __instance) {
+if (!Net.IsRunning) return;
+
+if (_pending.on) {
+AnnouncePredictedUse(_pending.item, _pending.body);
+_pending.on = false;
+}
+if (_hostLight) {
+_hostLight = false;
+SyncInfo lightSi;
+NetBody nb;
+if (ItemSync.TryGetItemSyncInfo((knetid)_hostLightId, out lightSi) && __instance.TryGetNetBody(out nb)) {
+Body_UseItem_MultiplayerPatch.SendLightMode(lightSi, nb);
+}
+}
+
+var body = __instance;
+
+if (Net.IsServer) // is host or server
+{
+} else if (Util.GetLocalBody() == body) { // its local
+IsUsingItemInHand = false;
+}
+
+}
 }
 
 
@@ -154,173 +154,201 @@ public static class Body_UseItemInHand_MultiplayerPatch {
 
 [HarmonyPatch(typeof(Body), nameof(Body.UseItem))]
 public static class Body_UseItem_MultiplayerPatch {
-    public static Item current_used_item = null;
+public static Item current_used_item = null;
 
-    public static bool Prefix(Body __instance, ref SyncInfo __state, Item item) {
-        current_used_item = item;
-        __state = null;
+public static bool Prefix(Body __instance, ref SyncInfo __state, Item item) {
+current_used_item = item;
+__state = null;
 
-        if (!Util.IsWorldGenerated()) return false;
-        if (!Net.IsRunning) return true;
+if (!Util.IsWorldGenerated()) return false;
+if (!Net.IsRunning) return true;
 
-        if (item && __instance.TryGetNetBody(out var pb) && pb.IsLocal) { // check if its local
-            if (ItemSync.TryGetSyncInfo(item, out var si)) {
-                if (item.Stats.usable) {
-                    if (CombatStuff.ItemIsUsedForAttacking(item)) { // weapons are handled separately by the attack and gun shoot but whatever
-                        if (si.IsGun()) {
-                            var gst =  item.GetOrAddComponent<TrackerGunScript>();
-                            gst.body = __instance;
-                            gst.pbody = pb;
-                        }
-                        // Attack items commands are sent from the attack functions
-                    } else {
-                        __state = si;
+if (item && __instance.TryGetNetBody(out var pb) && pb.IsLocal) { // check if its local
+if (ItemSync.TryGetSyncInfo(item, out var si)) {
+if (item.Stats.usable) {
+if (CombatStuff.ItemIsUsedForAttacking(item)) { // weapons are handled separately by the attack and gun shoot but whatever
+if (si.IsGun()) {
+var gst = item.GetOrAddComponent<TrackerGunScript>();
+gst.body = __instance;
+gst.pbody = pb;
+}
+// attack items commands are sent from the attack functions
+} else {
+__state = si;
 
-                        pb.RollUseRandom();
-                    }
-                }
-            } else {
-                // it will check if the item is ignored for network
-                NetObjectRegistry.Client_DeleteUnregisteredSyncableObject(item.gameObject);
-            }
-        }
-        
-        return true;
-    }
-    public static void Postfix(Body __instance, ref SyncInfo __state, Item item) {
-        current_used_item = null;
-        if (__state != null) { // If is registered item and not an attack item 
+pb.RollUseRandom();
+}
+}
+} else {
+// it will check if the item is ignored for network
+NetObjectRegistry.Client_DeleteUnregisteredSyncableObject(item.gameObject);
+}
+}
 
-            // same click the hand path uses. local use already happened.
-            Body_UseItemInHand_MultiplayerPatch.AnnouncePredictedUse(__state.syncId, __instance.GetNetBody().netId);
+return true;
+}
+public static void Postfix(Body __instance, ref SyncInfo __state, Item item) {
+current_used_item = null;
+if (__state != null) { // if is registered item and not an attack item
 
-        }
-    }
+// same click the hand path uses. local use already happened.
+Body_UseItemInHand_MultiplayerPatch.AnnouncePredictedUse(__state.syncId, __instance.GetNetBody().netId);
 
-
-    [ServerReceiver((byte)NetmsgId.SERVER_RequestUseItem)]
-    static void Server_RequestUseItem(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-
-        reader.Get(out knetid item);
-        reader.Get(out knetid target_person);
-
-        if (
-            ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out var giverPlr, out var giver) && giver.body.conscious 
-            && NetBody.TryGetNetBodyFromId(target_person, out var target_nb) 
-            && NetObjectRegistry.TryGetSyncInfo(item, out var si) && si.go != null && si.IsItem()
-        ) {
-
-            if (
-                (giver == target_nb || !MedicalSync.IsRefusingHelp(target_nb.body)) 
-                && KM.DistanceCheck(giver, target_nb.body, SharedMain.max_player_interaction_distance * 1.6f) 
-                && (si.item.Stats.usable || si.item.Stats.wearable) 
-                && ItemSync.CheckIfBodyReachThisItem(si, giver.body) 
-                && !CombatStuff.ItemIsUsedForAttacking(si.item) 
-            ) {
-                var useItemFunc = () => {
-                    if (giver == target_nb && giver.IsLocal) {
-                        // Don't do it
-                    } else {
-                        ItemSync.BetterUseItem(target_nb.body, si.item);
-                    }
-                    
-                    if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(Vector2.Lerp(giver.position, target_nb.position, 0.5f), $"S: RequestUseItem {si}");
-
-                    byte lightState = 255;
-                    if ((si.go is not null) && (si.item is not null) && si.item.TryGetComponent(out CustomItemBehaviour light) && ItemSync.CustomItemBehaviourStateCanBeJustByte(si.item)) {
-                        lightState = (byte)light.state;
-                    }
-
-                    var writer = Net.CreateWriter(NetmsgId.CLIENT_RequestUseItemRelay);
-                    writer.Put(clientId);
-                    writer.Put(item);
-                    writer.Put(target_person);
-                    writer.Put(lightState);
-                    Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.GetListOfClientIdsExceptThisAndHost(clientId));
-                    // WRITER END;
-                };
+}
+}
 
 
-                if (Multiplayer.rules.ConsentForFeeding && target_nb != giver && target_nb.body.conscious && target_nb.IsPlayer) {
-                    ServerMain.PromptPlayer(target_nb.plr, "FEED_OFFER", 
-                        $"<body:{giver.netId}> <key:plrint_feed_prompt>", 
-                        $"<key:{(
-                                si.item.Stats.wearable ? "plrint_feed_receive_wearable" :
-                                (si.item.IsEdible() ? "plrint_feed_receive_food" :
-                                ((si.item.Stats.category == "water"
-                                ) ? "plrint_feed_receive_water"
-                                : "plrint_useitem"))
-                        )}> \"<item:{si.syncId}>\"", 
-                    (answer) => {
-                        if (answer == 0) {
-                            if (si.go == null) {
-                                giverPlr.Server_DoAlertSingle($"<bodyc:{target_nb.netId}> <key:giveitem_noitem>.");
-                                return;
-                            }
-                            if (ItemSync.ConfirmItemOffer(giver, target_nb, si.item)) {
-                                useItemFunc();
+[ServerReceiver((byte)NetmsgId.SERVER_RequestUseItem)]
+static void Server_RequestUseItem(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
 
-                                giverPlr.Server_DoAlertSingle($"<bodyc:{target_nb.netId}> <key:accepted>.");
-                            }
-                        } else {
-                            giverPlr.Server_DoAlertSingle($"<bodyc:{target_nb.netId}> <key:declined>.");
-                        }
-                    });
-                } else {
-                    useItemFunc();
-                }
-            } else { // at this point, real player should get an alert that they refuse
-                log.serverdeny($"RequestUseItem {giverPlr} -> {target_nb} - {si}", Vector2.Lerp(giverPlr.body.transform.position, target_nb.position, 0.5f));
-            }
-        }
-    }
-    [ClientReceiver((byte)NetmsgId.CLIENT_RequestUseItemRelay)]
-    static void Client_RequestUseItemRelay(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+reader.Get(out knetid item);
+reader.Get(out knetid target_person);
 
-        reader.Get(out knetid user);
-        reader.Get(out knetid item);
-        reader.Get(out knetid target);
-        // 255 means this use is not a light. older hosts omit the byte.
-        byte lightState = 255;
-        if (!reader.EndOfData) {
-            reader.Get(out lightState);
-        }
+if (
+ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out var giverPlr, out var giver) && giver.body.conscious
+&& NetBody.TryGetNetBodyFromId(target_person, out var target_nb)
+&& NetObjectRegistry.TryGetSyncInfo(item, out var si) && si.go != null && si.IsItem()
+) {
 
-        if (
-            NetBody.TryGetNetBodyFromId(target, out var target_nb) &&
-            NetObjectRegistry.TryGetSyncInfo(item, out var si) && si.go != null
-        ) {
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS && ScavPlayer.LocalPlayer != null) DebugHelp.OnNetEvent(Vector2.Lerp(ScavPlayer.LocalPlayer.body.transform.position, target_nb.position, 0.8f), $"C: RequestUseItemRelay {si}");
+if (
+(giver == target_nb || !MedicalSync.IsRefusingHelp(target_nb.body))
+&& KM.DistanceCheck(giver, target_nb.body, SharedMain.max_player_interaction_distance * 1.6f)
+&& (si.item.Stats.usable || si.item.Stats.wearable)
+&& ItemSync.CheckIfBodyReachThisItem(si, giver.body)
+&& !CombatStuff.ItemIsUsedForAttacking(si.item)
+) {
+var useItemFunc = () => {
+if (giver == target_nb && giver.IsLocal) {
+// don't do it
+} else {
+ItemSync.BetterUseItem(target_nb.body, si.item);
+}
 
-            // the relay used to run the toggle on its own. the snapshot still had the old mode, so the beam blinked.
-            if ((lightState != 255) && (si.item is not null) && si.item.TryGetComponent(out CustomItemBehaviour light)) {
-                light.state = lightState;
-                Body_UseItemInHand_MultiplayerPatch.HoldState(si.syncId, lightState);
-                Sound.Play("flashlighttoggle", si.item.transform.position);
-            } else {
-                ItemSync.BetterUseItem(target_nb.body, si.item);
-            }
-        }
-    }
+if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(Vector2.Lerp(giver.position, target_nb.position, 0.5f), $"S: RequestUseItem {si}");
 
-    internal static void SendLightMode(SyncInfo si, NetBody nb) {
-        if ((si is null) || (si.item is null) || !si.item.TryGetComponent(out CustomItemBehaviour light)) {
-            return;
-        }
-        knetid user = nb.plr != null ? nb.plr.playerId : default;
-        LiteNetLib.Utils.NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_RequestUseItemRelay);
-        writer.Put(user);
-        writer.Put(si.syncId);
-        writer.Put(nb.netId);
-        writer.Put((byte)light.state);
-        Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.GetListOfClientIdsExceptThisAndHost(user));
-    }
+byte lightState = 255;
+if ((si.go is not null) && (si.item is not null) && si.item.TryGetComponent(out CustomItemBehaviour light) && ItemSync.CustomItemBehaviourStateCanBeJustByte(si.item)) {
+lightState = (byte)light.state;
+}
+
+var writer = Net.CreateWriter(NetmsgId.CLIENT_RequestUseItemRelay);
+writer.Put(clientId);
+writer.Put(item);
+writer.Put(target_person);
+writer.Put(lightState);
+Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.GetListOfClientIdsExceptThisAndHost(clientId));
+// WRITER END;
+};
+
+
+if (Multiplayer.rules.ConsentForFeeding && target_nb != giver && target_nb.body.conscious && target_nb.IsPlayer) {
+ServerMain.PromptPlayer(target_nb.plr, "FEED_OFFER",
+$"<body:{giver.netId}> <key:plrint_feed_prompt>",
+$"<key:{(
+si.item.Stats.wearable ? "plrint_feed_receive_wearable" :
+(si.item.IsEdible() ? "plrint_feed_receive_food" :
+((si.item.Stats.category == "water"
+) ? "plrint_feed_receive_water"
+: "plrint_useitem"))
+)}> \"<item:{si.syncId}>\"",
+(answer) => {
+if (answer == 0) {
+if (si.go == null) {
+giverPlr.Server_DoAlertSingle($"<bodyc:{target_nb.netId}> <key:giveitem_noitem>.");
+return;
+}
+if (ItemSync.ConfirmItemOffer(giver, target_nb, si.item)) {
+useItemFunc();
+
+giverPlr.Server_DoAlertSingle($"<bodyc:{target_nb.netId}> <key:accepted>.");
+}
+} else {
+giverPlr.Server_DoAlertSingle($"<bodyc:{target_nb.netId}> <key:declined>.");
+}
+});
+} else {
+useItemFunc();
+}
+} else { // at this point, real player should get an alert that they refuse
+log.serverdeny($"RequestUseItem {giverPlr} -> {target_nb} - {si}", Vector2.Lerp(giverPlr.body.transform.position, target_nb.position, 0.5f));
+}
+}
+}
+[ClientReceiver((byte)NetmsgId.CLIENT_RequestUseItemRelay)]
+static void Client_RequestUseItemRelay(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+
+reader.Get(out knetid user);
+reader.Get(out knetid item);
+reader.Get(out knetid target);
+// 255 means this use is not a light. older hosts omit the byte.
+byte lightState = 255;
+if (!reader.EndOfData) {
+reader.Get(out lightState);
+}
+
+if (
+NetBody.TryGetNetBodyFromId(target, out var target_nb) &&
+NetObjectRegistry.TryGetSyncInfo(item, out var si) && si.go != null
+) {
+if (DebugHelp._DEV_VISUALISE_NET_EVENTS && ScavPlayer.LocalPlayer != null) DebugHelp.OnNetEvent(Vector2.Lerp(ScavPlayer.LocalPlayer.body.transform.position, target_nb.position, 0.8f), $"C: RequestUseItemRelay {si}");
+
+// the relay used to run the toggle on its own. the snapshot still had the old mode, so the beam blinked.
+if ((lightState != 255) && (si.item is not null) && si.item.TryGetComponent(out CustomItemBehaviour light)) {
+light.state = lightState;
+Body_UseItemInHand_MultiplayerPatch.HoldState(si.syncId, lightState);
+Sound.Play("flashlighttoggle", si.item.transform.position);
+} else {
+ItemSync.BetterUseItem(target_nb.body, si.item);
+}
+}
+}
+
+internal static void SendLightMode(SyncInfo si, NetBody nb) {
+if ((si is null) || (si.item is null) || !si.item.TryGetComponent(out CustomItemBehaviour light)) {
+return;
+}
+knetid user = nb.plr != null ? nb.plr.playerId : default;
+LiteNetLib.Utils.NetDataWriter writer = Net.CreateWriter(NetmsgId.CLIENT_RequestUseItemRelay);
+writer.Put(user);
+writer.Put(si.syncId);
+writer.Put(nb.netId);
+writer.Put((byte)light.state);
+Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.GetListOfClientIdsExceptThisAndHost(user));
+}
 
 }
 
 
+// body.Attack reads BuildingEntity.cantHit in its box and ray loops; those reads go through CantHitForSwing so the host can apply the attacker's rule.
+[HarmonyPatch(typeof(Body), nameof(Body.Attack))]
+public static class Body_Attack_CantHitPatch {
+static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
+FieldInfo cantHitField = AccessTools.Field(typeof(BuildingEntity), nameof(BuildingEntity.cantHit));
+MethodInfo cantHitForSwing = AccessTools.Method(typeof(Body_Attack_MultiplayerPatch), nameof(Body_Attack_MultiplayerPatch.CantHitForSwing));
+List<CodeInstruction> codes = new List<CodeInstruction>(instructions);
+int replaced = 0;
+foreach (CodeInstruction code in codes) {
+if (code.opcode == OpCodes.Ldfld && Equals(code.operand, cantHitField)) {
+code.opcode = OpCodes.Call;
+code.operand = cantHitForSwing;
+replaced++;
+}
+}
+if (replaced == 0) {
+log.warn("Body.Attack cantHit TRANSPILER: no cantHit read found, leaving stock IL");
+} else if (log.verbose) {
+log.l($"Body.Attack cantHit TRANSPILER replaced {replaced} reads");
+}
+return codes;
+}
+}
+
 [HarmonyPatch(typeof(Body), nameof(Body.Attack))]
 public static class Body_Attack_MultiplayerPatch {
+
+    // fastest swing in the game is the little laser, cooldown 0.1. that one is not a physical swing, so stims do not shorten it. 0.08 is a bit quicker than that.
+    const float AttackGapLimit = 0.08f;
+    static readonly Dictionary<knetid, double> LastAttackAt = new Dictionary<knetid, double>();
 
     public static void DoToolSpecificPVPDamage(Item used_tool, Limb target, float rule_mult, float multiplier_strength_vs_armor) {
         switch (used_tool.id) {
@@ -432,7 +460,7 @@ public static class Body_Attack_MultiplayerPatch {
             } else {
 
                 if (armstrength > 0.5f) { // strong enough
-                    DoToolSpecificPVPDamage(used_tool,target,rule_mult,multiplier_strength_vs_armor);
+                    DoToolSpecificPVPDamage(used_tool, target, rule_mult, multiplier_strength_vs_armor);
                 }
 
 
@@ -474,7 +502,7 @@ public static class Body_Attack_MultiplayerPatch {
 
             }
 
-            
+
 
             if (target.muscleHealth <= 5f && target.skinHealth <= 5f) { // if the limb is really damaged, allow to amputate it
                 if (Net.IsServer) {
@@ -484,8 +512,8 @@ public static class Body_Attack_MultiplayerPatch {
                 }
             }
 
-            
-            if (!target.body.conscious && target.body.isDying ) {
+
+            if (!target.body.conscious && target.body.isDying) {
                 if (target.body.alive) {
                     attacker.happiness -= Multiplayer.rules.PVPMoodDebuff;
                 }
@@ -496,7 +524,7 @@ public static class Body_Attack_MultiplayerPatch {
 
         }
 
-        var totaldamage = og_hp - (target.skinHealth + target.muscleHealth) ;
+        var totaldamage = og_hp - (target.skinHealth + target.muscleHealth);
 
         if (Net.IsServer) {
 
@@ -504,15 +532,15 @@ public static class Body_Attack_MultiplayerPatch {
                 if (target.muscleHealth < 40f && target.skinHealth < 30f) {
                     var hp = Mathf.Clamp01(1 - (target.muscleHealth + target.skinHealth) / 70) * 2.0f + 1.0f;
 
-                    var dmg = totaldamage * 0.03f * armstrength * hp ;
+                    var dmg = totaldamage * 0.03f * armstrength * hp;
                     target.body.internalBleeding += dmg;
                 }
             }
             if (target.muscleHealth < 20f && target.skinHealth < 20f) {
                 if (target.isHead) {
-                    var hp = Mathf.Clamp01(1 - (target.muscleHealth + target.skinHealth) / 40)*2.0f + 1.0f;
+                    var hp = Mathf.Clamp01(1 - (target.muscleHealth + target.skinHealth) / 40) * 2.0f + 1.0f;
 
-                    var dmg = totaldamage * 0.04f * armstrength * hp ;
+                    var dmg = totaldamage * 0.04f * armstrength * hp;
                     target.body.brainHealth -= dmg;
                 }
             }
@@ -535,52 +563,52 @@ public static class Body_Attack_MultiplayerPatch {
         return totaldamage; // return damage dealt for the damagenumber thingy
     }
 
-     
+
 
 
     //OG: Body.Attack
     public static float DamageBuilding(Body attacker, AttackInfo atk, BuildingEntity be, float armstrength, bool do_sound, Vector2 hitPos) {
 
-        if (be.TryGetComponent(out Rigidbody2D rb2d) && !attacker.IsBodyLocal()) {
-            Vector2 swingDirection = (attacker.targetLookPos - attacker.limbs[1].transform.position).normalized;
-            rb2d.AddForceAtPosition(swingDirection * armstrength * atk.knockBack, hitPos, ForceMode2D.Impulse);
-        }
+if (be.TryGetComponent(out Rigidbody2D rb2d) && !attacker.IsBodyLocal()) {
+Vector2 swingDirection = (attacker.targetLookPos - attacker.limbs[1].transform.position).normalized;
+rb2d.AddForceAtPosition(swingDirection * armstrength * atk.knockBack, hitPos, ForceMode2D.Impulse);
+}
 
-        var building_dmg = (be.animal ? atk.damage : atk.structuralDamage) * armstrength * ((atk.metalMoreDamage && be.metallic) ? 10f : 1f);
+var building_dmg = (be.animal ? atk.damage : atk.structuralDamage) * armstrength * ((atk.metalMoreDamage && be.metallic) ? 10f : 1f);
 
-        float healthBefore = be.GetHealth();
+float healthBefore = be.GetHealth();
 #if FULLGAME
-        TraderMoodEffects.RecordHit(be, attacker, healthBefore - building_dmg);
-        if (be.animal) EndingGuardSync.PlayerHit(be, attacker);
+TraderMoodEffects.RecordHit(be, attacker, healthBefore - building_dmg);
+if (be.animal) EndingGuardSync.PlayerHit(be, attacker);
 #endif
-        be.SetHealth(be.GetHealth() - building_dmg);
+be.SetHealth(be.GetHealth() - building_dmg);
 
-        if (Net.IsRunning && be != null) {
-            EvidenceBag.Arm();
-            EvidenceBag.Line("damage " + EvidenceBag.Side()
-                + " before=" + healthBefore.ToString("0.###")
-                + " minus=" + building_dmg.ToString("0.##")
-                + " local=" + Util.IsBodyLocal(attacker)
-                + " " + EvidenceBag.Building(be));
-        }
+if (Net.IsRunning && be != null) {
+EvidenceBag.Arm();
+EvidenceBag.Line("damage " + EvidenceBag.Side()
++ " before=" + healthBefore.ToString("0.###")
++ " minus=" + building_dmg.ToString("0.##")
++ " local=" + Util.IsBodyLocal(attacker)
++ " " + EvidenceBag.Building(be));
+}
 
-        if (do_sound) { 
-            Sound.Play(be.hitSound, be.transform.position);
-        }
+if (do_sound) {
+Sound.Play(be.hitSound, be.transform.position);
+}
 
-        if (be.animal) {
-            be.gameObject.SendMessage("AnimalHit", atk.damage * armstrength);
+if (be.animal) {
+be.gameObject.SendMessage("AnimalHit", atk.damage * armstrength);
 
-            {
-                //OG: Body.Attack V5t4  the part where it checks if the building is an animal,  since i override the attack function i have to do it here
-                attacker.attackCooldown *= 3.5f * atk.attackCooldownMult;
-                if (Util.IsBodyLocal(attacker))
-                    PlayerCamera.main.lastAttackCool = attacker.attackCooldown;
-            }
-        }
+{
+//OG: Body.Attack V5t4  the part where it checks if the building is an animal,  since i override the attack function i have to do it here
+attacker.attackCooldown *= 3.5f * atk.attackCooldownMult;
+if (Util.IsBodyLocal(attacker))
+PlayerCamera.main.lastAttackCool = attacker.attackCooldown;
+}
+}
 
-        return building_dmg;
-    }
+return building_dmg;
+}
 
 
     //OG: Body.Attack V5t4  the part where it assigns that float that is later multiplied everywhere in damage output
@@ -589,7 +617,7 @@ public static class Body_Attack_MultiplayerPatch {
 
         int slot = attacker.handSlot;
         if (atk.physicalSwing) {
-            
+
             var bonusStrength = Traverse.Create(attacker).Field("bonusStrength").GetValue<float>();
             totalArmPower = attacker.slots[slot].armPowerMult * (1f + bonusStrength * 0.166f);
             if (slot == 1) {
@@ -617,13 +645,13 @@ public static class Body_Attack_MultiplayerPatch {
         }
         if (atk.unarmed) {
 
-			attacker.clawHealth -= 0.3f;
-			if (attacker.clawHealth < 20f && UnityEngine.Random.value < 0.1f) {
-				attacker.slots[slot].limb.skinHealth -= 3f;
-				attacker.slots[slot].limb.muscleHealth -= 2f;
-				attacker.slots[slot].limb.pain += 12f;
-				attacker.slots[slot].limb.bleedAmount += UnityEngine.Random.Range(0.35f, 0.85f);
-			}
+            attacker.clawHealth -= 0.3f;
+            if (attacker.clawHealth < 20f && UnityEngine.Random.value < 0.1f) {
+                attacker.slots[slot].limb.skinHealth -= 3f;
+                attacker.slots[slot].limb.muscleHealth -= 2f;
+                attacker.slots[slot].limb.pain += 12f;
+                attacker.slots[slot].limb.bleedAmount += UnityEngine.Random.Range(0.35f, 0.85f);
+            }
 
         }
         if (atk.physicalSwing) {
@@ -635,7 +663,7 @@ public static class Body_Attack_MultiplayerPatch {
 
 
 
-    public static bool breakTheAttackLoop = false; 
+    public static bool breakTheAttackLoop = false;
 
 
     public static Body LastAttacker = null;
@@ -644,6 +672,11 @@ public static class Body_Attack_MultiplayerPatch {
     static Limb _LastHitLimb;
     static BuildingEntity _LastHitBuilding;
     static Vector2 _LastHitPos;
+    static bool _LastHitWasBlock;
+
+    // vanilla pickaxe AttackInfo.distance (Item.SetupItems). 2x so lag/lerp don't reject real hits.
+    public const float BlockHitReachReference = 5.2f;
+    public const float BlockHitMaxReach = BlockHitReachReference * 2f;
 
     class _MyAttackState {
         public float PlayerCamera_main_lastAttackCool = 0;
@@ -692,24 +725,12 @@ public static class Body_Attack_MultiplayerPatch {
 
     static bool BodyAttack_CheckIfItWasABuilding(RaycastHit2D hit) {
         var b = hit.collider.GetComponent<BuildingEntity>();
-        if (b != null ) {
-#if FULLGAME
-            // Corpse Start uses the camera's character. Static-hit replay on a
-            // non-Dune host therefore rejects a guest Dune's perfectly valid hit.
-            // Resolve permission from this swing, and send the existing entity hit.
-            bool corpseHit = CorpseCombat.IsHumanCorpse(b);
-            if (corpseHit) b.cantHit = !CorpseCombat.CanHit(b, LastAttacker);
-#endif
+        if (b != null) {
             if (b.cantHit) {
                 return false;
             }
             var islocal = Util.IsBodyLocal(LastAttacker);
             var isphysactive = ScavMPBuildingSynchronizer.BuildingHasActivePhysics(b);
-#if FULLGAME
-            // A static trader also needs an explicit hit: the actor must survive
-            // server validation so death XP/regret belong to the actual killer.
-            isphysactive |= corpseHit || b.GetComponent<TraderScript>() != null;
-#endif
 
             if (islocal) {
                 if (b.TryGetSyncInfo(out var si)) {
@@ -717,10 +738,11 @@ public static class Body_Attack_MultiplayerPatch {
                 }
             }
 
-            if (StaticHitValidation && isphysactive) {
-                return true; // skip it
+            // the client reported nothing for this swing, so nobody else applies the damage: let the vanilla code do it on the host copy.
+            if (StaticHitValidation) {
+                return false;
             }
-      
+
             if (isphysactive) {
                 _LastHitBuilding = b;
                 _LastHitPos = hit.point;
@@ -728,35 +750,204 @@ public static class Body_Attack_MultiplayerPatch {
                 return true; // i will apply damage myself im my handlers
             }
 
-
+            // local MP swing: skip vanilla static damage. Host loopbacks SERVER_PlayerBodyAttack
+            // onto the same world - vanilla + ServerReceiver was double-hitting.
+            // pure clients predict in Postfix; server applies once for everyone.
+            if (islocal) {
+                _LastHitBuilding = b;
+                _LastHitPos = hit.point;
+                breakTheAttackLoop = true;
+                return true;
+            }
 
             return false;// do the damage for static hit validation
         }
         return false;
     }
-    
-   public  static bool StaticHitValidation = false;
+
+    public static bool StaticHitValidation = false;
+
+    const int CorpseHitCharType = 2; // corpseScript.Start: only a Dune can hit a world corpse
+    static Body hostRerunAttacker;
+
+    // corpseScript.Start sets cantHit from this machine's own player, so a non-Dune host never hits a corpse for a Dune client.
+    // while the host re-runs a client swing the attacker's species decides instead; Body.Attack calls this in place of reading cantHit.
+    public static bool CantHitForSwing(BuildingEntity building) {
+        if (hostRerunAttacker != null && building.TryGetComponent(out CorpseScript corpse) && !corpse.animalCorpse) {
+            return hostRerunAttacker.charType != CorpseHitCharType;
+        }
+        return building.cantHit;
+    }
 
     // return false to do the vanilla shit
     public static bool BodyAttack_DidHitSomething(RaycastHit2D hit) {
         if (!Net.IsRunning) return false;
 
-        if (!StaticHitValidation && BodyAttack_CheckIfItWasABody(hit)) { 
+        if (!StaticHitValidation && BodyAttack_CheckIfItWasABody(hit)) {
             return true;
         }
         if (BodyAttack_CheckIfItWasABuilding(hit)) {
             return true;
         }
-            
+
+        // latch the cell for SERVER_PlayerBodyAttack. Host must skip vanilla DamageBlock -
+        // client_Send loopbacks onto the same world so ServerReceiver would apply a second time.
+        // pure clients still predict via vanilla; their PlayerDamageBlockRelay self-confirm is ignored.
+        if (hit.collider != null && hit.collider.CompareTag("BlockGround")) {
+            _LastHitPos = hit.point;
+            _LastHitWasBlock = true;
+            if (Net.IsServer && Util.IsBodyLocal(LastAttacker)) {
+                breakTheAttackLoop = true;
+                return true;
+            }
+        }
+
         // let it apply all the damages and allat
 
         return false;
     }
 
 
-    public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator il) {
-        return PatternTranspilers.BodyAttack(instructions, il);
+    static int LabelTargetIndex(List<CodeInstruction> codes, Label label) {
+        for (int k = 0; k < codes.Count; k++) {
+            if (codes[k].labels.Contains(label)) {
+                return k;
+            }
+        }
+        return -1;
     }
+
+    public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator il) {
+        List<CodeInstruction> codes = new List<CodeInstruction>(instructions);
+
+        // fullgame adds an auto-aim raycast loop before the real hit loop, so the old
+        // createCloudSmall+piercing no longer lands on the attack we care about.
+        int loop_entry = -1;
+        int loop_head = -1;
+        int loop_backedge = -1;
+        int found_loops = 0;
+        bool loopHasForwardShape = false;
+        for (int k = 2; k < codes.Count; k++) {
+            if (codes[k].opcode == OpCodes.Br && codes[k].operand is Label && codes[k - 1].opcode == OpCodes.Stloc_S &&
+                (codes[k - 2].opcode == OpCodes.Ldc_I4_0 || codes[k - 2].opcode == OpCodes.Ldc_I4_S || codes[k - 2].opcode == OpCodes.Ldc_I4)) {
+                int head = LabelTargetIndex(codes, (Label)codes[k].operand);
+                if (head < 0) {
+                    continue;
+                }
+                // game 1.0 compiles `for` as `br TEST; BODY; TEST: blt BODY`: the br points forward and the body starts right after it. Accepting only a backward br found no loop, so the hook was never inserted.
+                bool forwardShape = head > k;
+                if (forwardShape) {
+                    head = k + 1;
+                }
+
+                bool raycastLoop = false;
+                int backedge = -1;
+                for (int b = head; b < codes.Count; b++) {
+                    if (codes[b].opcode == OpCodes.Stloc_S && codes[b].operand is LocalBuilder hl && hl.LocalType == typeof(RaycastHit2D)) {
+                        raycastLoop = true;
+                    }
+                    if ((codes[b].opcode == OpCodes.Blt || codes[b].opcode == OpCodes.Blt_S || codes[b].opcode == OpCodes.Blt_Un || codes[b].opcode == OpCodes.Blt_Un_S) &&
+                        codes[b].operand is Label back && LabelTargetIndex(codes, back) == head) {
+                        backedge = b;
+                        break;
+                    }
+                }
+                if (!raycastLoop || backedge < 0) {
+                    continue;
+                }
+
+                found_loops++;
+                // keep the latest match: demo has one hit loop, fullgame's second is the real attack after auto-aim.
+                loop_entry = k;
+                loop_head = head;
+                loop_backedge = backedge;
+                loopHasForwardShape = forwardShape;
+                if (found_loops >= 2) {
+                    break;
+                }
+            }
+        }
+
+        int realhit_check_pos = -1;
+        for (int k = loop_head; k > 0 && loop_head >= 0 && k < loop_backedge && realhit_check_pos < 0; k++) {
+            if (codes[k].opcode == OpCodes.Stloc_S && codes[k].operand is LocalBuilder hl && hl.LocalType == typeof(RaycastHit2D)) {
+                realhit_check_pos = k;
+            }
+        }
+        int rayhitresult_pos = -1;
+        for (int k = realhit_check_pos + 1; k < loop_backedge && realhit_check_pos >= 0 && rayhitresult_pos < 0; k++) {
+            if (codes[k].opcode == OpCodes.Ldloca_S && Equals(codes[k].operand, codes[realhit_check_pos].operand)) {
+                rayhitresult_pos = k;
+            }
+        }
+
+        int current_hit_skip_target = -1;
+        for (int m = realhit_check_pos + 1; m < loop_backedge && current_hit_skip_target < 0; m++) {
+            if (codes[m].operand is Label l2 && LabelTargetIndex(codes, l2) > m && LabelTargetIndex(codes, l2) <= loop_backedge &&
+                (codes[m].opcode == OpCodes.Brfalse || codes[m].opcode == OpCodes.Brfalse_S || codes[m].opcode == OpCodes.Brtrue ||
+                 codes[m].opcode == OpCodes.Brtrue_S || codes[m].opcode == OpCodes.Br || codes[m].opcode == OpCodes.Br_S)) {
+                current_hit_skip_target = m;
+            }
+        }
+
+        int continuejump_pos = -1;
+        if (loopHasForwardShape && loop_backedge >= 0 && loop_backedge + 1 < codes.Count) {
+            // leave the loop by falling through to the code after it: the next branch in this shape goes to the end of the method and would skip the knockback and experience that follow.
+            continuejump_pos = loop_backedge + 1;
+        }
+        for (int k = loop_backedge + 1; k < codes.Count && continuejump_pos < 0; k++) {
+            if (codes[k].opcode == OpCodes.Brfalse || codes[k].opcode == OpCodes.Brfalse_S ||
+                codes[k].opcode == OpCodes.Brtrue || codes[k].opcode == OpCodes.Brtrue_S ||
+                codes[k].opcode == OpCodes.Br || codes[k].opcode == OpCodes.Br_S) {
+                continuejump_pos = k;
+            }
+        }
+
+        if (realhit_check_pos < 0 || rayhitresult_pos < 0 || loop_head < 0 || current_hit_skip_target < 0 || continuejump_pos < 0) {
+            log.warn("Body.Attack TRANSPILER: hit-loop markers not found, leaving stock IL");
+            return codes;
+        }
+
+        if (log.verbose) {
+            log.l($"Body.Attack TRANSPILER found hit check {realhit_check_pos} (loops={found_loops}, entry={loop_entry})");
+        }
+
+        {
+            Label skipHitLabel = (Label)codes[current_hit_skip_target].operand;
+            Label stopLoopLabel;
+            if (loopHasForwardShape) {
+                stopLoopLabel = il.DefineLabel();
+                codes[continuejump_pos].labels.Add(stopLoopLabel);
+            } else {
+                stopLoopLabel = (Label)codes[continuejump_pos].operand;
+            }
+
+            List<CodeInstruction> injected = new List<CodeInstruction>();
+
+            CodeInstruction loadHit = new CodeInstruction(OpCodes.Ldloc_S, codes[realhit_check_pos].operand);
+            loadHit.MoveLabelsFrom(codes[rayhitresult_pos]);
+            injected.Add(loadHit);
+            injected.Add(new CodeInstruction(OpCodes.Call,
+                AccessTools.Method(typeof(Body_Attack_MultiplayerPatch), nameof(Body_Attack_MultiplayerPatch.BodyAttack_DidHitSomething))));
+
+            Label endofpatch_label = il.DefineLabel();
+            injected.Add(new CodeInstruction(OpCodes.Brfalse_S, endofpatch_label));
+            injected.Add(new CodeInstruction(OpCodes.Ldsfld, AccessTools.Field(typeof(Body_Attack_MultiplayerPatch), nameof(breakTheAttackLoop))));
+            injected.Add(new CodeInstruction(OpCodes.Brfalse, skipHitLabel));
+            injected.Add(new CodeInstruction(OpCodes.Br, stopLoopLabel));
+
+            codes.InsertRange(rayhitresult_pos, injected);
+            codes[rayhitresult_pos + injected.Count].labels.Add(endofpatch_label);
+        }
+
+        if (log.verbose) {
+            log.l($"Body.Attack patched at {rayhitresult_pos}, hit load {realhit_check_pos}, continue {continuejump_pos}");
+        }
+
+        log.l($"TRANSPILER: Body.Attack TRANSPILER SUCCESS :) ");
+        return codes;
+    }
+
 
 
 
@@ -765,9 +956,11 @@ public static class Body_Attack_MultiplayerPatch {
     public static bool ForceOnlyRetrieveAttackInfo = false;
 
     static bool Prefix(Body __instance, ref bool __result, ref AttackInfo atk, int slot, ref _MyAttackState __state) {
-        
+
         LastAttackInfo = atk;
         LastAttacker = __instance;
+        if (Util.IsBodyLocal(__instance))
+            BlockDamageAuthority.BeginLocalSwing();
 
         __state = new _MyAttackState {
             PlayerCamera_main_lastAttackCool = PlayerCamera.main.lastAttackCool,
@@ -859,13 +1052,13 @@ public static class Body_Attack_MultiplayerPatch {
                         if (Net.IsClient && _LastHitLimb.TryGetNetBody(out var pb) && attackerIsLocal) {
                             pb.SetNetHealthSyncIgnoreTime();
                         }
-                        
+
                     } else if (_LastHitBuilding != null) {
 
-                        var totaldmg = DamageBuilding(__instance, __state.atk, _LastHitBuilding, __state.atkpwr, true, _LastHitPos);
+                        float totaldmg = DamageBuilding(__instance, __state.atk, _LastHitBuilding, __state.atkpwr, true, _LastHitPos);
                         WorldGeneration.CreateDamageNumber((Vector2)_LastHitBuilding.transform.position + Vector2.up * 2, (int)totaldmg);
 
-                        if (Net.IsClient && NetObjectRegistry.TryGetSyncInfo(_LastHitBuilding, out  var b_si)) {
+                        if (Net.IsClient && NetObjectRegistry.TryGetSyncInfo(_LastHitBuilding, out var b_si)) {
                             b_si.SetIgnoreTimeForRoundTrip();
                             EvidenceBag.Line("hit client ignore sync=" + b_si.syncId + " " + EvidenceBag.Building(_LastHitBuilding));
                         } else if (_LastHitBuilding != null) {
@@ -875,7 +1068,7 @@ public static class Body_Attack_MultiplayerPatch {
 
                 }
 
-                if (Util.IsBodyLocal(__instance) ) {
+                if (Util.IsBodyLocal(__instance)) {
                     AnyObjectNetId victim_netid = new AnyObjectNetId();
                     {
                         if (_LastHitLimb != null) {
@@ -885,9 +1078,11 @@ public static class Body_Attack_MultiplayerPatch {
                         } else if (_LastHitBuilding != null) {
                             if (NetObjectRegistry.TryGetSyncInfoOrRegister(_LastHitBuilding, out var victim_si)) {
                                 victim_netid = new AnyObjectNetId(victim_si);
-                                victim_si.relaxed_combat_sync = true; 
+                                victim_si.relaxed_combat_sync = true;
                                 victim_si.SetIgnoreTimeForRoundTrip();
                             }
+                        } else if (_LastHitWasBlock) {
+                            victim_netid = AnyObjectNetId.ForBlockHit();
                         }
                     }
 
@@ -906,7 +1101,7 @@ public static class Body_Attack_MultiplayerPatch {
                             writer.Put(si1.syncId);
 
                             si1.SetIgnoreTimeForRoundTrip();
-                        } else if ( holditem != null && holditem.Stats.usable && CombatStuff.ItemIsUsedForAttacking(holditem) && NetObjectRegistry.TryGetSyncInfo(holditem.gameObject, out var si)) {
+                        } else if (holditem != null && holditem.Stats.usable && CombatStuff.ItemIsUsedForAttacking(holditem) && NetObjectRegistry.TryGetSyncInfo(holditem.gameObject, out var si)) {
                             writer.Put(si.syncId);
 
                             si.SetIgnoreTimeForRoundTrip();
@@ -919,6 +1114,7 @@ public static class Body_Attack_MultiplayerPatch {
                         writer.Put(victim_netid);
 
                         writer.Put(_LastHitPos);
+                        writer.Put(BlockDamageAuthority.TakeLocalBlockDamage());
 
                         if (_LastHitBuilding != null)
                             EvidenceBag.Line("hit send " + EvidenceBag.Side() + " victim=" + victim_netid + " " + EvidenceBag.Building(_LastHitBuilding));
@@ -931,16 +1127,17 @@ public static class Body_Attack_MultiplayerPatch {
 #endif
                     }
 
-                } 
+                }
             }
         }
         _LastHitBuilding = null;
         _LastHitLimb = null;
+        _LastHitWasBlock = false;
     }
-    
-    
-    
-    
+
+
+
+
     // this entire melee system is dependent on the fact that no weapon has the piercing flag :skullemoji:
     [ServerReceiver((byte)NetmsgId.SERVER_PlayerBodyAttack)]
     static void ServerReceiver_PlayerBodyAttack(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
@@ -949,13 +1146,16 @@ public static class Body_Attack_MultiplayerPatch {
         bool attackerAwake = gotAttacker && plr.body != null && plr.body.conscious;
         if (worldReady && gotAttacker && attackerAwake) {
 
-            if (plr.body.attackCooldown > 0 && !pb.IsLocal) {
-
-                EvidenceBag.Line("hit server cooldown client=" + clientId + " cd=" + plr.body.attackCooldown.ToString("0.###"));
-                if (log.verbose) // TODO, for some reason it engages even when not sus !!
-                    log.sus($"PlayerBodyAttack {plr} is attacking too fast, cur cooldown: {plr.body.attackCooldown}");
-
-                return;
+            if (!pb.IsLocal) {
+                double now = Time.realtimeSinceStartupAsDouble;
+                double gap = LastAttackAt.TryGetValue(clientId, out double prev) ? now - prev : AttackGapLimit;
+                if (gap < AttackGapLimit) {
+                    EvidenceBag.Line("hit server cooldown client=" + clientId + " gap=" + gap.ToString("0.###"));
+                    if (log.verbose)
+                        log.sus($"PlayerBodyAttack {plr} is attacking too fast, gap: {gap:0.###}");
+                    return;
+                }
+                LastAttackAt[clientId] = now;
             }
 
 
@@ -967,6 +1167,7 @@ public static class Body_Attack_MultiplayerPatch {
             reader.Get(out bool didhit); // unused?
             reader.Get(out AnyObjectNetId hitobj);
             reader.Get(out Vector2 hitPos);
+            reader.Get(out float clientReportedBlockDamage);
             // later is read netlimb or buildingid
 
             if (targetlookpos.IsFinite() && limb1pos.IsFinite() && dist_dont_use.IsFinite() && hitPos.IsFinite()) {
@@ -999,7 +1200,7 @@ public static class Body_Attack_MultiplayerPatch {
             ForceOnlyRetrieveAttackInfo = true;
             if (tool_si == null) {
 #if DEBUG
-                Plugin.log.LogWarning($"DOING UNARMED {CombatStuff.default_unarmed_attackinfo?.damage }");
+                Plugin.log.LogWarning($"DOING UNARMED {CombatStuff.default_unarmed_attackinfo?.damage}");
 #endif
                 plr.body.Attack(CombatStuff.default_unarmed_attackinfo, plr.body.handSlot);
             } else {
@@ -1024,13 +1225,39 @@ public static class Body_Attack_MultiplayerPatch {
 
             bool didhitconfirmed = false;
 
-            if (hitobj.IsNothing()) { // At most we hit something static
+            if (hitobj.IsBlockHit()) {
+                // client reported the block cell via hitPos. don't re-raycast (chunk sleep / pose lag miss).
+                Body_Attack_MultiplayerPatch.ForceOnlyStaminaUse = true;
+                Vector2 applyAt = hitPos;
+                if (applyAt.IsFinite()
+                    && (KM.DistanceCheck(limb1pos, applyAt, BlockHitMaxReach)
+                        || KM.DistanceCheck((Vector2)plr.body.transform.position, applyAt, BlockHitMaxReach))
+                ) {
+                    // vanilla offsets the hit a hair along the swing so edge hits land in the right cell
+                    var blockPos = WorldGeneration.world.WorldToBlockPos(applyAt + atkdir * 0.05f);
+                    if (WorldGeneration.world.GetBlock(blockPos) == 0)
+                        blockPos = WorldGeneration.world.WorldToBlockPos(applyAt);
+                    if (WorldGeneration.world.GetBlock(blockPos) != 0) {
+                        float blockDmg = BlockDamageAuthority.ChooseBlockDamage(atkinfo.structuralDamage * attackpower, clientReportedBlockDamage, clientId);
+                        WorldGenerationDamageBlockAnnouncePatch.cur_damaging_netbody = pb;
+                        try {
+                            WorldGeneration.world.DamageBlock(blockPos, blockDmg, true, atkinfo.metalMoreDamage);
+                        } finally {
+                            WorldGenerationDamageBlockAnnouncePatch.cur_damaging_netbody = null;
+                        }
+                        WorldGeneration.CreateDamageNumber(
+                            (Vector2)WorldGeneration.world.BlockToWorldPos(blockPos) + Vector2.up * 2f,
+                            (int)blockDmg);
+                        didhitconfirmed = true;
+                    }
+                }
+            } else if (hitobj.IsNothing()) { // legacy: static buildings/blocks without a block id
                 Body_Attack_MultiplayerPatch.StaticHitValidation = true; // client doesnt tell if they hit static buildings or blocks, server can figure it out on their own
             } else if (hitobj.TryGetLimb(out var victimlimb)) {
                 Body_Attack_MultiplayerPatch.ForceOnlyStaminaUse = true; // we know the hit
 
                 if (
-                    victimlimb.TryGetNetBody( out var victimpb) 
+                    victimlimb.TryGetNetBody(out var victimpb)
                     && KM.DistanceCheck(plr.body, victimpb.body, 15)
                 ) {
 
@@ -1047,7 +1274,7 @@ public static class Body_Attack_MultiplayerPatch {
                             });
                             Net.Server_SendToClients(DeliveryMethod.Unreliable, wr, victimpb.plr.playerId);
                         }
-                    
+
                         if (!victimpb.IsLocal) {
                             DoKnockback(victimlimb.body, new BodyKnockbackPacket { Velocity = knock });
                         }
@@ -1057,7 +1284,7 @@ public static class Body_Attack_MultiplayerPatch {
                         MedicalSync.Server_QueueSendCharacterHealth(victimpb, true);
                         didhitconfirmed = true;
                     }
-                    
+
                 }
 
             } else if (hitobj.TryGetSyncInfo(out var building_si) && building_si.IsBuilding()) {
@@ -1068,11 +1295,7 @@ public static class Body_Attack_MultiplayerPatch {
 
                 bool inRange = KM.DistanceCheck(plr.body, building_si, 15);
                 float healthBefore = building_si.building != null ? building_si.building.GetHealth() : -1f;
-                if (inRange
-#if FULLGAME
-                    && CorpseCombat.CanHit(building_si.building, plr.body)
-#endif
-                ) {
+                if (inRange) {
 #if DEBUG
                     log.l($"{plr}  CALLED DamageBuilding ");
 #endif
@@ -1080,21 +1303,21 @@ public static class Body_Attack_MultiplayerPatch {
                         hitPos = rb2d.ClosestPoint(hitPos);
                     }
 
-                    var totaldmg = DamageBuilding(plr.body, atkinfo, building_si.building, attackpower, true, hitPos);
+                    float totaldmg = DamageBuilding(plr.body, atkinfo, building_si.building, attackpower, true, hitPos);
                     didhitconfirmed = true;
 
 
                     WorldGeneration.CreateDamageNumber((Vector2)building_si.building.transform.position + Vector2.up * 2, (int)totaldmg);
 
 
-                    //NetObjectRegistry.Server_QueueSync(building_si);
+                    //netObjectRegistry.Server_QueueSync(building_si);
                     EvidenceBag.Line("hit server apply dmg=" + totaldmg.ToString("0.##") + " before=" + healthBefore.ToString("0.###") + " client=" + clientId + " " + EvidenceBag.Building(building_si.building));
                 } else {
                     EvidenceBag.Line("hit server range client=" + clientId + " before=" + healthBefore.ToString("0.###") + " " + EvidenceBag.Building(building_si.building));
                 }
             } else if (hitobj.type == 3) {
                 EvidenceBag.Line("hit server unresolved client=" + clientId + " " + hitobj);
-            } 
+            }
 
 
 #if DEBUG
@@ -1106,10 +1329,15 @@ public static class Body_Attack_MultiplayerPatch {
 
             plr.body.limbs[1].transform.position = limb1pos;
             plr.body.targetLookPos = targetlookpos;
-            if (tool_si == null) {
-                plr.body.Attack(CombatStuff.default_unarmed_attackinfo, plr.body.handSlot);
-            } else {
-                ItemSync.BetterUseItem(pb.body, tool_si.item);
+            try {
+                Body_Attack_MultiplayerPatch.hostRerunAttacker = plr.body;
+                if (tool_si == null) {
+                    plr.body.Attack(CombatStuff.default_unarmed_attackinfo, plr.body.handSlot);
+                } else {
+                    ItemSync.BetterUseItem(pb.body, tool_si.item);
+                }
+            } finally {
+                Body_Attack_MultiplayerPatch.hostRerunAttacker = null;
             }
 
             if (!LastAttackResult && // if the flag wasnt true
@@ -1156,7 +1384,7 @@ public static class Body_Attack_MultiplayerPatch {
         reader.Get(out Vector2 targetlookpos);
 
         if (
-                     ScavPlayer.TryGetPlayerAndNetBodyFromClientId(attacker, out var plr, out var pb) 
+                     ScavPlayer.TryGetPlayerAndNetBodyFromClientId(attacker, out var plr, out var pb)
         ) {
             pb.body.attackCooldown = 0;
 
@@ -1165,7 +1393,7 @@ public static class Body_Attack_MultiplayerPatch {
 #endif
 
             SyncInfo tool_si;
-            if (not_unarmed && NetObjectRegistry.TryGetSyncInfo(tool_syncid, out tool_si) && tool_si.go != null && tool_si.IsItem() && CombatStuff.ItemIsUsedForAttacking(tool_si.item) ) {
+            if (not_unarmed && NetObjectRegistry.TryGetSyncInfo(tool_syncid, out tool_si) && tool_si.go != null && tool_si.IsItem() && CombatStuff.ItemIsUsedForAttacking(tool_si.item)) {
 #if DEBUG
                 Plugin.log.LogWarning($"PlayerBodyAttack_Relay  CONFIRMED THAT THEY USED A TOOL FOR ATTACK  {tool_si}  ");
 #endif
@@ -1199,7 +1427,7 @@ public static class Body_Attack_MultiplayerPatch {
         if (
             locsci != null && locsci.body
         ) {
-            
+
             DoKnockback(locsci.body, knockback);
         }
     }
@@ -1230,7 +1458,7 @@ public static class Body_Attack_MultiplayerPatch {
         for (int i = 0; i < array.Length; i++) {
             array[i].rb.velocity += knockback.Velocity;
         }
-        
+
     }
 
 
@@ -1254,262 +1482,262 @@ public static class Body_Attack_MultiplayerPatch {
 // !!! current solution relies that   shotsPerFire is only used once in the gun script!!!!
 
 public class TrackerGunScript : BaseComponentTracker<GunScript> {
-    public int shotsPerFire { get; private set; }
-    public SyncInfo si => tracker.syncInfo;
-    public BodyGetterOverrider bgo => this.GetOrAddComponent<BodyGetterOverrider>();
-    public Item item => this.GetComponent<Item>();
-    public NetBody pbody {
-        get {
-            var b = bgo.body;
-            if (b != null) {
-                return b.GetNetBody();
-            }
-            return null;
-        }
-        set {
-            bgo.body = value.body;
-        }
-    }
-    public Body body {
-        get {
-            return bgo.GetBody();
-		}
-        set {
-            bgo.body = value;
-		}
-    }
+public int shotsPerFire { get; private set; }
+public SyncInfo si => tracker.syncInfo;
+public BodyGetterOverrider bgo => this.GetOrAddComponent<BodyGetterOverrider>();
+public Item item => this.GetComponent<Item>();
+public NetBody pbody {
+get {
+var b = bgo.body;
+if (b != null) {
+return b.GetNetBody();
+}
+return null;
+}
+set {
+bgo.body = value.body;
+}
+}
+public Body body {
+get {
+return bgo.GetBody();
+}
+set {
+bgo.body = value;
+}
+}
 
-    public bool isEquipped {
-        get {
-            var b = body;
-            if (b == null) {
-                return false;
-            }
-            return body.GetItem(body.handSlot)?.transform == transform;
-        }
-    }
+public bool isEquipped {
+get {
+var b = body;
+if (b == null) {
+return false;
+}
+return body.GetItem(body.handSlot)?.transform == transform;
+}
+}
 
-    public bool override_shoot_trajectory = false;
-    public Vector2 override_shoot_trajectory_origin = Vector2.left;
-    public Vector2 override_shoot_trajectory_direction = Vector2.left;
+public bool override_shoot_trajectory = false;
+public Vector2 override_shoot_trajectory_origin = Vector2.left;
+public Vector2 override_shoot_trajectory_direction = Vector2.left;
 
-    public bool send_racked_state = false; // queue to send a racked state, set from TryRack 
-
-
-    // this calls the body getter overrider
-    public Body GetBody() {
-        return body;
-    }
-
-    public bool IsShotgun() {
-        return shotsPerFire > 2;
-    }
+public bool send_racked_state = false; // queue to send a racked state, set from TryRack
 
 
-    protected override void TrackerAwake() {   
-        shotsPerFire = og.shotsPerFire;
-        og.shotsPerFire = 0; // the gun wont shoot anymore
+// this calls the body getter overrider
+public Body GetBody() {
+return body;
+}
+
+public bool IsShotgun() {
+return shotsPerFire > 2;
+}
 
 
-        InvokeRepeating("SlowUpdate", 1.0f, 0.1f);
-    }
+protected override void TrackerAwake() {
+shotsPerFire = og.shotsPerFire;
+og.shotsPerFire = 0; // the gun wont shoot anymore
+
+
+InvokeRepeating("SlowUpdate", 1.0f, 0.1f);
+}
 
 
 
-    public void ScanForBody() {
-        if (bgo.TryGetBodyFromParent()) {
-            return;
-        }
+public void ScanForBody() {
+if (bgo.TryGetBodyFromParent()) {
+return;
+}
 
-        if (ScavPlayer.GetDistanceToNearestLivingPlayer(transform.position).Item1 is var plr && plr != null) {
-            pbody = plr.netBody;
-            return;
-        }
+if (ScavPlayer.GetDistanceToNearestLivingPlayer(transform.position).Item1 is var plr && plr != null) {
+pbody = plr.netBody;
+return;
+}
 
-        body = PlayerCamera.main.body;
-    }
+body = PlayerCamera.main.body;
+}
 
-    // run every 0.1 secs
-    void SlowUpdate() {
+// run every 0.1 secs
+void SlowUpdate() {
 
-        if (gameObject.TryGetTracker(out var tracker) && tracker.isNearby ) { // gun is equipped
+if (gameObject.TryGetTracker(out var tracker) && tracker.isNearby) { // gun is equipped
 
-            if (isEquipped) {
+if (isEquipped) {
 
-                if (Multiplayer.rules.PVP) { // do the scare effect i thought about if having gun close to a face
-                    float rightorleft = (body.isRight ? 1f : (-1f));
-                    var gunlook = og.transform.right * rightorleft;
+if (Multiplayer.rules.PVP) { // do the scare effect i thought about if having gun close to a face
+float rightorleft = (body.isRight ? 1f : (-1f));
+var gunlook = og.transform.right * rightorleft;
 
-                    var rayhits = Physics2D.RaycastAll(og.barrel.position, gunlook, 4f);
-                    foreach (var rayhit in rayhits) {
-                        Limb limb = null;
-                        if (!(rayhit.collider.TryGetComponent<Limb>(out limb) && limb.isVital)) {
-                            limb = null;
-                        }
-                        if (limb == null) {
-                            if (rayhit.collider.TryGetComponent<NetBody>(out var bbb)) {
-                                var reallook = KM.NormalTo(og.barrel.position, bbb.GetHeadPos());
-                                
-                                if (Vector2.Dot(gunlook, reallook) > 0.9) {
-                                    limb = bbb.head;
-                                }
-                            }
+var rayhits = Physics2D.RaycastAll(og.barrel.position, gunlook, 4f);
+foreach (var rayhit in rayhits) {
+Limb limb = null;
+if (!(rayhit.collider.TryGetComponent<Limb>(out limb) && limb.isVital)) {
+limb = null;
+}
+if (limb == null) {
+if (rayhit.collider.TryGetComponent<NetBody>(out var bbb)) {
+var reallook = KM.NormalTo(og.barrel.position, bbb.GetHeadPos());
 
-                            if (limb == null) {
-                                continue;
-                            }
-                        }
-                        if (limb.body != body && limb.body.happiness > -40) {
-                            limb.body.eyeScareTime = Math.Max(limb.body.eyeScareTime, 0.3f);
-                        }
-                    }
-                }
-            }
+if (Vector2.Dot(gunlook, reallook) > 0.9) {
+limb = bbb.head;
+}
+}
 
-        }
+if (limb == null) {
+continue;
+}
+}
+if (limb.body != body && limb.body.happiness > -40) {
+limb.body.eyeScareTime = Math.Max(limb.body.eyeScareTime, 0.3f);
+}
+}
+}
+}
 
-
-    }
+}
 
 
-    void FixedUpdate() {
-        if (
-            pbody != null //&& pbody.is_local
-        ) {
-            if (isEquipped && pbody.piggybacking_on != null && !body.standing) {
-
-                var flipped = body.isRight ? 1f : -1f;
-
-                // PIGGYBACK, AIM THE GUN,  ROTATE THE RAGDOLL HANDS 
-                var hand = body.slots[body.handSlot].limb;
-
-                var direction = (Vector2)body.targetLookPos - hand.rb.position;
-
-                if (direction.sqrMagnitude > 2 && hand.rb.simulated) {
-
-                    float targetAngle = Mathf.Atan2(direction.x, -direction.y) * Mathf.Rad2Deg;
-
-                    float anglediff = (targetAngle - hand.rb.rotation);
-
-                    var delta = 400f * Time.fixedDeltaTime * hand.totalForce * Mathf.Clamp01(1 - og.gasTime * 4);
-                    float anglestepped = Mathf.MoveTowardsAngle(hand.rb.rotation, targetAngle, delta * (30 + Mathf.Abs(anglediff)));
-
-                    hand.rb.MoveRotation(anglestepped);
-
-                    //if (Mathf.Abs(anglediff) > 2f) 
-                    {
-                        var wrist = hand.connectedLimbs[0];
-                        var arm = wrist.connectedLimbs[0];
-
-                        if (wrist.rb.simulated)
-                            wrist.rb.MoveRotation(Mathf.MoveTowardsAngle(wrist.rb.rotation, targetAngle + 20f * flipped, delta * 8f));
-                        if (arm.rb.simulated)
-                            arm.rb.MoveRotation(Mathf.MoveTowardsAngle(arm.rb.rotation, targetAngle - 20f * flipped, delta * 12f));
-                    }
-                    hand.rb.MoveRotation(anglestepped);
-                }
-            }
-        }
-    }
-    public void ApplyRecoil() {
-        if (pbody?.piggybacking_on != null) {
-            var flipped = body.isRight ? 1f : -1f;
-
-            var hand = body.slots[body.handSlot].limb;
-            hand.rb.velocity += (Vector2)hand.transform.right * (flipped * og.knockBack * 8);
-            hand.rb.rotation += flipped * 0.1f;
-        }
-    }
+}
 
 
-    bool _thing_to_emulate_firingPinStruck_only_here = false;
-    void Update() {
-        if (pbody && pbody.IsLocal) {
-            if (send_racked_state) {
-                if (og.racked == og.lastRacked) { // its concrete
-                    Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerCamera_GunRack, og.racked, true);
-                    send_racked_state = false;
-                }
-            }
-            //OG: GunScript.Update V5t4
-            if ( og.firingPinStruck && !_thing_to_emulate_firingPinStruck_only_here ) {
-                _thing_to_emulate_firingPinStruck_only_here = true;
+void FixedUpdate() {
+if (
+pbody != null //&& pbody.is_local
+) {
+if (isEquipped && pbody.piggybacking_on != null && !body.standing) {
 
-                if (og.gasTime > 0) {
-                } else {
-                    if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(si.transformPosition, $"C sending: GunEmptyClick ");
-                    Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_GunEmptyClick, tracker.syncId, false);
-                }
-            } else {
-                _thing_to_emulate_firingPinStruck_only_here = og.firingPinStruck;
-            }
-        }
+var flipped = body.isRight ? 1f : -1f;
 
-    }
+// PIGGYBACK, AIM THE GUN,  ROTATE THE RAGDOLL HANDS
+var hand = body.slots[body.handSlot].limb;
+
+var direction = (Vector2)body.targetLookPos - hand.rb.position;
+
+if (direction.sqrMagnitude > 2 && hand.rb.simulated) {
+
+float targetAngle = Mathf.Atan2(direction.x, -direction.y) * Mathf.Rad2Deg;
+
+float anglediff = (targetAngle - hand.rb.rotation);
+
+var delta = 400f * Time.fixedDeltaTime * hand.totalForce * Mathf.Clamp01(1 - og.gasTime * 4);
+float anglestepped = Mathf.MoveTowardsAngle(hand.rb.rotation, targetAngle, delta * (30 + Mathf.Abs(anglediff)));
+
+hand.rb.MoveRotation(anglestepped);
+
+//if (Mathf.Abs(anglediff) > 2f)
+{
+var wrist = hand.connectedLimbs[0];
+var arm = wrist.connectedLimbs[0];
+
+if (wrist.rb.simulated)
+wrist.rb.MoveRotation(Mathf.MoveTowardsAngle(wrist.rb.rotation, targetAngle + 20f * flipped, delta * 8f));
+if (arm.rb.simulated)
+arm.rb.MoveRotation(Mathf.MoveTowardsAngle(arm.rb.rotation, targetAngle - 20f * flipped, delta * 12f));
+}
+hand.rb.MoveRotation(anglestepped);
+}
+}
+}
+}
+public void ApplyRecoil() {
+if (pbody?.piggybacking_on != null) {
+var flipped = body.isRight ? 1f : -1f;
+
+var hand = body.slots[body.handSlot].limb;
+hand.rb.velocity += (Vector2)hand.transform.right * (flipped * og.knockBack * 8);
+hand.rb.rotation += flipped * 0.1f;
+}
+}
 
 
-    [ServerReceiver((byte)NetmsgId.SERVER_GunEmptyClick)]
-    static void Server_GunEmptyClick(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-        reader.Get(out knetid gun_syncid);
+bool _thing_to_emulate_firingPinStruck_only_here = false;
+void Update() {
+if (pbody && pbody.IsLocal) {
+if (send_racked_state) {
+if (og.racked == og.lastRacked) { // its concrete
+Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerCamera_GunRack, og.racked, true);
+send_racked_state = false;
+}
+}
+//OG: GunScript.Update V5t4
+if (og.firingPinStruck && !_thing_to_emulate_firingPinStruck_only_here) {
+_thing_to_emulate_firingPinStruck_only_here = true;
+
+if (og.gasTime > 0) {
+} else {
+if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(si.transformPosition, $"C sending: GunEmptyClick ");
+Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_GunEmptyClick, tracker.syncId, false);
+}
+} else {
+_thing_to_emulate_firingPinStruck_only_here = og.firingPinStruck;
+}
+}
+
+}
+
+
+[ServerReceiver((byte)NetmsgId.SERVER_GunEmptyClick)]
+static void Server_GunEmptyClick(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
+reader.Get(out knetid gun_syncid);
 
 #if DEBUG
-        Plugin.log.LogInfo($"SERVER: received GunEmptyClick");
+Plugin.log.LogInfo($"SERVER: received GunEmptyClick");
 #endif
 
-        if (
-            ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out var plr, out var shooter) && shooter.body.conscious &&
-            ItemSync.TryGetItemSyncInfo(gun_syncid, out var gun_si) && gun_si.IsGun() &&
-            ItemSync.CheckIfBodyReachThisItem(gun_si, shooter.body)
-        ) {
-            var gst = gun_si.go.GetOrAddComponent<TrackerGunScript>();
+if (
+ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out var plr, out var shooter) && shooter.body.conscious &&
+ItemSync.TryGetItemSyncInfo(gun_syncid, out var gun_si) && gun_si.IsGun() &&
+ItemSync.CheckIfBodyReachThisItem(gun_si, shooter.body)
+) {
+var gst = gun_si.go.GetOrAddComponent<TrackerGunScript>();
 
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(gun_si.transformPosition, $"S: GunEmptyClick {DebugHelp.GetPlayerFullDebugString(clientId)}");
+if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(gun_si.transformPosition, $"S: GunEmptyClick {DebugHelp.GetPlayerFullDebugString(clientId)}");
 
-            ServerMain.Server_AnnounceSound(gst.transform.position, "guntrigger", ServerMain.GetListOfClientIdsExceptThis(clientId) );
-        }
-    }
-
-
+ServerMain.Server_AnnounceSound(gst.transform.position, "guntrigger", ServerMain.GetListOfClientIdsExceptThis(clientId));
+}
+}
 
 
 
 
-#if (!RELEASE) 
-    void OnGUI() {
-        if (log.verbose && isEquipped) {
-            var ogfont = GUI.skin.label.fontSize;
 
-            var pos = (Vector2)Camera.main.WorldToScreenPoint(transform.position);
-            pos = new Vector2(pos.x, Screen.height - pos.y);
 
-            if (pos.x > 0 && pos.y > 0 && pos.x < Screen.width && pos.y < Screen.width) {
-                const float bsize = 17;
-                const float elsize = 13;
+#if (!RELEASE)
+void OnGUI() {
+if (log.verbose && isEquipped) {
+var ogfont = GUI.skin.label.fontSize;
 
-                float y = pos.y;
+var pos = (Vector2)Camera.main.WorldToScreenPoint(transform.position);
+pos = new Vector2(pos.x, Screen.height - pos.y);
 
-                GUI.skin.label.normal.textColor = UnityEngine.Color.white;
+if (pos.x > 0 && pos.y > 0 && pos.x < Screen.width && pos.y < Screen.width) {
+const float bsize = 17;
+const float elsize = 13;
 
-                GUI.skin.label.fontSize = 10;
-                GUI.Label(new Rect(pos.x, y, 400, bsize), "chamber: " + og.roundInChamber.ToString());
-                y += elsize;
-                GUI.Label(new Rect(pos.x, y, 400, bsize), "ammo: " + og.roundsInMag);
-                y += elsize;
-                GUI.Label(new Rect(pos.x, y, 100, bsize), "racked: " + og.racked);
-                y += elsize;
-#if (!RELEASE) 
-                if (pbody != null && pbody.syncBody.drng_attackCounter != null) {
-                    GUI.Label(new Rect(pos.x, y, 100, bsize), "rroll: " + pbody.syncBody.drng_attackCounter.Value);
-                    y += elsize;
-                }
+float y = pos.y;
+
+GUI.skin.label.normal.textColor = UnityEngine.Color.white;
+
+GUI.skin.label.fontSize = 10;
+GUI.Label(new Rect(pos.x, y, 400, bsize), "chamber: " + og.roundInChamber.ToString());
+y += elsize;
+GUI.Label(new Rect(pos.x, y, 400, bsize), "ammo: " + og.roundsInMag);
+y += elsize;
+GUI.Label(new Rect(pos.x, y, 100, bsize), "racked: " + og.racked);
+y += elsize;
+#if (!RELEASE)
+if (pbody != null && pbody.syncBody.drng_attackCounter != null) {
+GUI.Label(new Rect(pos.x, y, 100, bsize), "rroll: " + pbody.syncBody.drng_attackCounter.Value);
+y += elsize;
+}
 #endif
-            }
+}
 
 
-            GUI.skin.label.normal.textColor = UnityEngine.Color.white;
-            GUI.skin.label.fontSize = ogfont;
-        }
-    }
+GUI.skin.label.normal.textColor = UnityEngine.Color.white;
+GUI.skin.label.fontSize = ogfont;
+}
+}
 #endif
 
 }
@@ -1518,457 +1746,455 @@ public class TrackerGunScript : BaseComponentTracker<GunScript> {
 [HarmonyPatch(typeof(GunScript), nameof(GunScript.Fire))]
 public static class GunScript_Fire_MultiplayerPatch {
 
-    public static int MAX_HITS_PER_LIMB_AT_ONCE = 4;
+public static int MAX_HITS_PER_LIMB_AT_ONCE = 4;
 
 
 
-    internal static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
-        
+internal static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
 
-        // We convert the instructions to a list so we can more easily navigate them
-        var instructionList = instructions.ToList();
-        int i = 0;
 
-        bool didit = false;
+// we convert the instructions to a list so we can more easily navigate them
+var instructionList = instructions.ToList();
+int i = 0;
 
-        while (i < instructionList.Count) {
-            var code = instructionList[i];
-            if (
-                code.opcode == OpCodes.Call && 
-                code.operand is MethodInfo method && 
-                method != null && 
-                method.Name == "get_body" && 
-                method.DeclaringType == typeof(GunScript)
-            ) {
-                
-                var getComponentMethod = typeof(Unity.VisualScripting.ComponentHolderProtocol).GetMethod(nameof(Unity.VisualScripting.ComponentHolderProtocol.GetOrAddComponent), BindingFlags.Static | BindingFlags.Public);
-                var getComponentGeneric = getComponentMethod.MakeGenericMethod(typeof(TrackerGunScript));
+bool didit = false;
 
-                var getTheOtherPartMethod = typeof(TrackerGunScript).GetMethod(nameof(TrackerGunScript.GetBody), BindingFlags.Public | BindingFlags.Instance);
+while (i < instructionList.Count) {
+var code = instructionList[i];
+if (
+code.opcode == OpCodes.Call &&
+code.operand is MethodInfo method &&
+method != null &&
+method.Name == "get_body" &&
+method.DeclaringType == typeof(GunScript)
+) {
 
-                yield return new CodeInstruction(OpCodes.Call, getComponentGeneric); // get the component
-                yield return new CodeInstruction(OpCodes.Callvirt, getTheOtherPartMethod); // call GetBody
-                i ++; 
-                didit = true;
+var getComponentMethod = typeof(Unity.VisualScripting.ComponentHolderProtocol).GetMethod(nameof(Unity.VisualScripting.ComponentHolderProtocol.GetOrAddComponent), BindingFlags.Static | BindingFlags.Public);
+var getComponentGeneric = getComponentMethod.MakeGenericMethod(typeof(TrackerGunScript));
+
+var getTheOtherPartMethod = typeof(TrackerGunScript).GetMethod(nameof(TrackerGunScript.GetBody), BindingFlags.Public | BindingFlags.Instance);
+
+yield return new CodeInstruction(OpCodes.Call, getComponentGeneric); // get the component
+yield return new CodeInstruction(OpCodes.Callvirt, getTheOtherPartMethod); // call GetBody
+i++;
+didit = true;
 #if DEBUG
-                Plugin.log.LogInfo($"GunScript_Fire_MultiplayerPatch: Succesfully patched the body getters {i} ");
+Plugin.log.LogInfo($"GunScript_Fire_MultiplayerPatch: Succesfully patched the body getters {i} ");
 #endif
-            } else {
-                yield return instructionList[i];
-                i++; 
-            }
-        }
-        if (!didit) {
-            Plugin.log.LogError($"GunScript_Fire_MultiplayerPatch: Failed to patch the body getters ");
-        }
-    }
-
-
-
-    //TODO my custom randomizer thing
-    public static Vector2 RollVerticalSpread(GunScript gun) {
-        return gun.transform.up * (UnityEngine.Random.Range(-1f, 1f) * gun.verticalSpread);
-    }
-
-
-    public static void Prefix(GunScript __instance, bool suicide, ref GunScript __state ) {
-        __state = GunScript_Update_MultiplayerPatch.current_executing_gun;
-        if (__state == null) {
-            GunScript_Update_MultiplayerPatch.current_executing_gun = __instance;
-        }
-
-        var gst = __instance.GetOrAddComponent<TrackerGunScript>();
-
-        var shotsPerFire = __instance.shotsPerFire;
-        var body = PlayerCamera.main.body;
-        if (gst != null) {
-            gst.ScanForBody();
-            body = gst.body;
-            shotsPerFire = gst.shotsPerFire;
-
-            gst.ApplyRecoil();
-        }
-        var npc = body.GetNetBody();
-        var islocal = Util.IsBodyLocal(body);
+} else {
+yield return instructionList[i];
+i++;
+}
+}
+if (!didit) {
+Plugin.log.LogError($"GunScript_Fire_MultiplayerPatch: Failed to patch the body getters ");
+}
+}
+
+
+
+//TODO my custom randomizer thing
+public static Vector2 RollVerticalSpread(GunScript gun) {
+return gun.transform.up * (UnityEngine.Random.Range(-1f, 1f) * gun.verticalSpread);
+}
+
+
+public static void Prefix(GunScript __instance, bool suicide, ref GunScript __state) {
+__state = GunScript_Update_MultiplayerPatch.current_executing_gun;
+if (__state == null) {
+GunScript_Update_MultiplayerPatch.current_executing_gun = __instance;
+}
+
+var gst = __instance.GetOrAddComponent<TrackerGunScript>();
+
+var shotsPerFire = __instance.shotsPerFire;
+var body = PlayerCamera.main.body;
+if (gst != null) {
+gst.ScanForBody();
+body = gst.body;
+shotsPerFire = gst.shotsPerFire;
+
+gst.ApplyRecoil();
+}
+var npc = body.GetNetBody();
+var islocal = Util.IsBodyLocal(body);
 
-    }
-    static void Postfix(GunScript __instance, bool suicide, ref GunScript __state) {
-        try {
-            _GunFirePostfix_CheckForHitsAndTellServer(__instance, suicide);
-        } catch (Exception e) {
-            log.error(e);
-        }
+}
+static void Postfix(GunScript __instance, bool suicide, ref GunScript __state) {
+try {
+_GunFirePostfix_CheckForHitsAndTellServer(__instance, suicide);
+} catch (Exception e) {
+log.error(e);
+}
 
-        GunScript_Update_MultiplayerPatch.current_executing_gun = __state;
-    }
+GunScript_Update_MultiplayerPatch.current_executing_gun = __state;
+}
 
-
-
-    static void _GunFirePostfix_CheckForHitsAndTellServer(GunScript gun, bool suicide) {
-
-        var gst = gun.GetOrAddComponent<TrackerGunScript>();
+
+
+static void _GunFirePostfix_CheckForHitsAndTellServer(GunScript gun, bool suicide) {
+
+var gst = gun.GetOrAddComponent<TrackerGunScript>();
 
-        var shotsPerFire = gun.shotsPerFire;
-        var body = PlayerCamera.main.body;
-        if (gst != null) {
-            gst.ScanForBody();
-            body = gst.body;
-            shotsPerFire = gst.shotsPerFire;
-        }
-        var npc = body.GetNetBody();
-        var islocal = Util.IsBodyLocal(body);
+var shotsPerFire = gun.shotsPerFire;
+var body = PlayerCamera.main.body;
+if (gst != null) {
+gst.ScanForBody();
+body = gst.body;
+shotsPerFire = gst.shotsPerFire;
+}
+var npc = body.GetNetBody();
+var islocal = Util.IsBodyLocal(body);
 
-        List<SyncInfo> hitBuildings = new(); // guranteed to be only physics active buildings
-        List<Limb> hitLimbs = new();
+List<SyncInfo> hitBuildings = new(); // guranteed to be only physics active buildings
+List<Limb> hitLimbs = new();
 
 
-        if (!islocal && !suicide) {
-            TurretScript_Shoot_MultiplayerPatch.HitOnlyStatic = true;
-        }
+if (!islocal && !suicide) {
+TurretScript_Shoot_MultiplayerPatch.HitOnlyStatic = true;
+}
 
 
-        //OG: GunScript.Fire  V5t4
-        float rightorleft = (body.isRight ? 1f : (-1f));
-        for (int i = 0; i < shotsPerFire; i++) {
-            TurretScript_Shoot_MultiplayerPatch.LastActiveShooterIsSuicide = suicide;
-            TurretScript_Shoot_MultiplayerPatch.LastActiveShooter = body.GetNetBody();
-            TurretScript_Shoot_MultiplayerPatch.LastActiveShooterGun = gst;
+//OG: GunScript.Fire  V5t4
+float rightorleft = (body.isRight ? 1f : (-1f));
+for (int i = 0; i < shotsPerFire; i++) {
+TurretScript_Shoot_MultiplayerPatch.LastActiveShooterIsSuicide = suicide;
+TurretScript_Shoot_MultiplayerPatch.LastActiveShooter = body.GetNetBody();
+TurretScript_Shoot_MultiplayerPatch.LastActiveShooterGun = gst;
 
-            if (gst.override_shoot_trajectory) {
+if (gst.override_shoot_trajectory) {
 
-                TurretScript.Shoot(new FireInfo {
-                    pos = (gst.override_shoot_trajectory_origin), // i changed this to be only barrel position
-                    dir = ((((gst.override_shoot_trajectory_direction) + RollVerticalSpread(gun) * rightorleft))),
-                    doTinnitus = false,
-                    ignoreBody = false, // always false, my transpiled hooks will handle the suicide condition
-                    structureDamage = gun.structureDamage,
-                    animalDamage = gun.animalDamage,
-                    forceHead = false // suicide is handled differently here
-                });
-            } else {
+TurretScript.Shoot(new FireInfo {
+pos = (gst.override_shoot_trajectory_origin), // i changed this to be only barrel position
+dir = ((((gst.override_shoot_trajectory_direction) + RollVerticalSpread(gun) * rightorleft))),
+doTinnitus = false,
+ignoreBody = false, // always false, my transpiled hooks will handle the suicide condition
+structureDamage = gun.structureDamage,
+animalDamage = gun.animalDamage,
+forceHead = false // suicide is handled differently here
+});
+} else {
 
-                TurretScript.Shoot(new FireInfo {
-                    pos = (gun.barrel.position), // i changed this to be only barrel position
-                    dir = (suicide ? KM.NormalTo(gun.barrel.position, body.limbs[(int)Body.LimbNum.Head].rb.position) :  // this is my addition, to avoid forceHead
-                        ((((Vector2)gun.transform.right) + RollVerticalSpread(gun)) * rightorleft)),
-                    doTinnitus = false,
-                    ignoreBody = false, // always false, my transpiled hooks will handle the suicide condition
-                    structureDamage = gun.structureDamage,
-                    animalDamage = gun.animalDamage,
-                    forceHead = false // suicide is handled differently here
-                });
-            }
+TurretScript.Shoot(new FireInfo {
+pos = (gun.barrel.position), // i changed this to be only barrel position
+dir = (suicide ? KM.NormalTo(gun.barrel.position, body.limbs[(int)Body.LimbNum.Head].rb.position) :  // this is my addition, to avoid forceHead
+((((Vector2)gun.transform.right) + RollVerticalSpread(gun)) * rightorleft)),
+doTinnitus = false,
+ignoreBody = false, // always false, my transpiled hooks will handle the suicide condition
+structureDamage = gun.structureDamage,
+animalDamage = gun.animalDamage,
+forceHead = false // suicide is handled differently here
+});
+}
 
-            hitBuildings.AddRange(TurretScript_Shoot_MultiplayerPatch.JustHitBuildings);
-            hitLimbs.AddRange(TurretScript_Shoot_MultiplayerPatch.JustHitLimbs);
-        }
+hitBuildings.AddRange(TurretScript_Shoot_MultiplayerPatch.JustHitBuildings);
+hitLimbs.AddRange(TurretScript_Shoot_MultiplayerPatch.JustHitLimbs);
+}
 
-        hitLimbs = Util.LimitMaxRepeats(hitLimbs, Math.Min(gst.shotsPerFire, MAX_HITS_PER_LIMB_AT_ONCE)); // limit it so the server wouldnt get mad 
+hitLimbs = Util.LimitMaxRepeats(hitLimbs, Math.Min(gst.shotsPerFire, MAX_HITS_PER_LIMB_AT_ONCE)); // limit it so the server wouldnt get mad
 
-        hitLimbs = hitLimbs.Where(l => {
-            if (l.body.TryGetNetBody(out var vvvvv)) {
-                return true;
-            } else {
-                return false;
-            }
-        }).ToList();
+hitLimbs = hitLimbs.Where(l => {
+if (l.body.TryGetNetBody(out var vvvvv)) {
+return true;
+} else {
+return false;
+}
+}).ToList();
 
-        gst.override_shoot_trajectory = false;
-        gst.send_racked_state = true; // idk man, the jamming mechanic will be hard to sync but whatever  
+gst.override_shoot_trajectory = false;
+gst.send_racked_state = true; // idk man, the jamming mechanic will be hard to sync but whatever
 
 
-        if (Multiplayer.IsNetworkActiveAndIsClient()) { // server will handle the damage in its validator
-            // apply all the damage
-            TurretScript_Shoot_MultiplayerPatch.ApplyShootDamages(gst, hitLimbs, hitBuildings);
-        }
+if (Multiplayer.IsNetworkActiveAndIsClient()) { // server will handle the damage in its validator
+// apply all the damage
+TurretScript_Shoot_MultiplayerPatch.ApplyShootDamages(gst, hitLimbs, hitBuildings);
+}
 
 
 
-        if (Net.IsRunning) {
+if (Net.IsRunning) {
 
-            if (islocal) {
-                gst.si.SetIgnoreTimeForRoundTrip(0.4f);
+if (islocal) {
+gst.si.SetIgnoreTimeForRoundTrip(0.4f);
 
 
-                // suicide is handled by server anyway, so client has to do at least the visuals
-                if (!suicide) {
+// suicide is handled by server anyway, so client has to do at least the visuals
+if (!suicide) {
 
-#if !RELEASE 
-                    if (hitBuildings.Count > 0) log.l($"GUN SHOOT, HIT BUILDINGS: {String.Join(" ", hitBuildings)} ");
-                    if (hitLimbs.Count > 0) log.l($"GUN SHOOT, HIT LIMBS: {String.Join(" ", hitLimbs)} ");
-#endif       
+#if !RELEASE
+if (hitBuildings.Count > 0) log.l($"GUN SHOOT, HIT BUILDINGS: {String.Join(" ", hitBuildings)} ");
+if (hitLimbs.Count > 0) log.l($"GUN SHOOT, HIT LIMBS: {String.Join(" ", hitLimbs)} ");
+#endif
 
-                    // gun syncid
-                    // start
-                    // end
-                    // hit body count (max 30) 
-                    // player ids and limb index
-                    // hit building count (max 10)
-                    // buildings syncids (they must be physics active, like monsters)
+// gun syncid
+// start
+// end
+// hit body count (max 30)
+// player ids and limb index
+// hit building count (max 10)
+// buildings syncids (they must be physics active, like monsters)
 
 
 
-                    var writer = Net.CreateWriter(NetmsgId.SERVER_PlayerBodyShoot);
+var writer = Net.CreateWriter(NetmsgId.SERVER_PlayerBodyShoot);
 
-                    writer.Put(Net.ServerTick);
-                    writer.Put(gst.tracker.syncId);
-                    writer.Put((Vector2)gun.barrel.position);
-                    writer.Put((Vector2)(gun.transform.right * rightorleft));
-                    writer.Put((bool)(gun.racked)); // if it jammed or not
+writer.Put(Net.ServerTick);
+writer.Put(gst.tracker.syncId);
+writer.Put((Vector2)gun.barrel.position);
+writer.Put((Vector2)(gun.transform.right * rightorleft));
+writer.Put((bool)(gun.racked)); // if it jammed or not
 
 
-                    byte hitlimbsamount = (byte)Math.Min(hitLimbs.Count, 40);
-                    writer.Put(hitlimbsamount);
-                    for (byte i = 0; i < hitlimbsamount; i++) {// theyre guranteed to be only of playerbody
-                        var limb = hitLimbs.ElementAt(i);
-                        writer.Put(new LimbNetId(limb));
-                    }
+byte hitlimbsamount = (byte)Math.Min(hitLimbs.Count, 40);
+writer.Put(hitlimbsamount);
+for (byte i = 0; i < hitlimbsamount; i++) {// theyre guranteed to be only of playerbody
+var limb = hitLimbs.ElementAt(i);
+writer.Put(new LimbNetId(limb));
+}
 
-                    byte hitbuildingsamount = (byte)Math.Min(hitBuildings.Count, 40);
-                    writer.Put(hitbuildingsamount);
-                    for (byte i = 0; i < hitbuildingsamount; i++) {// theyre guranteed to be registered and physics active
-                        var b = hitBuildings.ElementAt(i);
-                        writer.Put(b.syncId);
-                    }
+byte hitbuildingsamount = (byte)Math.Min(hitBuildings.Count, 40);
+writer.Put(hitbuildingsamount);
+for (byte i = 0; i < hitbuildingsamount; i++) {// theyre guranteed to be registered and physics active
+var b = hitBuildings.ElementAt(i);
+writer.Put(b.syncId);
+}
 
-                    Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
+Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
 
-                    // WRITER END;
+// WRITER END;
 
 
-                }
-            }
+}
+}
 
-            if (suicide && Net.IsServer) {
-                // if head wasnt hit, force hit it (this indeed does happen)
-                if (!hitLimbs.Contains(npc.head)) {
-                    //log.l($"suicide gunshot didnt hit the head lol, forcing it. ");
+if (suicide && Net.IsServer) {
+// if head wasnt hit, force hit it (this indeed does happen)
+if (!hitLimbs.Contains(npc.head)) {
+//log.l($"suicide gunshot didnt hit the head lol, forcing it. ");
 
-                    TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(npc.head, gst, false);
-                }
-            }
+TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(npc.head, gst, false);
+}
+}
 
-        }
+}
 
 
 
 
-        TurretScript_Shoot_MultiplayerPatch.HitOnlyStatic = false;
+TurretScript_Shoot_MultiplayerPatch.HitOnlyStatic = false;
 
-    }
+}
 
 
-    static bool ServerValidateShootHit(TrackerGunScript gst, Vector2 gun_barrelpos, Vector2 gun_direction, List<Limb> limbs_hit, List<SyncInfo> buildings_hit) {
+static bool ServerValidateShootHit(TrackerGunScript gst, Vector2 gun_barrelpos, Vector2 gun_direction, List<Limb> limbs_hit, List<SyncInfo> buildings_hit) {
 
 
-        // YOU KNOW WHAT, FUCK THIS VALIDATION, LET CHEATERS CHEAT , PROBABLY I SHOULD MAKE THE REMEMBERING OF PREVIOUS FRAMES N SHI TO BACKTRACK AND VALIDATE HITS, BUT NAH IT AINT A COMPETITIVE GAME
+// YOU KNOW WHAT, FUCK THIS VALIDATION, LET CHEATERS CHEAT , PROBABLY I SHOULD MAKE THE REMEMBERING OF PREVIOUS FRAMES N SHI TO BACKTRACK AND VALIDATE HITS, BUT NAH IT AINT A COMPETITIVE GAME
 
-        //List<Limb> valid_limbs_hit = new();
-        //// validate that the thing is not too far from bullet trajectory
-        //foreach (var limb in limbs_hit) {
-        //    //TODO remove the items  if they didnt validated
-        //
-        //    for (int i = 0; i < gst.shotsPerFire; i++) {
-        //        RaycastHit2D rayresult = Physics2D.Raycast(gun_barrelpos, gun_direction, 200f, LayerMask.GetMask("Ground")); // find out the max distance of travel of the bullet
-        //
-        //        // todo get closest position on ray to the transform pos, then get closest point, check distance
-        //
-        //        var postocheckdist = limb.GetComponent<Collider2D>().ClosestPoint();
-        //    }
-        //}
-        //
-        ////TODO move it to the validate thing 
-        //RaycastHit2D rayresult = Physics2D.Raycast(gun_barrelpos, gun_direction, 200f, LayerMask.GetMask("Ground")); // find out the max distance of travel of the bullet
-        //
-        //foreach (var item in buildings_hit) {
-        //}
+//list<Limb> valid_limbs_hit = new();
+//foreach (var limb in limbs_hit) {
+//    //TODO remove the items  if they didnt validated
+//
+//    for (int i = 0; i < gst.shotsPerFire; i++) {
+//        raycastHit2D rayresult = Physics2D.Raycast(gun_barrelpos, gun_direction, 200f, LayerMask.GetMask("Ground")); // find out the max distance of travel of the bullet
+//
+//        // todo get closest position on ray to the transform pos, then get closest point, check distance
+//
+//        var postocheckdist = limb.GetComponent<Collider2D>().ClosestPoint();
+//    }
+//}
+//
+//raycastHit2D rayresult = Physics2D.Raycast(gun_barrelpos, gun_direction, 200f, LayerMask.GetMask("Ground")); // find out the max distance of travel of the bullet
+//
+//foreach (var item in buildings_hit) {
+//}
 
-        return true;
-    }
+return true;
+}
 
-    [ServerReceiver((byte)NetmsgId.SERVER_PlayerBodyShoot)]
-    static void ServerReceiver__PlayerBodyShoot(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-        reader.Get(out ushort tick);
-        reader.Get(out knetid gun_syncid);
+[ServerReceiver((byte)NetmsgId.SERVER_PlayerBodyShoot)]
+static void ServerReceiver__PlayerBodyShoot(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
+reader.Get(out ushort tick);
+reader.Get(out knetid gun_syncid);
 
-        if (
-            Util.IsWorldGenerated() &&
-            ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out var plr, out var shooter) && shooter.body.conscious &&
-            ItemSync.TryGetItemSyncInfo(gun_syncid, out var gun_si) && gun_si.IsGun() && (gun_si.gun.roundsInMag > 0 || gun_si.gun.roundInChamber == RoundInChamber.Round || shooter.IsLocal) &&
-            ItemSync.CheckIfBodyReachThisItem(gun_si,shooter.body) 
-        ) {
-            var gst = gun_si.go.GetOrAddComponent<TrackerGunScript>();
-            gst.body = shooter.body;
-            gst.pbody = shooter;
+if (
+Util.IsWorldGenerated() &&
+ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out var plr, out var shooter) && shooter.body.conscious &&
+ItemSync.TryGetItemSyncInfo(gun_syncid, out var gun_si) && gun_si.IsGun() && (gun_si.gun.roundsInMag > 0 || gun_si.gun.roundInChamber == RoundInChamber.Round || shooter.IsLocal) &&
+ItemSync.CheckIfBodyReachThisItem(gun_si, shooter.body)
+) {
+var gst = gun_si.go.GetOrAddComponent<TrackerGunScript>();
+gst.body = shooter.body;
+gst.pbody = shooter;
 
-            reader.Get(out Vector2 gun_barrelpos);
-            reader.Get(out Vector2 gun_direction);
-            reader.Get(out bool _new_racked_prob_ignore);
-            gun_direction.Normalize();
+reader.Get(out Vector2 gun_barrelpos);
+reader.Get(out Vector2 gun_direction);
+reader.Get(out bool _new_racked_prob_ignore);
+gun_direction.Normalize();
 
-            if (gun_direction == Vector2.zero || !gun_direction.IsFinite()) {
-                Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> Weirdass gun shoot direction.");
-                return;
-            }
+if (gun_direction == Vector2.zero || !gun_direction.IsFinite()) {
+Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> Weirdass gun shoot direction.");
+return;
+}
 
-            // check if barrel pos is close enough to the gun or the body
-            if (!gun_barrelpos.IsFinite() || (!KM.DistanceCheck(gun_barrelpos,gun_si.gun.barrel.position,10) && !KM.DistanceCheck(gun_barrelpos, shooter.body.GetClosestLimb(gun_barrelpos).transform.position, 2))) {
-                Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> Shoot origin is not near the guns actual barrel position.");
-                return;
-            }
+// check if barrel pos is close enough to the gun or the body
+if (!gun_barrelpos.IsFinite() || (!KM.DistanceCheck(gun_barrelpos, gun_si.gun.barrel.position, 10) && !KM.DistanceCheck(gun_barrelpos, shooter.body.GetClosestLimb(gun_barrelpos).transform.position, 2))) {
+Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> Shoot origin is not near the guns actual barrel position.");
+return;
+}
 
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(gun_si.transformPosition, $"S: PlayerBodyShoot {DebugHelp.GetPlayerFullDebugString(clientId)}", Color.magenta);
+if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(gun_si.transformPosition, $"S: PlayerBodyShoot {DebugHelp.GetPlayerFullDebugString(clientId)}", Color.magenta);
 
 
-            List<Limb> limbs_hit = new List<Limb>(); // these should not be able to repeat
+List<Limb> limbs_hit = new List<Limb>(); // these should not be able to repeat
 
-            reader.Get(out byte hit_limbs_amount); // guranteed 0 with friendly fire off
-            for (byte i = 0; i < hit_limbs_amount; i++) {// theyre guranteed to be only of playerbody
+reader.Get(out byte hit_limbs_amount); // guranteed 0 with friendly fire off
+for (byte i = 0; i < hit_limbs_amount; i++) {// theyre guranteed to be only of playerbody
 
-                reader.Get(out LimbNetId limbnetid);
+reader.Get(out LimbNetId limbnetid);
 
-                if (limbnetid.TryGetNetBodyAndLimbSafe(out var nb, out var lim) ) {
-                    if (shooter.CanAttackThisGuy(nb.body)) {
-                        limbs_hit.Add(lim);
-                    } else {
-                        Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> They hit someone they can't attack ({nb}).");
-                    }
-                } else {
-                    Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> They hit a non-existant limb????");
-                }
-            }
+if (limbnetid.TryGetNetBodyAndLimbSafe(out var nb, out var lim)) {
+if (shooter.CanAttackThisGuy(nb.body)) {
+limbs_hit.Add(lim);
+} else {
+Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> They hit someone they can't attack ({nb}).");
+}
+} else {
+Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> They hit a non-existant limb????");
+}
+}
 
-            limbs_hit = Util.LimitMaxRepeats(limbs_hit, Math.Min(gst.shotsPerFire, MAX_HITS_PER_LIMB_AT_ONCE)); 
-            
+limbs_hit = Util.LimitMaxRepeats(limbs_hit, Math.Min(gst.shotsPerFire, MAX_HITS_PER_LIMB_AT_ONCE));
 
-            List<SyncInfo> buildings_hit = new List<SyncInfo>(); 
 
-            reader.Get(out byte hit_buildings_amount);
-            for (byte i = 0; i < hit_buildings_amount; i++) {// theyre guranteed to be registered and physics active
+List<SyncInfo> buildings_hit = new List<SyncInfo>();
 
-                reader.Get(out knetid building_syncid);
+reader.Get(out byte hit_buildings_amount);
+for (byte i = 0; i < hit_buildings_amount; i++) {// theyre guranteed to be registered and physics active
 
-                if (NetObjectRegistry.TryGetSyncInfo(building_syncid, out var bsi) ) {
-                    if ( bsi.IsBuilding() && NetObjectRegistry.IsObjectDynamic(bsi.go)) {
-                        if (bsi.building.cantHit) {
-                            Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> They hit a building with the cantHit flag on.");
-                        } else {
-                            buildings_hit.Add(bsi);
-                        }
-                    } else {
-                        Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> They hit a static building or it isnt even a building ({bsi}).");
-                    }
-                } 
-            }
+reader.Get(out knetid building_syncid);
 
+if (NetObjectRegistry.TryGetSyncInfo(building_syncid, out var bsi)) {
+if (bsi.IsBuilding() && NetObjectRegistry.IsObjectDynamic(bsi.go)) {
+if (bsi.building.cantHit) {
+Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> They hit a building with the cantHit flag on.");
+} else {
+buildings_hit.Add(bsi);
+}
+} else {
+Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> They hit a static building or it isnt even a building ({bsi}).");
+}
+}
+}
 
-            // check max amount of repeats in buildings_hit 
-            buildings_hit = Util.LimitMaxRepeats(buildings_hit, gst.shotsPerFire );
 
-            if (!ServerValidateShootHit(gst,gun_barrelpos,gun_direction,limbs_hit,buildings_hit)) {
-                return;
-            }
+// check max amount of repeats in buildings_hit
+buildings_hit = Util.LimitMaxRepeats(buildings_hit, gst.shotsPerFire);
 
+if (!ServerValidateShootHit(gst, gun_barrelpos, gun_direction, limbs_hit, buildings_hit)) {
+return;
+}
 
 
-            // tell everyone about the gunshot, including the host, so that we know
-            var writer = Net.CreateWriter(NetmsgId.CLIENT_PlayerBodyShoot_Relay);
 
-            writer.Put(clientId);
-            writer.Put(gst.tracker.syncId);
+// tell everyone about the gunshot, including the host, so that we know
+var writer = Net.CreateWriter(NetmsgId.CLIENT_PlayerBodyShoot_Relay);
 
-            writer.Put(gun_barrelpos);
-            writer.Put(gun_direction);
+writer.Put(clientId);
+writer.Put(gst.tracker.syncId);
 
-            Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.GetListOfClientIdsExceptThisAndHost(clientId));
+writer.Put(gun_barrelpos);
+writer.Put(gun_direction);
 
-            // WRITER END;
+Net.Server_SendToClients(DeliveryMethod.ReliableUnordered, writer, clientIds: ServerMain.GetListOfClientIdsExceptThisAndHost(clientId));
 
-            GunScript_JamChance_MultiplayerPatch.ForceJam = gun_si.gun.racked == false;
+// WRITER END;
 
-            // do the visuals (and debuffs for the shooter ) it for the server
-            if (!Util.IsBodyLocal(shooter.body)) {
-                PlayerBodyShoot_VisualsTypeShit(clientId, gst.si,gun_barrelpos,gun_direction);
-            }
+GunScript_JamChance_MultiplayerPatch.ForceJam = gun_si.gun.racked == false;
 
-            GunScript_JamChance_MultiplayerPatch.ForceJam = false;
+// do the visuals (and debuffs for the shooter ) it for the server
+if (!Util.IsBodyLocal(shooter.body)) {
+PlayerBodyShoot_VisualsTypeShit(clientId, gst.si, gun_barrelpos, gun_direction);
+}
 
-            gun_si.gun.racked = _new_racked_prob_ignore;
-            gun_si.gun.lastRacked = false ; // gun only shoots if its not racked
+GunScript_JamChance_MultiplayerPatch.ForceJam = false;
 
-            if (gun_si.gun.firingMode != FiringMode.Pump) {
-                if (_new_racked_prob_ignore) {
-                    gst.og.gasTime = gun_si.gun.desiredGasTime;
-                }
-            }
+gun_si.gun.racked = _new_racked_prob_ignore;
+gun_si.gun.lastRacked = false; // gun only shoots if its not racked
 
+if (gun_si.gun.firingMode != FiringMode.Pump) {
+if (_new_racked_prob_ignore) {
+gst.og.gasTime = gun_si.gun.desiredGasTime;
+}
+}
 
 
-            TurretScript_Shoot_MultiplayerPatch.ApplyShootDamages(gst,limbs_hit,buildings_hit);
 
-        }
-    }
+TurretScript_Shoot_MultiplayerPatch.ApplyShootDamages(gst, limbs_hit, buildings_hit);
 
+}
+}
 
 
-    [ClientReceiver((byte)NetmsgId.CLIENT_PlayerBodyShoot_Relay, false)]
-    static void Client_PlayerBodyShoot_Relay(knetid _, LiteNetLib.Utils.NetDataReader reader) {
 
-        reader.Get(out knetid shooter_clientid);
-        reader.Get(out knetid gun_syncid);
+[ClientReceiver((byte)NetmsgId.CLIENT_PlayerBodyShoot_Relay, false)]
+static void Client_PlayerBodyShoot_Relay(knetid _, LiteNetLib.Utils.NetDataReader reader) {
 
-        reader.Get(out Vector2 gun_barrel_origin);
-        reader.Get(out Vector2 gun_barrel_direction);
+reader.Get(out knetid shooter_clientid);
+reader.Get(out knetid gun_syncid);
 
-        if (ItemSync.TryGetItemSyncInfo(gun_syncid, out var gun_si) && gun_si.IsGun()) {
+reader.Get(out Vector2 gun_barrel_origin);
+reader.Get(out Vector2 gun_barrel_direction);
 
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(gun_si.transformPosition, $"C: PlayerBodyShoot_Relay {DebugHelp.GetPlayerFullDebugString(shooter_clientid)}");
+if (ItemSync.TryGetItemSyncInfo(gun_syncid, out var gun_si) && gun_si.IsGun()) {
 
-            PlayerBodyShoot_VisualsTypeShit(shooter_clientid,gun_si,gun_barrel_origin,gun_barrel_direction);
-        }
+if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(gun_si.transformPosition, $"C: PlayerBodyShoot_Relay {DebugHelp.GetPlayerFullDebugString(shooter_clientid)}");
 
-    }
-    static void PlayerBodyShoot_VisualsTypeShit( knetid shooter_clientid,SyncInfo gun_si, Vector2 gun_barrel_origin,Vector2 gun_barrel_direction) { 
+PlayerBodyShoot_VisualsTypeShit(shooter_clientid, gun_si, gun_barrel_origin, gun_barrel_direction);
+}
 
-        var gun = gun_si.gun;
-        var gst = gun_si.go.GetOrAddComponent<TrackerGunScript>();
+}
+static void PlayerBodyShoot_VisualsTypeShit(knetid shooter_clientid, SyncInfo gun_si, Vector2 gun_barrel_origin, Vector2 gun_barrel_direction) {
 
-        gst.override_shoot_trajectory = true;
-        gst.override_shoot_trajectory_origin = gun_barrel_origin;
-        gst.override_shoot_trajectory_direction = gun_barrel_direction;
+var gun = gun_si.gun;
+var gst = gun_si.go.GetOrAddComponent<TrackerGunScript>();
 
-        // set necessary booleans to force the gun to shoot
-        gun.triggerPressed = true;
-        gun.firingPinStruck = false;
+gst.override_shoot_trajectory = true;
+gst.override_shoot_trajectory_origin = gun_barrel_origin;
+gst.override_shoot_trajectory_direction = gun_barrel_direction;
 
-        if (gun.roundInChamber != RoundInChamber.Round) {
-            if (gun.roundInChamber == RoundInChamber.Casing) { // force eject the casing , because the gun didnt  jam on their end
-                (UnityEngine.Object.Instantiate(Resources.Load("casing"), gun.transform.position, gun.transform.rotation) as GameObject).GetComponent<Rigidbody2D>().velocity = gun.transform.up * 12f;
-            }
+// set necessary booleans to force the gun to shoot
+gun.triggerPressed = true;
+gun.firingPinStruck = false;
 
-            gun.roundInChamber = RoundInChamber.Round;
-            gun.roundsInMag--;
-        }
+if (gun.roundInChamber != RoundInChamber.Round) {
+if (gun.roundInChamber == RoundInChamber.Casing) { // force eject the casing , because the gun didnt  jam on their end
+(UnityEngine.Object.Instantiate(Resources.Load("casing"), gun.transform.position, gun.transform.rotation) as GameObject).GetComponent<Rigidbody2D>().velocity = gun.transform.up * 12f;
+}
 
-        gun.lastRacked = false;
-        gun.racked = false;
-        gun.safe = false;
+gun.roundInChamber = RoundInChamber.Round;
+gun.roundsInMag--;
+}
 
+gun.lastRacked = false;
+gun.racked = false;
+gun.safe = false;
 
-        gst.ApplyRecoil();
 
-        // force run the update ig
-        gun_si.gun.Update();
+gst.ApplyRecoil();
 
-    }
+// force run the update ig
+gun_si.gun.Update();
 
+}
 
 
-    //idk man
-    public static bool ValidateBulletHit(TrackerGunScript gst) {
 
-        return false;
-    }
+//idk man
+public static bool ValidateBulletHit(TrackerGunScript gst) {
+
+return false;
+}
 
 
 
@@ -1980,527 +2206,554 @@ public static class GunScript_Fire_MultiplayerPatch {
 [HarmonyPatch(typeof(GunScript), nameof(GunScript.JamChance))]
 public static class GunScript_JamChance_MultiplayerPatch {
 
-    public static bool ForceJam = false; // decided by the client
+public static bool ForceJam = false; // decided by the client
 
-    static void Postfix(GunScript __instance, ref float __result ) {
+static void Postfix(GunScript __instance, ref float __result) {
 
 
-        var gst = __instance.GetOrAddComponent<TrackerGunScript>();
-        if (gst.body.TryGetNetBody(out var nb)) {
+var gst = __instance.GetOrAddComponent<TrackerGunScript>();
+if (gst.body.TryGetNetBody(out var nb)) {
 
-            if (!nb.IsLocal) {
-                if (ForceJam) {
-                    ForceJam = false;
-                    __result = 3f; // force it to jam
-                } else {
-                    __result = -1f; // force it to never jam, client handles that
-                }
+if (!nb.IsLocal) {
+if (ForceJam) {
+ForceJam = false;
+__result = 3f; // force it to jam
+} else {
+__result = -1f; // force it to never jam, client handles that
+}
 
-            }
-        }
+}
+}
 
-    }
+}
 }
 
 [HarmonyPatch(typeof(TurretScript), nameof(TurretScript.Shoot))]
 public static class TurretScript_Shoot_MultiplayerPatch {
 
-    public static bool HitOnlyStatic = false;
-    public static bool LastActiveShooterIsSuicide = false;
-    public static NetBody LastActiveShooter = null;
-    public static TrackerGunScript LastActiveShooterGun = null;
+public static bool HitOnlyStatic = false;
+// client replay of a host ceiling-turret shot. the tracer plays, the hit does not.
+public static bool SuppressBodyDamage = false;
+public static bool LastActiveShooterIsSuicide = false;
+public static NetBody LastActiveShooter = null;
+public static TrackerGunScript LastActiveShooterGun = null;
 
-    public static List<SyncInfo> JustHitBuildings = new();
-    public static List<Limb> JustHitLimbs = new();
+public static List<SyncInfo> JustHitBuildings = new();
+public static List<Limb> JustHitLimbs = new();
 
-    // returns false to damage the building
-    public static bool Shoot_DidHitABuilding(BuildingEntity building) { // its guranteed to get called after the cantHit was already checked
-        if (!Net.IsRunning) return false;
-
-        
-        if (ScavMPBuildingSynchronizer.BuildingHasActivePhysics(building)) {
-
-            if (NetObjectRegistry.TryGetSyncInfo(building.gameObject,out var si)) {
-                if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(building.transform.position, $"Shoot: Noted hit building", Color.green);
-
-                JustHitBuildings.Add(si);
-            }
-
-            if (LastActiveShooter != null) {
-                return true; // dont damage it because im doing it in the gun fire patch
-            }
-
-            if (HitOnlyStatic) {
-                return true;// dont damage it because i wanna only do the effects
-            }
-        }
-        
-        return false;
-    }
-
-    // returns false to damage the body
-    public static bool Shoot_DidHitABody(RaycastHit2D hit2D) {
-        if (!Net.IsRunning) return false;
+// returns false to damage the building
+public static bool Shoot_DidHitABuilding(BuildingEntity building) { // its guranteed to get called after the cantHit was already checked
+if (!Net.IsRunning) return false;
+// a client shot is only the picture. the host owns the building's health.
+if (SuppressBodyDamage) return true;
 
 
-        var limb = hit2D.collider.GetComponent<Limb>();
-        var body = hit2D.collider.GetComponent<Body>();
-        if (limb == null) {
-            if (body == null) {
-                return true; // the og code is not gona get triggered anyway
-            }
-        } else {
-            body = limb.body;
-        }
-        limb = body.GetClosestLimb(hit2D.point); // original code does it like that, i do the same because it brings very specific results
+if (ScavMPBuildingSynchronizer.BuildingHasActivePhysics(building)) {
+
+if (NetObjectRegistry.TryGetSyncInfo(building.gameObject, out var si)) {
+if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(building.transform.position, $"Shoot: Noted hit building", Color.green);
+
+JustHitBuildings.Add(si);
+}
+
+if (LastActiveShooter != null) {
+return true; // dont damage it because im doing it in the gun fire patch
+}
+
+if (HitOnlyStatic) {
+return true;// dont damage it because i wanna only do the effects
+}
+}
+
+return false;
+}
+
+// returns false to damage the body
+public static bool Shoot_DidHitABody(RaycastHit2D hit2D) {
+if (!Net.IsRunning) return false;
+if (SuppressBodyDamage) return true;
+
+
+var limb = hit2D.collider.GetComponent<Limb>();
+var body = hit2D.collider.GetComponent<Body>();
+if (limb == null) {
+if (body == null) {
+return true; // the og code is not gona get triggered anyway
+}
+} else {
+body = limb.body;
+}
+limb = body.GetClosestLimb(hit2D.point); // original code does it like that, i do the same because it brings very specific results
 
 #if DEBUG
-        log.l($"Shoot_DidHitABody limb: {limb}  rayhit:{hit2D.collider.name}");
+log.l($"Shoot_DidHitABody limb: {limb}  rayhit:{hit2D.collider.name}");
 #endif
-        if (LastActiveShooter == null) { // a turret is the shooter
+if (LastActiveShooter == null) { // a turret is the shooter
 #if FULLGAME
-            if (EndingGuardSync.ServerShotHit(body)) return false;
+if (EndingGuardSync.ServerShotHit(body)) return false;
 #endif
 #if DEBUG
-            Plugin.log.LogDebug($"Turret hit {limb}");
+Plugin.log.LogDebug($"Turret hit {limb}");
 #endif
 
-            if (last_fire_info.ignoreTrans != null && last_fire_info.ignoreTrans.TryGetComponent(out TurretScript turret) && body.TryGetNetBody(out var nb)) {
-                nb.OnDamageEvent(new BodyDamageEvent(turret.build, nb, 10));
-            }
+if (last_fire_info.ignoreTrans != null && last_fire_info.ignoreTrans.TryGetComponent(out TurretScript turret) && body.TryGetNetBody(out var nb)) {
+nb.OnDamageEvent(new BodyDamageEvent(turret.build, nb, 10));
+}
 
-            // remote bodies are a stamped pose. the owner already rolled this shot.
-            if (Net.IsRunning && body != null && !body.IsBodyLocal())
-                return true;
+#if FULLGAME
+// ceiling guns and guards only shoot on the host. the client never rolls this shot, so the host hit has to land.
+if (last_fire_info.ignoreTrans != null && limb != null
+&& (last_fire_info.ignoreTrans.TryGetComponent<CeilingTurret>(out _)
+|| last_fire_info.ignoreTrans.TryGetComponent<GuardScript>(out _))) {
+JustHitLimbs.Add(limb);
+return false;
+}
+#endif
 
-            if (Net.IsRunning)
-                TrapClaim.NoteTurret(body, limb);
+// remote bodies are a stamped pose. the owner already rolled this shot.
+if (Net.IsRunning && body != null && !body.IsBodyLocal())
+return true;
 
-            return false; // BANG , do the vanilla damage
-        }
+if (Net.IsRunning)
+TrapClaim.NoteTurret(body, limb);
 
-        bool actually_commiting_suicide = false;
+return false; // BANG , do the vanilla damage
+}
 
-        var do_damage = false; // dont damage em by default
+bool actually_commiting_suicide = false;
 
-        if (limb.TryGetNetBody(out var bodyn) ) {
-            actually_commiting_suicide = LastActiveShooterIsSuicide && bodyn == LastActiveShooter;
+var do_damage = false; // dont damage em by default
 
-            if (actually_commiting_suicide) {
-                do_damage = true; // let em kill themselves
-            } else if (LastActiveShooter.CanAttackThisGuy(limb.body)) { // additional checks
-                do_damage = true; // damage the poor guy
-            } 
-            if (HitOnlyStatic) {
-                do_damage = false;
-            }
+if (limb.TryGetNetBody(out var bodyn)) {
+actually_commiting_suicide = LastActiveShooterIsSuicide && bodyn == LastActiveShooter;
 
-            if (do_damage && bodyn is NetBody) {  // the council has decided to kill the him
-                if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(bodyn.GetHeadPos(), $"Shoot: Noted hit body", Color.green);
-                JustHitLimbs.Add(limb);
-            } else {
-                // nah ts doesnt work
-            }
-        }
+if (actually_commiting_suicide) {
+do_damage = true; // let em kill themselves
+} else if (LastActiveShooter.CanAttackThisGuy(limb.body)) { // additional checks
+do_damage = true; // damage the poor guy
+}
+if (HitOnlyStatic) {
+do_damage = false;
+}
+
+if (do_damage && bodyn is NetBody) {  // the council has decided to kill the him
+if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(bodyn.GetHeadPos(), $"Shoot: Noted hit body", Color.green);
+JustHitLimbs.Add(limb);
+} else {
+// nah ts doesnt work
+}
+}
 
 #if DEBUG
-        if (log.verbose && !HitOnlyStatic) log.l($"Shoot_DidHitABody limb: {limb} body: {bodyn} -> damage allowed:{do_damage} ");
+if (log.verbose && !HitOnlyStatic) log.l($"Shoot_DidHitABody limb: {limb} body: {bodyn} -> damage allowed:{do_damage} ");
 #endif
 
-        if (actually_commiting_suicide) {
-            return false; // allow full damage for suicide
-        }
+if (actually_commiting_suicide) {
+return false; // allow full damage for suicide
+}
 
-        // allow damaging npcs i guess, why am i even doing this its not a thing even 
-        if ((bodyn == null || !(bodyn.IsPlayer)) && Multiplayer.rules.PVP) {
-            return false;
-        }
-
-        
-        
-        return true; // i completely override the body damage because of friendly fire specifics
-    }
+// allow damaging npcs i guess, why am i even doing this its not a thing even
+if ((bodyn == null || !(bodyn.IsPlayer)) && Multiplayer.rules.PVP) {
+return false;
+}
 
 
-    public static void ApplyShootDamages(TrackerGunScript gst, IEnumerable<Limb> hitLimbs, IEnumerable<SyncInfo> hitBuildings) {
-        var attackerIsLocal = Util.IsBodyLocal(gst.body);
-        
-        var hitLimbsDuplicateCount = hitLimbs.GroupBy(x => x, ReferenceEqualityComparer.Instance).ToDictionary(a => (Limb)a.Key, b => b.Count());
 
-		Dictionary<NetBody, float> plrdamages = new();
-		foreach (var limb in hitLimbs) {
-			var dmg = TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(limb, gst, true);
+return true; // i completely override the body damage because of friendly fire specifics
+}
 
-			if (limb.TryGetNetBody(out var nb)) {
-				if (!plrdamages.ContainsKey(nb)) {
-					plrdamages[nb] = 0;
-				}
-				plrdamages[nb] += dmg;
-			}
-		}
-		{
-			List<Body> amputatedonplrs = new();
-			foreach (var limbcount in hitLimbsDuplicateCount) {
-				var limb = limbcount.Key;
+
+public static void ApplyShootDamages(TrackerGunScript gst, IEnumerable<Limb> hitLimbs, IEnumerable<SyncInfo> hitBuildings) {
+var attackerIsLocal = Util.IsBodyLocal(gst.body);
+
+var hitLimbsDuplicateCount = hitLimbs.GroupBy(x => x, ReferenceEqualityComparer.Instance).ToDictionary(a => (Limb)a.Key, b => b.Count());
+
+Dictionary<NetBody, float> plrdamages = new();
+foreach (var limb in hitLimbs) {
+var dmg = TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(limb, gst, true);
+
+if (limb.TryGetNetBody(out var nb)) {
+if (!plrdamages.ContainsKey(nb)) {
+plrdamages[nb] = 0;
+}
+plrdamages[nb] += dmg;
+}
+}
+{
+List<Body> amputatedonplrs = new();
+foreach (var limbcount in hitLimbsDuplicateCount) {
+var limb = limbcount.Key;
 
 #if !RELEASE
-				if (log.verbose) log.l($"{limb} WAS HIT {hitLimbsDuplicateCount[limb]} TIMES ");
+if (log.verbose) log.l($"{limb} WAS HIT {hitLimbsDuplicateCount[limb]} TIMES ");
 #endif
 
-				if (amputatedonplrs.Contains(limb.body) || (!Multiplayer.rules.PVPCombatDismember && limb.body.alive)) {
-					continue;
-				}
+if (amputatedonplrs.Contains(limb.body) || (!Multiplayer.rules.PVPCombatDismember && limb.body.alive)) {
+continue;
+}
 
-				{
-					if (
-                        limbcount.Value >= 3  // all three max bullets hit the limb
-					) {
-						if (
-						    KM.DistanceCheck(gst.transform.position, limb.transform.position, 16) // check if actually close
-						) {
-							CombatStuff.BetterDismember(limb, !limb.isHead);
-							if (limb.dismembered) {
-								amputatedonplrs.Add(limb.body);
-							}
-						} 
-					}
-				}
-			}
-		}
-
-
-		foreach (var dmg in plrdamages) { // visualize the damage
-            var p = dmg.Key.GetHeadPos() + Vector2.up;
-            WorldGeneration.CreateDamageNumber(p, (int)dmg.Value);
-            if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(p, $"Shoot: Damaged body {dmg.Key}", Color.red);
-            dmg.Key.body.DoGoreSound();
-
-            if (!dmg.Key.body.conscious && dmg.Key.body.isDying) {
-                gst.body.happiness -= Multiplayer.rules.PVPMoodDebuff*2;
-                if (!gst.body.specialCrying && Multiplayer.rules.PVPMoodDebuff > 0) {
-                    gst.body.StartCoroutine("Cry");
-                }
-            }
-
-            {
-                dmg.Key.OnDamageEvent(new BodyDamageEvent(gst.pbody,dmg.Key,gst.item, dmg.Value));
-            }
-
-            {
-                if (Net.IsServer) {
-                    MedicalSync.Server_QueueSendCharacterHealth(dmg.Key, true);
-                } else {
-                    if (attackerIsLocal)
-                        dmg.Key.SetNetHealthSyncIgnoreTime();
-                }
-            }
-        }
-
-        foreach (var building in hitBuildings) {
-            
-            var dmg = TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageBuilding(building.building, gst);
-
-            if (Net.IsServer) {
-                //NetObjectRegistry.Server_QueueSync(building);
-            } else {
-                if (attackerIsLocal)
-                    building.SetIgnoreTimeForRoundTrip();
-            }
-            
-
-            {
-                // do the visuals
-                if (building.building.animal) {
-                    Sound.Play("gore" + Random.Range(1, 6), building.transformPosition);
-
-                }
-                var p = building.transformPosition + Vector2.up * 2;
-                WorldGeneration.CreateDamageNumber(p, (int)(dmg));
-                if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(p, $"Shoot: Damaged building", Color.red);
-            }
-        }
-    }
+{
+if (
+limbcount.Value >= 3  // all three max bullets hit the limb
+) {
+if (
+KM.DistanceCheck(gst.transform.position, limb.transform.position, 16) // check if actually close
+) {
+CombatStuff.BetterDismember(limb, !limb.isHead);
+if (limb.dismembered) {
+amputatedonplrs.Add(limb.body);
+}
+}
+}
+}
+}
+}
 
 
-    //OG: TurretScript.Shoot V5t4  the part where it applies damage to building, but minus the sound and damagenumber part, and that random number moved all the way to here
-    public static float Stolen_ShootApplyDamageBuilding(BuildingEntity b, TrackerGunScript gst) {
-        float num = Random.Range(0.85f, 1.15f);
+foreach (var dmg in plrdamages) { // visualize the damage
+var p = dmg.Key.GetHeadPos() + Vector2.up;
+WorldGeneration.CreateDamageNumber(p, (int)dmg.Value);
+if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(p, $"Shoot: Damaged body {dmg.Key}", Color.red);
+dmg.Key.body.DoGoreSound();
 
-        var damage = (b.animal ? (gst.og.animalDamage * num) : (gst.og.structureDamage * num));
+if (!dmg.Key.body.conscious && dmg.Key.body.isDying) {
+gst.body.happiness -= Multiplayer.rules.PVPMoodDebuff * 2;
+if (!gst.body.specialCrying && Multiplayer.rules.PVPMoodDebuff > 0) {
+gst.body.StartCoroutine("Cry");
+}
+}
+
+{
+dmg.Key.OnDamageEvent(new BodyDamageEvent(gst.pbody, dmg.Key, gst.item, dmg.Value));
+}
+
+{
+if (Net.IsServer) {
+MedicalSync.Server_QueueSendCharacterHealth(dmg.Key, true);
+} else {
+if (attackerIsLocal)
+dmg.Key.SetNetHealthSyncIgnoreTime();
+}
+}
+}
+
+foreach (var building in hitBuildings) {
+
+var dmg = TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageBuilding(building.building, gst);
+
+if (Net.IsServer) {
+//netObjectRegistry.Server_QueueSync(building);
+} else {
+if (attackerIsLocal)
+building.SetIgnoreTimeForRoundTrip();
+}
+
+
+{
+// do the visuals
+if (building.building.animal) {
+Sound.Play("gore" + Random.Range(1, 6), building.transformPosition);
+
+}
+var p = building.transformPosition + Vector2.up * 2;
+WorldGeneration.CreateDamageNumber(p, (int)(dmg));
+if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(p, $"Shoot: Damaged building", Color.red);
+}
+}
+}
+
+
+//OG: TurretScript.Shoot V5t4  the part where it applies damage to building, but minus the sound and damagenumber part, and that random number moved all the way to here
+public static float Stolen_ShootApplyDamageBuilding(BuildingEntity b, TrackerGunScript gst) {
+float num = Random.Range(0.85f, 1.15f);
+
+var damage = (b.animal ? (gst.og.animalDamage * num) : (gst.og.structureDamage * num));
 
 #if FULLGAME
-        TraderMoodEffects.RecordHit(b, gst.body, b.GetHealth() - damage);
-        if (b.animal) EndingGuardSync.PlayerHit(b, gst.body);
+TraderMoodEffects.RecordHit(b, gst.body, b.GetHealth() - damage);
+if (b.animal) EndingGuardSync.PlayerHit(b, gst.body);
 #endif
-        b.SetHealth(b.GetHealth() - damage);
-        if (b.animal) {
-            b.gameObject.SendMessage("AnimalHit", damage);
-        }
-        return damage;
-    }
+b.SetHealth(b.GetHealth() - damage);
+if (b.animal) {
+b.gameObject.SendMessage("AnimalHit", damage);
+}
+return damage;
+}
 
 
-    //OG: TurretScript.Shoot V5t4  the part where it applies damage to body // TODO TS IS OUTDATED  FireInfo.playerDamageMultiplier WAS ADDED, BUT IS IT USED THO? 
-    public static float Stolen_ShootApplyDamageLimb(Limb limb, TrackerGunScript gst, bool use_pvp_damage_model) {
-        limb.body.adrenaline = 100f;
+//OG: TurretScript.Shoot V5t4  the part where it applies damage to body // TODO TS IS OUTDATED  FireInfo.playerDamageMultiplier WAS ADDED, BUT IS IT USED THO?
+public static float Stolen_ShootApplyDamageLimb(Limb limb, TrackerGunScript gst, bool use_pvp_damage_model) {
+limb.body.adrenaline = 100f;
 
-        var armor = limb.GetArmorReduction();
+var armor = limb.GetArmorReduction();
 
-        var rule_mult = Multiplayer.rules.PVPDamageMultiplier;
+var rule_mult = Multiplayer.rules.PVPDamageMultiplier;
 
-        var limbindex = Util.GetLimbIndex(limb);
+var limbindex = Util.GetLimbIndex(limb);
 
-        float damage = 0;
+float damage = 0;
 
-        if (use_pvp_damage_model) { // SLIGHTLY NERFED DAMAGE FOR MP FRIENDLY FIRE
-            armor /= (rule_mult == 0 ? 0.00001f : rule_mult);
+if (use_pvp_damage_model) { // SLIGHTLY NERFED DAMAGE FOR MP FRIENDLY FIRE
+armor /= (rule_mult == 0 ? 0.00001f : rule_mult);
 
-            if (rule_mult != 0) {
-                limb.pain += Random.Range(50f, 70f) / armor;
+if (rule_mult != 0) {
+limb.pain += Random.Range(50f, 70f) / armor;
 
-                damage = gst.og.animalDamage / armor * 0.5f;
+damage = gst.og.animalDamage / armor * 0.5f;
 
-                limb.skinHealth -= damage;
-                limb.muscleHealth -= damage;
-                limb.bleedAmount += Random.Range(30f, 40f) / armor;
-                limb.shrapnel = Math.Max(limb.shrapnel, Random.Range(0, (int)Mathf.Clamp(5f * rule_mult, 1, 5)));
+limb.skinHealth -= damage;
+limb.muscleHealth -= damage;
+limb.bleedAmount += Random.Range(30f, 40f) / armor;
+limb.shrapnel = Math.Max(limb.shrapnel, Random.Range(0, (int)Mathf.Clamp(5f * rule_mult, 1, 5)));
 
-                limb.DamageWearables(0.8f * rule_mult);
-            }
+limb.DamageWearables(0.8f * rule_mult);
+}
 
-        } else {// ORIGINAL TURRET DAMAGE
-            rule_mult = 1;
-            limb.pain += Random.Range(80f, 100f) / armor;
+} else {// ORIGINAL TURRET DAMAGE
+rule_mult = 1;
+limb.pain += Random.Range(80f, 100f) / armor;
 
-            damage = Random.Range(70f, 100f) / armor; // for completeness
+damage = Random.Range(70f, 100f) / armor; // for completeness
 
-            limb.skinHealth -= damage;
-            limb.muscleHealth -= Random.Range(70f, 100f) / armor;
-            limb.bleedAmount += Random.Range(30f, 40f) / armor;
-            limb.shrapnel = 5;
+limb.skinHealth -= damage;
+limb.muscleHealth -= Random.Range(70f, 100f) / armor;
+limb.bleedAmount += Random.Range(30f, 40f) / armor;
+limb.shrapnel = 5;
 
-            limb.DamageWearables(1f);
-        }
-        if (limb.isVital || limb.isHead) {
-            limb.body.internalBleeding += Random.Range(18f, 22f) / armor;
-        }
-        if (Random.Range(0f, 1f) < 0.3f * rule_mult) {
-            limb.BreakBone();
-        }
-        if (limb.isHead) {
+limb.DamageWearables(1f);
+}
+if (limb.isVital || limb.isHead) {
+limb.body.internalBleeding += Random.Range(18f, 22f) / armor;
+}
+if (Random.Range(0f, 1f) < 0.3f * rule_mult) {
+limb.BreakBone();
+}
+if (limb.isHead) {
 
-            if (use_pvp_damage_model) { // SLIGHTLY NERFED DAMAGE FOR MP FRIENDLY FIRE
-                limb.pain += Random.Range(10f, 50f) / armor;
+if (use_pvp_damage_model) { // SLIGHTLY NERFED DAMAGE FOR MP FRIENDLY FIRE
+limb.pain += Random.Range(10f, 50f) / armor;
 
-                limb.body.consciousness -= 35f / armor;
-                //dont make it an instant death 
-                if (limb.body.brainHealth > 20f) {
-                    limb.body.brainHealth = Math.Max(4f,(limb.body.brainHealth - Random.Range(10f, 70f) / armor));
-                } else {
-                    limb.body.brainHealth -= Random.Range(5f, Math.Max(limb.body.brainHealth-1f,9f)) / armor;
-                }
+limb.body.consciousness -= 35f / armor;
+//dont make it an instant death
+if (limb.body.brainHealth > 20f) {
+limb.body.brainHealth = Math.Max(4f, (limb.body.brainHealth - Random.Range(10f, 70f) / armor));
+} else {
+limb.body.brainHealth -= Random.Range(5f, Math.Max(limb.body.brainHealth - 1f, 9f)) / armor;
+}
 
-                if (Multiplayer.rules.PVPCombatDismember && Random.value * rule_mult > 0.2f && !limb.body.GetHead().dismembered) {
-                    if (Random.value > 0.5f) {
-                        limb.body.Disfigure();
-                    } else {
-                        limb.body.RemoveEye();
-                    }
-                } 
-            } else { // default turret damage 
-                limb.body.consciousness = 0f;
-                limb.body.brainHealth -= Random.Range(10f, 85f) / armor;
+if (Multiplayer.rules.PVPCombatDismember && Random.value * rule_mult > 0.2f && !limb.body.GetHead().dismembered) {
+if (Random.value > 0.5f) {
+limb.body.Disfigure();
+} else {
+limb.body.RemoveEye();
+}
+}
+} else { // default turret damage
+limb.body.consciousness = 0f;
+limb.body.brainHealth -= Random.Range(10f, 85f) / armor;
 
-                if (Random.value > 0.5f) {
-                    limb.body.Disfigure();
-                } else {
-                    limb.body.RemoveEye();
-                }
-            }
+if (Random.value > 0.5f) {
+limb.body.Disfigure();
+} else {
+limb.body.RemoveEye();
+}
+}
 
-        }
-
-
-
-        if ((Multiplayer.rules.PVPCombatDismember || !limb.body.alive) && use_pvp_damage_model ) {
-            var markiplier =  1f;
-            var markiplier2 = 3f;
-            if (limb.body.IsDeadOrCriticallyDying()) {
-                markiplier = 2f;
-                if (gst.IsShotgun()) {
-                    markiplier2 = 52f; 
-                } else {
-                    markiplier2 = 5f;
-                }
-            }
-            if ( limb.muscleHealth <= markiplier && limb.skinHealth <= markiplier2 ) { // if the limb is really damaged, allow to amputate it
-
-                if (Net.IsServer) {
-                    
-                    if (UnityEngine.Random.value < 0.2 * markiplier * rule_mult) {
-                        var head = limb.body.limbs[(int)Body.LimbNum.Head];
-                        if (Util.GetLimbIndex(limb) <= 2 && !head.dismembered) { // shoot their head off first ig 
-                            CombatStuff.BetterDismember(head, true);
-                        } else {
-                            CombatStuff.BetterDismember(limb, true);
-                        }
-                    }
-                }
-            }
-            
-        }
-
-        return damage;
-    }
-
-
-    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
-
-        var codes = new List<CodeInstruction>(instructions);
-
-        int i = 0;
-
-        i += 100;
+}
 
 
 
-        while (!(
-            codes[i-3].opcode == OpCodes.Ldloc_S &&
-            codes[i-2].opcode == OpCodes.Ldfld &&
-            codes[i-1].opcode == OpCodes.Brtrue &&
-            codes[i].opcode == OpCodes.Ldloc_S &&
+if ((Multiplayer.rules.PVPCombatDismember || !limb.body.alive) && use_pvp_damage_model) {
+var markiplier = 1f;
+var markiplier2 = 3f;
+if (limb.body.IsDeadOrCriticallyDying()) {
+markiplier = 2f;
+if (gst.IsShotgun()) {
+markiplier2 = 52f;
+} else {
+markiplier2 = 5f;
+}
+}
+if (limb.muscleHealth <= markiplier && limb.skinHealth <= markiplier2) { // if the limb is really damaged, allow to amputate it
 
-            codes[i - 2].ToString().Contains("cantHit") // check if for that Ldfld
+if (Net.IsServer) {
 
-        )) { 
-            i++;
-        }
+if (UnityEngine.Random.value < 0.2 * markiplier * rule_mult) {
+var head = limb.body.limbs[(int)Body.LimbNum.Head];
+if (Util.GetLimbIndex(limb) <= 2 && !head.dismembered) { // shoot their head off first ig
+CombatStuff.BetterDismember(head, true);
+} else {
+CombatStuff.BetterDismember(limb, true);
+}
+}
+}
+}
 
-        if (log.verbose) Plugin.log.LogWarning($"TRANSPILER: TurretScript Shoot TRANSPILER found the building if statement {i}"); // expected around 117
-        var building_check_location = i;
+}
 
-
-        i += 60;
-
-
-        while (!(
-            codes[i - 3].opcode == OpCodes.Ldloc_S &&
-            codes[i - 2].opcode == OpCodes.Ldfld &&
-            codes[i - 1].opcode == OpCodes.Stloc_S &&
-            codes[i].opcode == OpCodes.Ldloc_S &&
-
-            codes[i - 2].ToString().Contains("Limb") && // check for that body field thingy
-            codes[i - 2].ToString().Contains("body") // check for that body field thingy
-
-        )) { 
-            i++;
-        }
-
-        var body_check_location = i;
+return damage;
+}
 
 
-        if (log.verbose) Plugin.log.LogWarning($"TRANSPILER: TurretScript Shoot TRANSPILER found teh body damage part {i}"); // expected around 251
+static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
+
+var codes = new List<CodeInstruction>(instructions);
+
+int i = 0;
+
+i += 100;
+
+
+
+while (!(
+codes[i - 3].opcode == OpCodes.Ldloc_S &&
+codes[i - 2].opcode == OpCodes.Ldfld &&
+codes[i - 1].opcode == OpCodes.Brtrue &&
+codes[i].opcode == OpCodes.Ldloc_S &&
+
+codes[i - 2].ToString().Contains("cantHit") // check if for that Ldfld
+
+)) {
+i++;
+}
+
+if (log.verbose) Plugin.log.LogWarning($"TRANSPILER: TurretScript Shoot TRANSPILER found the building if statement {i}"); // expected around 117
+var building_check_location = i;
+
+
+i += 60;
+
+
+while (!(
+codes[i - 3].opcode == OpCodes.Ldloc_S &&
+codes[i - 2].opcode == OpCodes.Ldfld &&
+codes[i - 1].opcode == OpCodes.Stloc_S &&
+codes[i].opcode == OpCodes.Ldloc_S &&
+
+codes[i - 2].ToString().Contains("Limb") && // check for that body field thingy
+codes[i - 2].ToString().Contains("body") // check for that body field thingy
+
+)) {
+i++;
+}
+
+var body_check_location = i;
+
+
+if (log.verbose) Plugin.log.LogWarning($"TRANSPILER: TurretScript Shoot TRANSPILER found teh body damage part {i}"); // expected around 251
 
 
 
 
-        var continuejumpoperandindex = body_check_location - 1;
-        while (!(codes[continuejumpoperandindex].opcode == OpCodes.Brtrue  )) {
-            continuejumpoperandindex--;
-        }
+var continuejumpoperandindex = body_check_location - 1;
+while (!(codes[continuejumpoperandindex].opcode == OpCodes.Brtrue)) {
+continuejumpoperandindex--;
+}
 
 #if DEBUG
-        if (log.verbose)
-            Plugin.log.LogWarning($"TRANSPILER: TurretScript Shoot FOUND THE CONTINUE JUMP REF AT: {continuejumpoperandindex}  {codes[continuejumpoperandindex]}  type: {codes[continuejumpoperandindex].operand.GetType()}  ");
+if (log.verbose)
+Plugin.log.LogWarning($"TRANSPILER: TurretScript Shoot FOUND THE CONTINUE JUMP REF AT: {continuejumpoperandindex}  {codes[continuejumpoperandindex]}  type: {codes[continuejumpoperandindex].operand.GetType()}  ");
 #endif
 
 
 
-		{
-			//ldloc.s body(7)
-			//call    bool[KrokoshaCasualtiesMP] KrokoshaCasualtiesMP.TurretScript_Shoot_MultiplayerPatch::Shoot_DidHitABody(class Body)
-			//brtrue  404 (0547) ldloc.3 
+{
+//ldloc.s body(7)
+//call    bool[KrokoshaCasualtiesMP] KrokoshaCasualtiesMP.TurretScript_Shoot_MultiplayerPatch::Shoot_DidHitABody(class Body)
+//brtrue  404 (0547) ldloc.3
 
-			var newInstructions = new List<CodeInstruction>();
-            
-
-            var bodyoperandindex = body_check_location - 1;
-            while (!(codes[bodyoperandindex].operand is LocalBuilder lb && lb.LocalType == typeof(Body))) {
-                bodyoperandindex--;
-            }
+var newInstructions = new List<CodeInstruction>();
 
 
-			var rayhitoperandindex = body_check_location - 1;
-            while (!(codes[rayhitoperandindex].operand is LocalBuilder lb && lb.LocalType == typeof(RaycastHit2D))) {
-                rayhitoperandindex--;
-            }
-
-			newInstructions.Add(new CodeInstruction(OpCodes.Call,
-                AccessTools.Method(typeof(TurretScript_Shoot_MultiplayerPatch), nameof(TurretScript_Shoot_MultiplayerPatch.Shoot_DidHitABody))));
-
-            newInstructions.Add(new CodeInstruction(OpCodes.Brtrue, codes[continuejumpoperandindex].operand));
-
-            newInstructions.Add(new CodeInstruction(OpCodes.Ldloc_S, codes[bodyoperandindex].operand));
-
-            codes[body_check_location].operand = codes[rayhitoperandindex].operand;
-            codes.InsertRange(body_check_location+1, newInstructions);
-
-		}
+var bodyoperandindex = body_check_location - 1;
+while (!(codes[bodyoperandindex].operand is LocalBuilder lb && lb.LocalType == typeof(Body))) {
+bodyoperandindex--;
+}
 
 
+var rayhitoperandindex = body_check_location - 1;
+while (!(codes[rayhitoperandindex].operand is LocalBuilder lb && lb.LocalType == typeof(RaycastHit2D))) {
+rayhitoperandindex--;
+}
 
-		{
-            //call    bool[KrokoshaCasualtiesMP] KrokoshaCasualtiesMP.TurretScript_Shoot_MultiplayerPatch::Shoot_DidHitABuilding(class BuildingEntity)
-            //brtrue  404 (0547) ldloc.3 
-            //ldloc.s buildingEntity(5)
+newInstructions.Add(new CodeInstruction(OpCodes.Call,
+AccessTools.Method(typeof(TurretScript_Shoot_MultiplayerPatch), nameof(TurretScript_Shoot_MultiplayerPatch.Shoot_DidHitABody))));
 
-            var newInstructions = new List<CodeInstruction>();
-            newInstructions.Add(new CodeInstruction(OpCodes.Call,
-                AccessTools.Method(typeof(TurretScript_Shoot_MultiplayerPatch), nameof(TurretScript_Shoot_MultiplayerPatch.Shoot_DidHitABuilding))));
-            newInstructions.Add(new CodeInstruction(OpCodes.Brtrue, codes[continuejumpoperandindex].operand));
-            newInstructions.Add(new CodeInstruction(OpCodes.Ldloc_S, codes[building_check_location].operand));
-            codes.InsertRange(building_check_location + 1, newInstructions);
-		}
+newInstructions.Add(new CodeInstruction(OpCodes.Brtrue, codes[continuejumpoperandindex].operand));
+
+newInstructions.Add(new CodeInstruction(OpCodes.Ldloc_S, codes[bodyoperandindex].operand));
+
+codes[body_check_location].operand = codes[rayhitoperandindex].operand;
+codes.InsertRange(body_check_location + 1, newInstructions);
+
+}
 
 
 
-		if (log.verbose) {
-            Plugin.log.LogWarning($"TRANSPILER: TurretScript Shoot TRANSPILER SUCCESS :) ");
-        }
-        return codes;
-    }
+{
+//call    bool[KrokoshaCasualtiesMP] KrokoshaCasualtiesMP.TurretScript_Shoot_MultiplayerPatch::Shoot_DidHitABuilding(class BuildingEntity)
+//brtrue  404 (0547) ldloc.3
+//ldloc.s buildingEntity(5)
 
-    public static FireInfo last_fire_info;
-    static void Prefix(FireInfo info) {
-        TrapClaim.BeginShot();
-        JustHitBuildings.Clear();
-        JustHitLimbs.Clear();
-        last_fire_info = info;
+var newInstructions = new List<CodeInstruction>();
+newInstructions.Add(new CodeInstruction(OpCodes.Call,
+AccessTools.Method(typeof(TurretScript_Shoot_MultiplayerPatch), nameof(TurretScript_Shoot_MultiplayerPatch.Shoot_DidHitABuilding))));
+newInstructions.Add(new CodeInstruction(OpCodes.Brtrue, codes[continuejumpoperandindex].operand));
+newInstructions.Add(new CodeInstruction(OpCodes.Ldloc_S, codes[building_check_location].operand));
+codes.InsertRange(building_check_location + 1, newInstructions);
+}
 
-        // original only damages ears of local player if close enough
-        if (info.doTinnitus) {
-            foreach (var nb in NetBody.GetBodiesInRadius(info.pos,20)) {
-                if (nb.IsBodyLocal()) { // its done by og func
-                    continue;
-                }
-                nb.body.hearingLoss += UnityEngine.Random.Range(10f, 15f);
-                nb.body.eyePanicTime = 0.6f;
-                nb.body.eyeCloseTime = 4f;
-                nb.body.eyeScareTime = 8f;
-                nb.body.talker.Talk(Locale.GetCharacter("loud"));
-            }
-        }
 
-        if (LastActiveShooter != null) {
-            LastActiveShooter.RollAttackRandom();
-        }
-    }
-    static void Postfix() {
-        TrapClaim.EndShot();
-        LastActiveShooterIsSuicide = false;
-        LastActiveShooter = null;
-        LastActiveShooterGun = null;
-    }
+
+if (log.verbose) {
+Plugin.log.LogWarning($"TRANSPILER: TurretScript Shoot TRANSPILER SUCCESS :) ");
+}
+return codes;
+}
+
+public static FireInfo last_fire_info;
+static void Prefix(FireInfo info) {
+TrapClaim.BeginShot();
+JustHitBuildings.Clear();
+JustHitLimbs.Clear();
+last_fire_info = info;
+
+// original only damages ears of local player if close enough
+if (info.doTinnitus) {
+foreach (var nb in NetBody.GetBodiesInRadius(info.pos, 20)) {
+if (nb.IsBodyLocal()) { // its done by og func
+continue;
+}
+nb.body.hearingLoss += UnityEngine.Random.Range(10f, 15f);
+nb.body.eyePanicTime = 0.6f;
+nb.body.eyeCloseTime = 4f;
+nb.body.eyeScareTime = 8f;
+nb.body.talker.Talk(Locale.GetCharacter("loud"));
+}
+}
+
+if (LastActiveShooter != null) {
+LastActiveShooter.RollAttackRandom();
+}
+}
+static void Postfix() {
+#if FULLGAME
+if (Net.IsServer && last_fire_info.ignoreTrans != null
+&& (last_fire_info.ignoreTrans.TryGetComponent<CeilingTurret>(out _)
+|| last_fire_info.ignoreTrans.TryGetComponent<GuardScript>(out _))) {
+for (int i = 0; i < JustHitLimbs.Count; i++) {
+Limb limb = JustHitLimbs[i];
+if (limb != null && limb.body != null && limb.body.TryGetNetBody(out NetBody hurt)) {
+MedicalSync.Server_QueueSendCharacterHealth(hurt, true);
+}
+}
+}
+#endif
+TrapClaim.EndShot();
+LastActiveShooterIsSuicide = false;
+LastActiveShooter = null;
+LastActiveShooterGun = null;
+}
 
 
 }
@@ -2515,14 +2768,14 @@ public static class TurretScript_Shoot_MultiplayerPatch {
 [HarmonyPatch(typeof(GunScript), nameof(GunScript.UnloadMag))]
 public static class GunScript_UnloadMag_MultiplayerPatch {
 
-    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
-        return GunScript_Fire_MultiplayerPatch.Transpiler(instructions);   
-    }
+static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
+return GunScript_Fire_MultiplayerPatch.Transpiler(instructions);
+}
 
-    public static void Prefix(GunScript __instance) {
-        // because i transpiled shit this component basically required
-        var tracker = __instance.GetOrAddComponent<TrackerGunScript>();
-    }
+public static void Prefix(GunScript __instance) {
+// because i transpiled shit this component basically required
+var tracker = __instance.GetOrAddComponent<TrackerGunScript>();
+}
 }
 
 
@@ -2534,84 +2787,84 @@ public static class GunScript_UnloadMag_MultiplayerPatch {
 
 [HarmonyPatch(typeof(GunScript), nameof(GunScript.Update))]
 public static class GunScript_Update_MultiplayerPatch {
-    public static GunScript current_executing_gun = null;
-    static void Prefix(GunScript __instance) {
-        current_executing_gun = __instance;
-    }
-    static void Postfix(GunScript __instance) {
-        current_executing_gun = null;
-    }
+public static GunScript current_executing_gun = null;
+static void Prefix(GunScript __instance) {
+current_executing_gun = __instance;
+}
+static void Postfix(GunScript __instance) {
+current_executing_gun = null;
+}
 }
 
 
 [HarmonyPatch(typeof(GunScript), nameof(GunScript.Start))]
 public static class GunScript_Start_MultiplayerPatch {
-    static void Postfix(GunScript __instance) {
-        var tracker = __instance.GetOrAddComponent<TrackerGunScript>();
+static void Postfix(GunScript __instance) {
+var tracker = __instance.GetOrAddComponent<TrackerGunScript>();
 
-        // because i transpile shit, its basically required
+// because i transpile shit, its basically required
 
-        __instance.lastRacked = __instance.racked; // to prevent the spawning racking sound or something !!
-    }
+__instance.lastRacked = __instance.racked; // to prevent the spawning racking sound or something !!
+}
 }
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.GunRack))]
 public static class PlayerCamera_GunRack_MultiplayerPatch {
-    static void Postfix(PlayerCamera __instance) {
-        if (UIInGame.SpectatorModeActive) return;
-        if (Multiplayer.IsNetworkActiveAndIsClient()) {
-            if (ScavPlayer.LocalPlayer.HasGunEquipped(out var gun)) {
-                var tracker = gun.GetComponent<SyncInfoGameObjectTracker>();
-                if (tracker != null  ) {
-                    var gst = gun.GetOrAddComponent<TrackerGunScript>();
+static void Postfix(PlayerCamera __instance) {
+if (UIInGame.SpectatorModeActive) return;
+if (Multiplayer.IsNetworkActiveAndIsClient()) {
+if (ScavPlayer.LocalPlayer.HasGunEquipped(out var gun)) {
+var tracker = gun.GetComponent<SyncInfoGameObjectTracker>();
+if (tracker != null) {
+var gst = gun.GetOrAddComponent<TrackerGunScript>();
 
-                    if (log.verbose) Plugin.log.LogInfo($"local GunRack {tracker.syncInfo}");
+if (log.verbose) Plugin.log.LogInfo($"local GunRack {tracker.syncInfo}");
 
-                    gst.send_racked_state = true;
+gst.send_racked_state = true;
 
-                    tracker.syncInfo.SetIgnoreTimeForRoundTrip(0.5f);
-                }
-            }
-        }
-    }
+tracker.syncInfo.SetIgnoreTimeForRoundTrip(0.5f);
+}
+}
+}
+}
 }
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.GunEjectMag))]
 public static class PlayerCamera_GunEjectMag_MultiplayerPatch {
-     static void Postfix(PlayerCamera __instance) {
-        if (UIInGame.SpectatorModeActive) return;
-        if (Multiplayer.IsNetworkActiveAndIsClient()) {
-            if (ScavPlayer.LocalPlayer.HasGunEquipped(out var gun)) {
-                var tracker = gun.GetComponent<SyncInfoGameObjectTracker>();
-                if (tracker != null) {
+static void Postfix(PlayerCamera __instance) {
+if (UIInGame.SpectatorModeActive) return;
+if (Multiplayer.IsNetworkActiveAndIsClient()) {
+if (ScavPlayer.LocalPlayer.HasGunEquipped(out var gun)) {
+var tracker = gun.GetComponent<SyncInfoGameObjectTracker>();
+if (tracker != null) {
 
-                    if (log.verbose) Plugin.log.LogInfo($"local GunEjectMag {tracker.syncInfo}");
+if (log.verbose) Plugin.log.LogInfo($"local GunEjectMag {tracker.syncInfo}");
 
-                    Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerCamera_GunEjectMag, true);
+Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerCamera_GunEjectMag, true);
 
-                    tracker.syncInfo.SetIgnoreTimeForRoundTrip(0.4f);
-                }
-            }
-        }
-    }
+tracker.syncInfo.SetIgnoreTimeForRoundTrip(0.4f);
+}
+}
+}
+}
 }
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.GunToggleSafety))]
 public static class PlayerCamera_GunToggleSafety_MultiplayerPatch {
-    static void Postfix(PlayerCamera __instance) {
-        if (UIInGame.SpectatorModeActive) return;
-        if (Multiplayer.IsNetworkActiveAndIsClient()) {
+static void Postfix(PlayerCamera __instance) {
+if (UIInGame.SpectatorModeActive) return;
+if (Multiplayer.IsNetworkActiveAndIsClient()) {
 
-            if (ScavPlayer.LocalPlayer.HasGunEquipped(out var gun)) {
-                var tracker = gun.GetOrAddComponent<SyncInfoGameObjectTracker>();
-                if (tracker != null) {
+if (ScavPlayer.LocalPlayer.HasGunEquipped(out var gun)) {
+var tracker = gun.GetOrAddComponent<SyncInfoGameObjectTracker>();
+if (tracker != null) {
 
-                    if (log.verbose) Plugin.log.LogInfo($"local GunToggleSafety ");
+if (log.verbose) Plugin.log.LogInfo($"local GunToggleSafety ");
 
-                    Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerCamera_GunToggleSafety, gun.safe, true);
+Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerCamera_GunToggleSafety, gun.safe, true);
 
-                    tracker.syncInfo.SetIgnoreTimeForRoundTrip(0.4f);
-                }
-            }
-        }
-    }
+tracker.syncInfo.SetIgnoreTimeForRoundTrip(0.4f);
+}
+}
+}
+}
 }
 
 
@@ -2624,237 +2877,239 @@ public static class PlayerCamera_GunToggleSafety_MultiplayerPatch {
 
 internal class CombatStuff : CasualtiesTogetherSingleton {
 
-    public static AttackInfo default_unarmed_attackinfo {  get {
-            //OG: Body.UseItemInHand V7.0.1  Recreate this atk info every time to prevent crashes cuz the damage gets multiplied too much
-            return new AttackInfo {
-                damage = 30f,
-                structuralDamage = 20f,
-                distance = 4.5f,
-                knockBack = 200f,
-                cooldown = 0.2f,
-                attackAnim = Resources.Load<GameObject>("ClawAnim"),
-                staminaUse = 1f,
-                piercing = false,
-                swingSounds = new string[4] { "BSSwing1", "BSSwing2", "BSSwing3", "BSSwing4" },
-                volume = 0.3f,
-                rotateAmount = 11.5f,
-                unarmed = true
-            };
-        }
-    }
+public static AttackInfo default_unarmed_attackinfo {
+get {
+//OG: Body.UseItemInHand V7.0.1  Recreate this atk info every time to prevent crashes cuz the damage gets multiplied too much
+return new AttackInfo {
+damage = 30f,
+structuralDamage = 20f,
+distance = 4.5f,
+knockBack = 200f,
+cooldown = 0.2f,
+attackAnim = Resources.Load<GameObject>("ClawAnim"),
+staminaUse = 1f,
+piercing = false,
+swingSounds = new string[4] { "BSSwing1", "BSSwing2", "BSSwing3", "BSSwing4" },
+volume = 0.3f,
+rotateAmount = 11.5f,
+unarmed = true
+};
+}
+}
 
 
 
-    void Awake() {
-        
-       
-        
-    }
-
-    // cuz breaking limbs like torso makes limbs detach in a way that it leads to very unpredictable and buggy behaviour 
-    public static bool CheckIfItsOkeyToDismemberThatLimb(Limb limb) {
-        var limbindex = Util.GetLimbIndex(limb);
-        if (limb.isHead && (limb.body.IsDeadOrCriticallyDying())) {
-            return true;
-        } if (Util.GetLimbIndex(limb) <= 2) { // is Head or UpTorso or DownTorso
-            if (limb.body.alive) { // dont allow removing important limbs from alive players
-                return false;
-            }
-            if (limb.isHead) { // allow decapitating 
-            } else {
-                // only allow if all limbs were dismembered
-                if (!limb.body.limbs[4].dismembered) {
-                    return false;
-                }
-                if (!limb.body.limbs[7].dismembered) {
-                    return false;
-                }
-                if (!limb.body.limbs[10].dismembered) {
-                    return false;
-                }
-                if (!limb.body.limbs[13].dismembered) {
-                    return false;
-                }
-
-                if (limb.isVital) { // is UpTorso
-                    if (!limb.body.limbs[(int)Body.LimbNum.Head].dismembered) {// only allow if head is removed 
-                        return false;
-                    }
-                } else { // is DownTorso 
-                    if (!limb.body.limbs[(int)Body.LimbNum.UpTorso].dismembered) {// only allow if uptorso is removed (but by then it will be already gone because of how Dismember works)
-                        return false;
-                    }
-                }
-            }
-        }
-        // Arms and legs may both be amputated, matching the base game (e.g. two PEO prostheses).
-        return true;
-    }
-
-    public static Limb CannibalismGetFarthestLimbToBeEfficient(Limb limb) {
-        var limbindex = Util.GetLimbIndex(limb);
-        if (limb.isHead) { // allow this straight away
-            return limb;
-        }
-        if (limbindex <= 2) {   // is UpTorso or DownTorso  (cuz head is already done)
-
-            // try to pick limbs that might be still attached 
-            var found_something_else = false;
-            for (int i = (int)Body.LimbNum.ArmF; i < limb.body.limbs.Count(); i++) {
-                var l = limb.body.limbs[i];
-                if (
-                    (i == 3 || i == 6 || i == 9 || i == 12)
-                    
-                    && !l.dismembered) {
-                    limb = l;
-                    found_something_else = true;
-
-                    break;
-                }
-            }
-
-            if (!found_something_else) { // no other limbs are left, now eat the torso ig
-
-                if (limb.isVital) {
-                    if (!limb.body.limbs[(int)Body.LimbNum.Head].dismembered) {
-                        return limb.body.limbs[(int)Body.LimbNum.Head];
-                    }
-                } else if (!limb.body.limbs[(int)Body.LimbNum.UpTorso].dismembered) {
-                    return limb.body.limbs[(int)Body.LimbNum.UpTorso];
-                }
-            }
-            
-        } else { // is legs or arms 
-            var last_heart_dist = limb.distanceToHeart;
-
-            foreach (Limb l in limb.body.limbs) {
-                if (l.distanceToHeart > last_heart_dist && !l.dismembered) {
-                    limb = l;
-                    last_heart_dist = l.distanceToHeart;
-                }
-            }
-        }
-        return limb; 
-    }
-
-
-    public static void BetterDismember(Limb limb, bool do_checks_to_not_break_the_game = true) {
-        if (limb.dismembered) {
-            return;
-        }
-        if (do_checks_to_not_break_the_game) {
-            if (!CheckIfItsOkeyToDismemberThatLimb(limb)) {
-                return;
-            }
-        }
-
-        if (limb.body.TryGetComponent(out NetBody npc)) {
-
-            var notaccidental = limb.body.IsDeadOrCriticallyDying();
-
-            foreach (Limb lowerLimb in TourniquetScript.GetLowerLimbs(limb)) {
-                lowerLimb.shrapnel = 0;// original does not do that lol 
-
-                if (lowerLimb.dismembered) {
-                    continue;
-                }
-
-                // dont drop meat for every limb, its going to be too much
-                if (npc.butchering_dropmeat_skip_counter > 0) {
-                    npc.butchering_dropmeat_skip_counter = 0;
-
-                    continue;
-                }
-
-                if (Util.GetLimbIndex(lowerLimb) <= 2) {
-                    var org = Utils.Create("internalorgans", (Vector2)lowerLimb.transform.position + Vector2.up, 0);
-                    if (notaccidental)
-                        org.AddComponent<FreshItemDrop>();
-                    org.GetComponent<Item>().rb.velocity = lowerLimb.rb.velocity * 0.5f + Random.insideUnitCircle * 7f;
-                }
-                var flesh = Utils.Create("experimentflesh", (Vector2)lowerLimb.transform.position + Vector2.up, 0);
-                if (notaccidental)
-                    flesh.AddComponent<FreshItemDrop>();
-                flesh.GetComponent<Item>().rb.velocity = lowerLimb.rb.velocity * 0.5f + Random.insideUnitCircle * 7f;
-
-                if (!limb.body.alive) {
-                    npc.butchering_dropmeat_skip_counter++;
-                }
-            }
-        }
+void Awake() {
 
 
 
-        if (limb.isHead) {
-            limb.body.brainHealth = 0;
-            limb.body.heartRate = 0;
+}
 
-            // this is to remove the decals over a non existing head
-            limb.body.bothEyesGone = false;
-            limb.body.eyeGone = false;
-            limb.body.disfigured = false;
-        }
+// cuz breaking limbs like torso makes limbs detach in a way that it leads to very unpredictable and buggy behaviour
+public static bool CheckIfItsOkeyToDismemberThatLimb(Limb limb) {
+var limbindex = Util.GetLimbIndex(limb);
+if (limb.isHead && (limb.body.IsDeadOrCriticallyDying())) {
+return true;
+}
+if (Util.GetLimbIndex(limb) <= 2) { // is Head or UpTorso or DownTorso
+if (limb.body.alive) { // dont allow removing important limbs from alive players
+return false;
+}
+if (limb.isHead) { // allow decapitating
+} else {
+// only allow if all limbs were dismembered
+if (!limb.body.limbs[4].dismembered) {
+return false;
+}
+if (!limb.body.limbs[7].dismembered) {
+return false;
+}
+if (!limb.body.limbs[10].dismembered) {
+return false;
+}
+if (!limb.body.limbs[13].dismembered) {
+return false;
+}
 
-        limb.Dismember(); // actually if uptorso is getting dismembered. actually downtorso goes with it 
-    }
+if (limb.isVital) { // is UpTorso
+if (!limb.body.limbs[(int)Body.LimbNum.Head].dismembered) {// only allow if head is removed
+return false;
+}
+} else { // is DownTorso
+if (!limb.body.limbs[(int)Body.LimbNum.UpTorso].dismembered) {// only allow if uptorso is removed (but by then it will be already gone because of how Dismember works)
+return false;
+}
+}
+}
+}
+// Arms and legs may both be amputated, matching the base game (e.g. two PEO prostheses).
+return true;
+}
+
+public static Limb CannibalismGetFarthestLimbToBeEfficient(Limb limb) {
+var limbindex = Util.GetLimbIndex(limb);
+if (limb.isHead) { // allow this straight away
+return limb;
+}
+if (limbindex <= 2) {   // is UpTorso or DownTorso  (cuz head is already done)
+
+// try to pick limbs that might be still attached
+var found_something_else = false;
+for (int i = (int)Body.LimbNum.ArmF; i < limb.body.limbs.Count(); i++) {
+var l = limb.body.limbs[i];
+if (
+(i == 3 || i == 6 || i == 9 || i == 12)
+
+&& !l.dismembered) {
+limb = l;
+found_something_else = true;
+
+break;
+}
+}
+
+if (!found_something_else) { // no other limbs are left, now eat the torso ig
+
+if (limb.isVital) {
+if (!limb.body.limbs[(int)Body.LimbNum.Head].dismembered) {
+return limb.body.limbs[(int)Body.LimbNum.Head];
+}
+} else if (!limb.body.limbs[(int)Body.LimbNum.UpTorso].dismembered) {
+return limb.body.limbs[(int)Body.LimbNum.UpTorso];
+}
+}
+
+} else { // is legs or arms
+var last_heart_dist = limb.distanceToHeart;
+
+foreach (Limb l in limb.body.limbs) {
+if (l.distanceToHeart > last_heart_dist && !l.dismembered) {
+limb = l;
+last_heart_dist = l.distanceToHeart;
+}
+}
+}
+return limb;
+}
+
+
+public static void BetterDismember(Limb limb, bool do_checks_to_not_break_the_game = true) {
+if (limb.dismembered) {
+return;
+}
+if (do_checks_to_not_break_the_game) {
+if (!CheckIfItsOkeyToDismemberThatLimb(limb)) {
+return;
+}
+}
+
+if (limb.body.TryGetComponent(out NetBody npc)) {
+
+var notaccidental = limb.body.IsDeadOrCriticallyDying();
+
+foreach (Limb lowerLimb in TourniquetScript.GetLowerLimbs(limb)) {
+lowerLimb.shrapnel = 0;// original does not do that lol
+
+if (lowerLimb.dismembered) {
+continue;
+}
+
+// dont drop meat for every limb, its going to be too much
+if (npc.butchering_dropmeat_skip_counter > 0) {
+npc.butchering_dropmeat_skip_counter = 0;
+
+continue;
+}
+
+if (Util.GetLimbIndex(lowerLimb) <= 2) {
+var org = Utils.Create("internalorgans", (Vector2)lowerLimb.transform.position + Vector2.up, 0);
+if (notaccidental)
+org.AddComponent<FreshItemDrop>();
+org.GetComponent<Item>().rb.velocity = lowerLimb.rb.velocity * 0.5f + Random.insideUnitCircle * 7f;
+}
+var flesh = Utils.Create("experimentflesh", (Vector2)lowerLimb.transform.position + Vector2.up, 0);
+if (notaccidental)
+flesh.AddComponent<FreshItemDrop>();
+flesh.GetComponent<Item>().rb.velocity = lowerLimb.rb.velocity * 0.5f + Random.insideUnitCircle * 7f;
+
+if (!limb.body.alive) {
+npc.butchering_dropmeat_skip_counter++;
+}
+}
+}
 
 
 
+if (limb.isHead) {
+limb.body.brainHealth = 0;
+limb.body.heartRate = 0;
 
-    public static bool ItemIsUsedForAttacking(Item item) {
-        return item.Stats.HasTag("tool") || item.Stats.HasTag("gun"); 
-    }
+// this is to remove the decals over a non existing head
+limb.body.bothEyesGone = false;
+limb.body.eyeGone = false;
+limb.body.disfigured = false;
+}
+
+limb.Dismember(); // actually if uptorso is getting dismembered. actually downtorso goes with it
+}
 
 
 
 
-
-
+public static bool ItemIsUsedForAttacking(Item item) {
+return item.Stats.HasTag("tool") || item.Stats.HasTag("gun");
+}
 
 
 
 
 
-    [ServerReceiver((byte)NetmsgId.SERVER_PlayerCamera_GunRack)]
-    static void ServerReceiver__GunRack(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-
-        reader.Get(out bool racked);
-        if (
-            ScavPlayer.TryGetPlayerFromClientId(clientId, out var gunner) && gunner.HasGunEquipped(out var gun)
-        ) {
-            gun.racked = racked;
-            NetObjectRegistry.SafeNewGO(gun.gameObject);
-        }
-
-    }
 
 
-    [ServerReceiver((byte)NetmsgId.SERVER_PlayerCamera_GunEjectMag)]
-    static void ServerReceiver__GunEjectMag(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-
-        if (
-            ScavPlayer.TryGetPlayerFromClientId(clientId, out var gunner) && gunner.HasGunEquipped(out var gun)
-        ) {
-            gun.UnloadMag();
-            NetObjectRegistry.SafeNewGO(gun.gameObject);
-        }
 
 
-    }
 
 
-    [ServerReceiver((byte)NetmsgId.SERVER_PlayerCamera_GunToggleSafety)]
-    static void ServerReceiver__GunToggleSafety(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
+[ServerReceiver((byte)NetmsgId.SERVER_PlayerCamera_GunRack)]
+static void ServerReceiver__GunRack(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
 
-        reader.Get(out bool safe);
-        if (
-            ScavPlayer.TryGetPlayerFromClientId(clientId, out var gunner) && gunner.HasGunEquipped(out var gun)
-        ) {
-            gun.safe = safe;
-            NetObjectRegistry.SafeNewGO(gun.gameObject);
-        }
+reader.Get(out bool racked);
+if (
+ScavPlayer.TryGetPlayerFromClientId(clientId, out var gunner) && gunner.HasGunEquipped(out var gun)
+) {
+gun.racked = racked;
+NetObjectRegistry.SafeNewGO(gun.gameObject);
+}
 
-    }
+}
+
+
+[ServerReceiver((byte)NetmsgId.SERVER_PlayerCamera_GunEjectMag)]
+static void ServerReceiver__GunEjectMag(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
+
+if (
+ScavPlayer.TryGetPlayerFromClientId(clientId, out var gunner) && gunner.HasGunEquipped(out var gun)
+) {
+gun.UnloadMag();
+NetObjectRegistry.SafeNewGO(gun.gameObject);
+}
+
+
+}
+
+
+[ServerReceiver((byte)NetmsgId.SERVER_PlayerCamera_GunToggleSafety)]
+static void ServerReceiver__GunToggleSafety(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
+
+reader.Get(out bool safe);
+if (
+ScavPlayer.TryGetPlayerFromClientId(clientId, out var gunner) && gunner.HasGunEquipped(out var gun)
+) {
+gun.safe = safe;
+NetObjectRegistry.SafeNewGO(gun.gameObject);
+}
+
+}
 
 
 }

@@ -1,4 +1,4 @@
-﻿#if FULLGAME
+#if FULLGAME
 using CasualtiesTogetherUtils;
 using System;
 using System.Collections.Generic;
@@ -68,7 +68,7 @@ internal static class PendingCharacterAdmission {
     internal static bool HasName(string name) => pending.Values.Any(p => p.Intro.userName == name);
     internal static bool IsPending(knetid id) => pending.ContainsKey(id);
 
-    internal static bool CanDispatch(knetid caller, byte message) {
+    internal static bool CanDispatch(knetid caller, ushort message) {
         ushort id = caller;
         if (id < FirstTemporaryId || id > LastTemporaryId) return true;
         if (!pending.TryGetValue(caller, out var entry)) return false;

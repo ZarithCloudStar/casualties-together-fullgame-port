@@ -12,6 +12,12 @@ namespace Together;
 // file has to be shipped with the mod.
 internal static class CjkFontFallback {
     static bool applied;
+    static TMP_FontAsset cached;
+
+    internal static void AttachTo(TMP_FontAsset font) {
+        Ensure();
+        Attach(font, cached);
+    }
     static int attempts;
 
     internal static void Ensure() {
@@ -69,6 +75,7 @@ internal static class CjkFontFallback {
                 if (attempts >= 8) log.warn("CJK: no CJK-capable TMP font found; non-latin names may show boxes in nametags.");
                 return;
             }
+            cached = cjk;
             applied = true;
 
             int attached = 0;
@@ -83,7 +90,7 @@ internal static class CjkFontFallback {
     }
 
     static bool Attach(TMP_FontAsset font, TMP_FontAsset cjk) {
-        if (font == null || font == cjk) return false;
+        if (font == null || cjk == null || font == cjk) return false;
         if (font.fallbackFontAssetTable == null) font.fallbackFontAssetTable = new List<TMP_FontAsset>();
         if (font.fallbackFontAssetTable.Contains(cjk)) return false;
         font.fallbackFontAssetTable.Add(cjk);

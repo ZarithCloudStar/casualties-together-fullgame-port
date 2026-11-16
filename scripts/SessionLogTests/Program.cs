@@ -16,6 +16,8 @@ internal static class Program {
     }
     static string Read(string path) => SessionLog.Tail(path, 20000).Replace("\r", "");
     static string Current => SessionLog.FilePath == null ? "" : Read(SessionLog.FilePath);
+    static int RetainedCount(string folder) => new[] { "session_*.log", "join-failure_*.log", "hang_marker_*.txt" }
+        .SelectMany(pattern => Directory.GetFiles(folder, pattern)).Distinct().Count();
 
     static int Main(string[] args) {
         try {
@@ -53,7 +55,7 @@ internal static class Program {
             Assert(Current.Contains("PREVIOUS SESSION DID NOT EXIT CLEANLY: " + Path.GetFileName(previous)), "previous warning");
             Assert(Current.Contains("PREVIOUS-150") && !Current.Contains("PREVIOUS-149"), "previous tail must be last 150 lines");
             Assert(Current.Contains("BEP-50") && !Current.Contains("BEP-49\n"), "BepInEx recovery tail must be last 200");
-            Assert(Directory.GetFiles(logs, "session_*.log").Length == 30, "30-session retention");
+            Assert(RetainedCount(logs) == 10, "10-file combined retention");
             Assert(!File.Exists(Path.Combine(logs, "session_20000101_000000_pid1.log")), "oldest filename pruning");
 
             for (int i = 0; i < 400; i++) SessionLog.Mark("RING-" + i.ToString("D3"));
@@ -100,7 +102,7 @@ internal static class Program {
             string second = Directory.GetFiles(logs, "session_*.log").Except(new[] { firstPath }).OrderByDescending(Path.GetFileName).First();
             Assert(!Read(second).Contains("PREVIOUS SESSION DID NOT EXIT CLEANLY"), "clean predecessor must not trigger recovery");
             Assert(File.ReadAllText(firstPath) == first, "new session must not overwrite old file");
-            Assert(Directory.GetFiles(logs, "session_*.log").Length == 30, "retention after second process");
+            Assert(RetainedCount(logs) == 10, "combined retention after second process");
             string blocked = Path.Combine(fixture, "file-not-directory");
             File.WriteAllText(blocked, "obstacle");
             Child("unwritable", blocked, bep);

@@ -1,4 +1,4 @@
-﻿using BepInEx.Logging;
+using BepInEx.Logging;
 using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteNetLib;
@@ -709,6 +709,9 @@ public class KSteam : MonoBehaviour {
         SteamMatchmaking.SetLobbyData(LobbyId, LOBBYDATAKEY_RUNSETTINGS, WorldMP.CompileRunSettings());
         SteamMatchmaking.SetLobbyData(LobbyId, LOBBYDATAKEY_LANGUAGE, Locale.currentLangName);
         SteamMatchmaking.SetLobbyData(LobbyId, LOBBYDATAKEY_MODS, GetMyModListAsString());
+#if FULLGAME
+        if (Util.GameIsFull()) SteamMatchmaking.SetLobbyData(LobbyId, ModListDiagnostics.MetadataKey, ModListDiagnostics.WriteLobbyMetadata());
+#endif
         
         SteamMatchmaking.SetLobbyData(LobbyId, "bucket", bucket.ToString());
 
@@ -810,6 +813,11 @@ public class KSteam : MonoBehaviour {
             l.avg_happiness = int.Parse(AVERAGEMOOD);
             l.cur_depth = int.Parse(DEPTH);
             l.lang = lang;
+            l.modlist = MODS.Split(new[] { ':' }, StringSplitOptions.RemoveEmptyEntries);
+#if FULLGAME
+            if (Util.GameIsFull()) l.modDetails = ModListDiagnostics.ReadLobbyMetadata(
+                slobby.metadata.GetValueOrDefault(ModListDiagnostics.MetadataKey, ""), l.modlist);
+#endif
 
             l.plr_living_count = int.Parse(LIVINGCOUNT);
             l.plr_max = slobby.memberlimit;
@@ -842,11 +850,13 @@ public class KSteam : MonoBehaviour {
                 }
 
                 var modsenforce = reader.GetBool();
+#if FULLGAME
+                if (Util.GameIsFull()) l.enforcesModList = modsenforce;
+#endif
 
                 {
-                    l.modlist = MODS.Split(':');
                     if (modsenforce) {
-                        var mymods = GetMyModListAsString().Split(':');
+                        var mymods = GetMyModListAsString().Split(new[] { ':' }, StringSplitOptions.RemoveEmptyEntries);
 
                         l.enforcemodlist_locked = !(new HashSet<string>(mymods).SetEquals(l.modlist));
                     }
@@ -1099,6 +1109,7 @@ public class KSteam : MonoBehaviour {
                 IS_DOING_HostLobbyRecreatorLoop = false;
 #if TESTING
                 Multiplayer.DoMultiplayerStatusMessageLog("CreateServerSocket Success.");
+            BrowserSteamPing.EnsureHostListen();
 #endif
                 CURRENT_LOBBY.locked = false;
             } else {
@@ -1499,7 +1510,7 @@ public class KSteam : MonoBehaviour {
         
         if (ScavPlayer.LocalPlayer != null) {
             ScavPlayer.LocalPlayer.SteamId = GetLocalUserSteamID().m_SteamID;
-            ScavPlayer.LocalPlayer.ApplyNameAndColor(ScavPlayer.LocalPlayer.SteamId.ToString(), UIMainMenu.LAST_VALID_INPUT_COLOR);
+            ScavPlayer.LocalPlayer.ApplyNameAndColor(GetLocalUsername(), UIMainMenu.LAST_VALID_INPUT_COLOR);
             
             tsteam.SteamIDToNetPlayerDict[ScavPlayer.LocalPlayer.SteamId] = ScavPlayer.LocalPlayer;
 
@@ -1624,7 +1635,7 @@ public class KSteam : MonoBehaviour {
 
                 if (tsteam.SteamIDToNetPlayerDict.TryGetValue(pCallback.m_ulSteamID, out var plr)) {
                     if (!plr.nameIsCustom) {
-                        plr.ApplyNameAndColor(steamID.ToString(), plr.playerColor);
+                        plr.ApplyNameAndColor(GetSteamUsername(steamID.m_SteamID), plr.playerColor);
                     }
                 }
 
@@ -1957,6 +1968,7 @@ public class TransportSteamworks : NetTransportBase {
     }
 
     private void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t pCallback) {
+        if (BrowserSteamPing.HandleTransportCallback(pCallback)) return;
         bool incoming = pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connecting;
         bool ownDial = serverUser != null && pCallback.m_hConn == serverUser.connection;
         try {
@@ -2043,6 +2055,7 @@ public class TransportSteamworks : NetTransportBase {
     internal class SteamConnectionData {
 #if FULLGAME
         internal TagPlayerInfo characterTag;
+        internal bool handshakeRejected;
 #endif
         internal SteamConnectionData(CSteamID steamId) {
             id = steamId;
@@ -2067,6 +2080,8 @@ public class TransportSteamworks : NetTransportBase {
     // connection actually reports Connected; sending earlier gets dropped with
     // k_EResultIgnored and used to strand the first join attempt.
     bool _pendingClientIntro;
+    bool _clientIntroSent;
+    double _nextClientIntroAttempt;
     internal readonly Dictionary<ulong, SteamConnectionData> connectionMapping = new Dictionary<ulong, SteamConnectionData>();
     // One buffer for the life of the transport. A client used to allocate 65535 slots every frame.
     const int ClientPollCap = 256;
@@ -2186,16 +2201,20 @@ public class TransportSteamworks : NetTransportBase {
     /// the intro packet and start the client entity system. Sending before that returns
     /// k_EResultIgnored and the handshake never happens.</summary>
     internal void SendClientIntroWhenConnected() {
+        if (_clientIntroSent) return;
         _pendingClientIntro = true;
         TryFlushPendingClientIntro();
     }
 
     internal void CancelPendingClientIntro() {
         _pendingClientIntro = false;
+        _clientIntroSent = false;
+        _nextClientIntroAttempt = 0;
     }
 
     void TryFlushPendingClientIntro() {
         if (!_pendingClientIntro) return;
+        if (Time.realtimeSinceStartupAsDouble < _nextClientIntroAttempt) return;
         if (serverUser == null || serverUser.connection == HSteamNetConnection.Invalid) return;
 
         SteamNetConnectionInfo_t info;
@@ -2205,6 +2224,23 @@ public class TransportSteamworks : NetTransportBase {
         else
             gotInfo = SteamNetworkingSockets.GetConnectionInfo(serverUser.connection, out info);
         if (!gotInfo || info.m_eState != ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connected) return;
+
+#if FULLGAME
+        if (Util.GameIsFull()) {
+            var intro = Multiplayer.GetClientConnectIntroductionPacket();
+            var data = new ReadOnlySpan<byte>(intro.Data, 0, intro.Length);
+            var result = SendThroughSteamSocketWithResult(serverUser.connection, data, Steamworks.Constants.k_nSteamNetworkingSend_Reliable);
+            if (result != EResult.k_EResultOK) {
+                _nextClientIntroAttempt = Time.realtimeSinceStartupAsDouble + 0.25;
+                return;
+            }
+            _clientIntroSent = true;
+            _pendingClientIntro = false;
+            SessionLog.Event("STEAM INTRO SENT", $"handle={serverUser.connection} bytes={intro.Length}");
+            Net.OnTransportConnected(); // may send SetCharacter, now safely after intro
+            return;
+        }
+#endif
 
         _pendingClientIntro = false;
         KSteam.steamtestlog($"[steam-conn] sending client intro conn={serverUser.connection}");
@@ -2341,6 +2377,9 @@ public class TransportSteamworks : NetTransportBase {
         if (!KSteam.Loaded && KSteam.CURRENT_LOBBY.lobby_steamID != CSteamID.Nil) return;
 
         // callbacks are run by the singleton
+#if FULLGAME
+        if (Util.GameIsFull() && Net.IsClient) TryFlushPendingClientIntro();
+#endif
 
         UpdateTheIDDicts();
         _Update_PollMessages();
@@ -2532,7 +2571,13 @@ public class TransportSteamworks : NetTransportBase {
         }
     }
 
-    void _Server_NewLobbyMember(NetDataReader reader, ulong steamID) {
+    void _Server_NewLobbyMember(NetDataReader reader, SteamConnectionData connection) {
+        ulong steamID = connection.id.m_SteamID;
+#if FULLGAME
+        if (connection.handshakeRejected) return;
+#endif
+        int packetBytes = reader.AvailableBytes;
+        int firstByte = packetBytes > 0 ? reader.RawData[reader.Position] : -1;
         bool privileged_user = false;
         {
             if (KnownPersons.IsSteamUserPrivileged(steamID)) {
@@ -2555,10 +2600,15 @@ public class TransportSteamworks : NetTransportBase {
             steamtestlog($"Rejected player {BetterToStringFromSteamID(steamID)} for {reject_reason}");
 #endif
 
-            SessionLog.Event("CLIENT REJECTED", $"method=steam peer={steamID} reason={reject_reason}");
+#if FULLGAME
+            connection.handshakeRejected = true;
+#endif
+            SessionLog.Event("CLIENT REJECTED", $"method=steam peer={steamID} reason={reject_reason} bytes={packetBytes} firstByte={firstByte}");
             KickMember((CSteamID)steamID, reject_reason);
 
             Util.DelayCallLambda(0.4f, () => {
+                // A retry may already have a new handle for the same Steam user.
+                if (connectionMapping.TryGetValue(steamID, out var current) && ReferenceEquals(current, connection))
                 RemoveSteamUser(steamID);
             });
             return;
@@ -2566,12 +2616,12 @@ public class TransportSteamworks : NetTransportBase {
 
 #if FULLGAME
         if (Util.GameIsFull()) {
-            if (connectionMapping.TryGetValue(steamID, out var connection)) BeginCharacterAdmission(connection, userInfo);
+            if (connectionMapping.TryGetValue(steamID, out var current) && ReferenceEquals(current, connection)) BeginCharacterAdmission(connection, userInfo);
             else log.error($"CHARACTER: cannot queue Steam admission; connection missing steamId={steamID}");
             return;
         }
 #endif
-        var playerEntity = BasePlayer.ServerCreatePlayer(steamID.ToString(), steamID, userInfo.color, false, userInfo.characterSelected);
+        var playerEntity = BasePlayer.ServerCreatePlayer(userInfo.userName, steamID, userInfo.color, false, userInfo.characterSelected);
 
         try {
             SteamIDToNetPlayerDict[steamID] = playerEntity.player;
@@ -2589,7 +2639,9 @@ public class TransportSteamworks : NetTransportBase {
     internal bool BeginCharacterAdmission(SteamConnectionData connection, Multiplayer.IntroductionPlayerInfo intro) {
         ulong steamId = connection.id.m_SteamID;
         knetid temporaryId = 0;
-        return PendingCharacterAdmission.Begin(connection, intro, steamId, steamId.ToString(),
+        // The intro carries the peer's own display name. Passing the account number here
+        // made the eventual BasePlayer baseline publish a SteamID as the roster/chat name.
+        return PendingCharacterAdmission.Begin(connection, intro, steamId, intro.userName,
             () => connectionMapping.TryGetValue(steamId, out var current) && ReferenceEquals(current, connection),
             id => {
                 temporaryId = id;
@@ -2624,6 +2676,9 @@ public class TransportSteamworks : NetTransportBase {
 
     void _K_OnReceiveNetworkingMessage(SteamConnectionData connection, byte[] data) {
         var steamID = connection.id.m_SteamID;
+#if FULLGAME
+        if (connection.handshakeRejected) return;
+#endif
 
         var reader = new NetDataReader(data);
 
@@ -2636,7 +2691,7 @@ public class TransportSteamworks : NetTransportBase {
             _member.server_last_data_receive_time = Time.realtimeSinceStartupAsDouble;
 
             if (!SteamIDToClientIDDict.TryGet(steamID, out var clientID)) { // new player !
-                _Server_NewLobbyMember(reader, steamID);
+                _Server_NewLobbyMember(reader, connection);
                 return;
             }
             Net.InvokeServerMessage(clientID, reader);
@@ -2808,6 +2863,7 @@ public class TransportSteamworks : NetTransportBase {
         Shutdown(true);
     }
     internal void CloseListenSocket() {
+        BrowserSteamPing.CloseHostListen();
         if (listenSocket != HSteamListenSocket.Invalid) {
             if (is_steamserver)
                 SteamGameServerNetworkingSockets.CloseListenSocket(listenSocket);
@@ -2872,6 +2928,16 @@ public class TransportSteamworks : NetTransportBase {
 
     bool NetTransportBase.IsConnecting() {
         if (Net.IsClient) {
+#if FULLGAME
+            if (Util.GameIsFull()) {
+                if (!_clientIntroSent || serverUser == null || serverUser.connection == HSteamNetConnection.Invalid) return true;
+                SteamNetConnectionInfo_t status;
+                bool valid = is_steamserver
+                    ? SteamGameServerNetworkingSockets.GetConnectionInfo(serverUser.connection, out status)
+                    : SteamNetworkingSockets.GetConnectionInfo(serverUser.connection, out status);
+                return !valid || status.m_eState != ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connected;
+            }
+#endif
             // Mirror the LiteNetLib transport: the transport-level P2P connection
             // decides "connecting", NOT whether the server already created our
             // player entity. In fullgame the entity is deferred until the character
@@ -2952,6 +3018,10 @@ public class TransportSteamworks : NetTransportBase {
     // one line per second is enough to diagnose.
     double lastSendFailWarn = 0;
     public void SendThroughSteamSocket(in HSteamNetConnection connection, ReadOnlySpan<byte> data, int sendFlag) {
+        SendThroughSteamSocketWithResult(connection, data, sendFlag);
+    }
+
+    EResult SendThroughSteamSocketWithResult(in HSteamNetConnection connection, ReadOnlySpan<byte> data, int sendFlag) {
 
         byte[] data_copied = data.ToArray();
 
@@ -2961,19 +3031,18 @@ public class TransportSteamworks : NetTransportBase {
 
         //Send to the target
         EResult response;
+        try {
         if (is_steamserver)
             response = SteamGameServerNetworkingSockets.SendMessageToConnection(connection, pData, (uint)data_copied.Length, sendFlag, out long _);
         else
             response = SteamNetworkingSockets.SendMessageToConnection(connection, pData, (uint)data_copied.Length, sendFlag, out long _);
-
-        //Free the unmanaged array
-        pinnedArray.Free();
+        } finally { pinnedArray.Free(); }
 
 
         if (response != EResult.k_EResultOK) {
 
             if (response == EResult.k_EResultNoConnection && !log.verbose) {
-                return;
+                return response;
             }
 
 
@@ -3010,7 +3079,7 @@ public class TransportSteamworks : NetTransportBase {
             }
 
         }
-
+        return response;
     }
 
 
@@ -3079,6 +3148,10 @@ public class TransportSteamworks : NetTransportBase {
         }
     }
     public void Client_Send(in DeliveryMethod delivery, in ReadOnlySpan<byte> data) {
+#if FULLGAME
+        // Also guard callers using the transport directly instead of Net.Client_Send.
+        if (Util.GameIsFull() && ClientStartupMessages.TryDefer(delivery, data)) return;
+#endif
         SendThroughSteamSocket(KSteam.CURRENT_LOBBY.ownerID.m_SteamID, data, delivery);
     }
 

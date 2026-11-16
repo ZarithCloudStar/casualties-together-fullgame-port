@@ -186,12 +186,16 @@ internal static partial class EndingFlow {
 
     internal static bool DrillUpdate(CargoDrillPod pod) {
         if (!Active) return true;
+        if (pod == null) return false;
         if (State.hasCargo && !pod.didReady) {
             pod.didReady = true;
+            if (pod.bld == null) pod.bld = pod.GetComponent<BuildingEntity>();
             var usable = pod.GetComponent<UsableObject>();
-            if (usable != null) usable.toggleString = Locale.GetOther("finaltravel");
+            try { if (usable != null) usable.toggleString = Locale.GetOther("finaltravel"); }
+            catch (System.Exception e) { log.warn("[drill] ready label: " + e.Message); }
             var building = pod.GetComponent<BuildingEntity>();
-            if (building != null) building.description = Locale.GetBuilding("highpowereddrillpoddsc2");
+            try { if (building != null) building.description = Locale.GetBuilding("highpowereddrillpoddsc2"); }
+            catch (System.Exception e) { log.warn("[drill] ready description: " + e.Message); }
         }
         return false;
     }

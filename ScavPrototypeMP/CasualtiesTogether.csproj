@@ -76,6 +76,7 @@
 		<EmbeddedResource Include="assets\locale\EN.json" />
 		<EmbeddedResource Include="assets\locale\es-ES.json" />
 		<EmbeddedResource Include="assets\locale\zh-CN.json" />
+<EmbeddedResource Include="assets\locale\zh-TW.json" />
 		<EmbeddedResource Include="assets\retrogaming.bundle" />
 		<EmbeddedResource Include="assets\textures\dune_stare.png" />
 		<EmbeddedResource Include="assets\textures\alertthing.png" />
@@ -513,4 +514,18 @@
 
 
 
+<ItemGroup>
+<Reference Include="CUCoreLib"><HintPath>$(LibsDir)\CUCoreLib\CUCoreLib.dll</HintPath><Private>false</Private></Reference>
+<Reference Include="UnityEngine.ScreenCaptureModule"><HintPath>$(GameManagedDir)\UnityEngine.ScreenCaptureModule.dll</HintPath></Reference>
+<EmbeddedResource Include="Skins\spritereplacer1.png"><LogicalName>body_sprite_replacer.resources.spritereplacer1.png</LogicalName></EmbeddedResource>
+<EmbeddedResource Include="assets\textures\handcrank.png" />
+<EmbeddedResource Include="assets\textures\headpat_arm1.png" />
+<EmbeddedResource Include="assets\textures\headpat_arm2.png" />
+<EmbeddedResource Include="assets\textures\headpat_arm3.png" />
+<EmbeddedResource Include="assets\textures\headpat_head0.png" />
+<EmbeddedResource Include="assets\textures\headpat_head1.png" />
+<EmbeddedResource Include="assets\textures\headpat_head2.png" />
+<EmbeddedResource Include="assets\textures\inventory.png" />
+<EmbeddedResource Include="assets\textures\lockpick.png" />
+</ItemGroup>
 </Project>

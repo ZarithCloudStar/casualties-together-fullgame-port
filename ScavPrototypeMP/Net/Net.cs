@@ -1,4 +1,4 @@
-﻿using CasualtiesMultiplayerAPI;
+using CasualtiesMultiplayerAPI;
 using CasualtiesTogetherUtils;
 using K4os.Compression.LZ4;
 using LiteEntitySystem;
@@ -85,6 +85,9 @@ public struct SteamServerInfoInLobbyExtraData {
 
 
 public class NetPublicServerInfo : INetSerializable {
+public int pingMs = -1;
+public bool HasPing => pingMs >= 0;
+
     public bool dedicated;
     public bool haspassword;
     public string version = "6.7.6.7";
@@ -106,6 +109,11 @@ public class NetPublicServerInfo : INetSerializable {
     public int avg_happiness; // inspire from PlayerCamera.HandleDeathScreen
 
     public string[] modlist = new string[0];
+#if FULLGAME
+    // Optional Steam lobby metadata for diagnostics; not part of Serialize/Deserialize.
+    public Dictionary<string, string> modDetails = new(StringComparer.Ordinal);
+    public bool enforcesModList;
+#endif
     public bool latejoinspectate => rules.LateJoinSpectate;
 
     // 大厅里公布的构建标识（CasualtiesMP.dll 的短哈希）与房主是否开启文件校验。
@@ -221,7 +229,7 @@ public static class Net {
     public static bool IsHost => Type == NetType.Host;
     public static bool IsDedicatedServer => Type == NetType.DedicatedServer;
     public static bool IsConnecting => Transport != null && Transport.IsConnecting();
-    public static bool IsConnected => IsRunning && !IsConnecting;
+    public static bool IsConnected => IsRunning && Transport != null && !IsConnecting;
     public static NetType Type { get; internal set; }
 
     public static NetTransportBase Transport { get; internal set; }
@@ -277,8 +285,8 @@ public static class Net {
     }
 
 
-    public static string ByteMsgIdToName(byte msgid) {
-        var n = Enum.GetName(typeof(NetmsgId), msgid);
+    public static string ByteMsgIdToName(ushort msgid) {
+        var n = msgid < 256 ? Enum.GetName(typeof(NetmsgId), (byte)msgid) : Enum.GetName(typeof(PortMsgId), msgid);
         return (n != null ? (n + $" ({msgid})") : msgid.ToString());
     }
 
@@ -355,19 +363,19 @@ public static class Net {
     }
 
 
-    static Dictionary<byte, Multiplayer.HandleMessageDelegate> SERVER_MESSAGE_HANDLERS = new();
-    static Dictionary<byte, Multiplayer.HandleMessageDelegate> CLIENT_MESSAGE_HANDLERS = new();
+    static Dictionary<ushort, Multiplayer.HandleMessageDelegate> SERVER_MESSAGE_HANDLERS = new();
+    static Dictionary<ushort, Multiplayer.HandleMessageDelegate> CLIENT_MESSAGE_HANDLERS = new();
 
-    internal static void RegisterServerReceiver(byte msgid, Multiplayer.HandleMessageDelegate receiver) {
+    internal static void RegisterServerReceiver(ushort msgid, Multiplayer.HandleMessageDelegate receiver) {
         SERVER_MESSAGE_HANDLERS.Add(msgid, receiver);
     }
-    internal static void RegisterClientReceiver(byte msgid, Multiplayer.HandleMessageDelegate receiver) {
+    internal static void RegisterClientReceiver(ushort msgid, Multiplayer.HandleMessageDelegate receiver) {
         CLIENT_MESSAGE_HANDLERS.Add(msgid, receiver);
     }
     internal static void InvokeServerMessage(knetid callerclientId, NetDataReader reader) {
-        byte msgId = 0;
+        ushort msgId = 0;
         try {
-            reader.Get(out msgId);
+            msgId = PortProtocol.ReadMessageId(reader);
 #if FULLGAME
             if (Util.GameIsFull() && !PendingCharacterAdmission.CanDispatch(callerclientId, msgId)) return;
 #endif
@@ -383,9 +391,9 @@ public static class Net {
         }
     }
     internal static void InvokeClientMessage(knetid callerClientId, NetDataReader reader) {
-        byte msgId = 0;
+        ushort msgId = 0;
         try {
-            reader.Get(out msgId);
+            msgId = PortProtocol.ReadMessageId(reader);
             if (Net.IsDedicatedServer) {
                 log.error($"SERVER: Net.InvokeClientMessage: msgId:{msgId} : UNEXPECTED LOOPBACK ON DEDICATED SERVER !!!!");
                 return;
@@ -494,6 +502,8 @@ public static class Net {
         SessionLog.Mark("network shutdown/reset");
 #if FULLGAME
         if (Util.GameIsFull()) {
+            ClientStartupMessages.Reset();
+            JoinModNotice.Reset();
             PendingCharacterAdmission.Reset();
             CharacterLobby.Reset();
         }
@@ -565,6 +575,9 @@ public static class Net {
         }
     }
     internal static void TransportCreated(NetType ntype, bool save_name = true) {
+#if FULLGAME
+        if (Util.GameIsFull()) { ClientStartupMessages.Reset(); JoinModNotice.Reset(); }
+#endif
         Plugin.SkipMainMenuIntro();
 
         if (IsClient) {
@@ -680,7 +693,8 @@ public static class Net {
             var aplayername = UIMainMenu.USERINPUT_NAME;
             if (Net.TryGetSteamTransport(out var tsteam)) {
                 steamId = KSteam.GetLocalUserSteamID().m_SteamID;
-                aplayername = steamId.ToString();
+                aplayername = KSteam.GetLocalUsername();
+                if (string.IsNullOrWhiteSpace(aplayername)) aplayername = steamId.ToString();
             }
             var playerEntity = BasePlayer.ServerCreatePlayer(aplayername, steamId, UIMainMenu.LAST_VALID_INPUT_COLOR, true,
                 Util.GameIsFull() ? CharacterSelection.Local : (byte)0);
@@ -700,6 +714,9 @@ public static class Net {
 #endif
             ClientEntityManager?.Update();
             ServerEntityManager?.Update();
+#if FULLGAME
+            if (Util.GameIsFull()) { ClientStartupMessages.Flush(); JoinModNotice.Tick(); }
+#endif
         } catch (Exception e) {
             log.error("Net.DoUpdate: " + e.ToString());
         }
@@ -809,10 +826,10 @@ public static class Net {
 
     public static bool VerifyMyServerName() {
         var n = MyServerInfo.name;
-        if (n.Length < 3) {
+        if (string.IsNullOrEmpty(n) || n.Length < 3 || n.Length > Net.MAX_SERVER_NAME_LENGTH) {
             return false;
         }
-        if (n.Length > Net.MAX_SERVER_NAME_LENGTH || Multiplayer.SanitizeTextInputAllowSpaces(n) != n)  {
+        if (n.Length > Net.MAX_SERVER_NAME_LENGTH || Multiplayer.SanitizeServerName(n) != n)  {
             return false;
         }
         
@@ -821,19 +838,21 @@ public static class Net {
     }
 
     public static NetDataWriter CreateWriter(in Enum msgid) {
-        return CreateWriter((byte)(object)msgid);
+        return CreateWriter(Convert.ToUInt16(msgid));
     }
     public static NetDataWriter CreateWriter(in Enum msgid, int size, bool autoresize = false) {
-        return CreateWriter((byte)(object)msgid,size, autoresize);
+        return CreateWriter(Convert.ToUInt16(msgid),size, autoresize);
     }
-    public static NetDataWriter CreateWriter(byte msgid) {
+    public static NetDataWriter CreateWriter(byte msgid) => CreateWriter((ushort)msgid);
+    public static NetDataWriter CreateWriter(ushort msgid) {
         var ndw = new NetDataWriter();
-        ndw.Put(msgid);
+        PortProtocol.WriteMessageId(ndw, msgid);
         return ndw;
     }
-    public static NetDataWriter CreateWriter(byte msgid, int size, bool autoresize = false) {
+    public static NetDataWriter CreateWriter(byte msgid, int size, bool autoresize = false) => CreateWriter((ushort)msgid, size, autoresize);
+    public static NetDataWriter CreateWriter(ushort msgid, int size, bool autoresize = false) {
         var ndw = new NetDataWriter(autoresize,size);
-        ndw.Put(msgid);
+        PortProtocol.WriteMessageId(ndw, msgid);
         return ndw;
     }
 
@@ -895,6 +914,9 @@ public static class Net {
     }
 
     public static void Client_Send(in DeliveryMethod delivery, in ReadOnlySpan<byte> data) { // TODO THIS IS TEMPORARY TO TEST, FOR OPTIMIZATION I'LL HAVE TO MAKE SPAN A DEFAULT!!
+#if FULLGAME
+        if (Util.GameIsFull() && ClientStartupMessages.TryDefer(delivery, data)) return;
+#endif
 #if !RELEASE
         Con.ConFailIfNotConnected();
         {
@@ -1288,7 +1310,7 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
         if (CLIENT_PEER != null) {
             return CLIENT_PEER.ConnectionState != ConnectionState.Connected;
         }
-        return false;
+        return Net.IsClient;
     }
 
 

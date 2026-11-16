@@ -36,14 +36,35 @@ public class HeaterMultiplayerRewrite : MonoBehaviour {
     }
 
     void Update() {
-        //OG: Heater.OnWillRenderObject  THE ENTIRE FUNCTION I REIMPLEMENTED IT HERE
+        //OG: Heater.OnWillRenderObject - all bodies in radius, host-authoritative temperature.
+        // covers: spaceheater / campfire / lifepod heater+AC / CrystalTemperature / any prefab Heater.
+        // body.temperature is medical-synced; clients must not mutate it or host snaps overwrite them.
+        // host sim range already stamps every player's 3x3, so far-client heaters still Update here.
+        if (Net.IsRunning && !Net.IsServer) {
+            return;
+        }
+
+        if (heater == null) {
+            heater = GetComponent<Heater>();
+            if (heater == null) {
+                return;
+            }
+        }
+
+        // crystalTemperature / sync AddComponent can leave maxDistance at 0; vanilla never cools then.
+        float radius = heater.maxDistance;
+        if (radius <= 0.01f) {
+            radius = 10f;
+        }
 
         if (heater.enabled && Time.time - heater.lastTime > 0.5f) {
             heater.lastTime = (Time.time);
 
-            // just made it that it loops through all bodies
-            foreach (var nb in NetBody.GetBodiesInRadius(heater.transform.position,heater.maxDistance)) {
+            foreach (var nb in NetBody.GetBodiesInRadius(heater.transform.position, radius)) {
                 var body = nb.body;
+                if (body == null) {
+                    continue;
+                }
 
                 if (
                     ((heater.isHeater && body.temperature < heater.desiredTemp) || (!heater.isHeater && body.temperature > heater.desiredTemp))
@@ -242,6 +263,8 @@ public class OnWillRenderObject_ForceForMPComponent : MonoBehaviour {
         if (Net.IsClient) {
             if (target is GunmineScript gun)
                 TrapClaim.TickClientGun(gun);
+            if (target is BloodSuckerScript blood)
+                BloodSuckerClientVisual.Tick(blood);
             return;
         }
         try {
@@ -986,6 +1009,9 @@ public static class BuildingEntity_Start_MultiplayerPatch {
 
     static void Postfix(BuildingEntity __instance) {
         if (!Net.IsRunning) return;
+        if (__instance.GetComponent<Heater>())
+            __instance.GetOrAddComponent<HeaterMultiplayerRewrite>();
+        else __instance.StartCoroutine(AttachHeaterRewriteNextFrame(__instance));
         
         if (__instance.TryGetComponent(out TrackerClimbableEntity ropetracker) && !string.IsNullOrEmpty(ropetracker.og_id)) {
             //OG: BuildingEntity.Start V510
@@ -998,9 +1024,7 @@ public static class BuildingEntity_Start_MultiplayerPatch {
             __instance.id = "trader" + (traderrrr.character + 1).ToString();
         } else if (__instance.TryGetComponent(out SoundCannon sndcannon)) {
             __instance.GetOrAddComponent<TrackerSoundCannon>();
-        } else if (__instance.GetComponent<Heater>()) {
-            // i rewrote the heater to support multiple players
-            __instance.GetOrAddComponent<HeaterMultiplayerRewrite>();
+
         } else if (__instance.TryGetComponent(out TurretScript turret)) {
             __instance.GetOrAddComponent<TrackerTurret>();
         } else if (__instance.TryGetComponent(out CorpseScript corpse)) {
@@ -1011,6 +1035,10 @@ public static class BuildingEntity_Start_MultiplayerPatch {
         } else if (__instance.TryGetComponent(out StalactiteDropper _gffdgfdfdgStalactiteDropper)) {
             var owro = __instance.GetOrAddComponent<OnWillRenderObject_ForceForMPComponent>();
             owro.target = _gffdgfdfdgStalactiteDropper;
+        } else if (__instance.TryGetComponent(out LaserDroneScript drone)) {
+            __instance.GetOrAddComponent<OnWillRenderObject_ForceForMPComponent>().target = drone;
+        } else if (__instance.TryGetComponent(out BloodSuckerScript sucker)) {
+            __instance.GetOrAddComponent<OnWillRenderObject_ForceForMPComponent>().target = sucker;
         } else if (__instance.TryGetComponent(out SpiderHandler SPIDAR)) {
             var spoodertracker = SPIDAR.GetOrAddComponent<TrackerSpiderHandler>();
         } else if (__instance.id == "background") {
@@ -1027,6 +1055,16 @@ public static class BuildingEntity_Start_MultiplayerPatch {
         }
         
         
+    }
+
+static IEnumerator AttachHeaterRewriteNextFrame(BuildingEntity building) {
+        yield return null;
+        if (building == null || building.gameObject == null) {
+            yield break;
+        }
+        if (building.GetComponent<Heater>() != null) {
+            building.GetOrAddComponent<HeaterMultiplayerRewrite>();
+        }
     }
 }
 

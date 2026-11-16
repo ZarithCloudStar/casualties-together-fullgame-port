@@ -1,4 +1,4 @@
-﻿#if FULLGAME
+#if FULLGAME
 using CasualtiesTogetherUtils;
 using System.Collections;
 using System.Collections.Generic;

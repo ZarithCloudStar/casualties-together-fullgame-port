@@ -302,7 +302,9 @@ public struct AnyObjectNetId : INetSerializeByMemcpy {
     public knetid netId;
     public byte data1;
 
-    public bool IsNothing() {
+    public bool IsBlockHit() => type == 5;
+public static AnyObjectNetId ForBlockHit() => new AnyObjectNetId { type = 5 };
+public bool IsNothing() {
         return type == 0;
     }
 

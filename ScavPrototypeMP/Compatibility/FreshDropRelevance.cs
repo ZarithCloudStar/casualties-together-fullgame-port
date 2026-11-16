@@ -15,8 +15,41 @@ namespace Together;
 internal static class FreshDropRelevance {
     static bool Prepare() => Util.GameIsFull();
 
+    // A remote player may legitimately finish a capsule keypad farther than
+    // the native eight-metre loot radius (the keypad's reach is normally 14m).
+    // Scope this exception to the validated opening and its own spawned loot.
+    static Vector2? validatedCapsuleSource;
+    static readonly HashSet<FreshItemDrop> validatedCapsuleDrops = new();
+
+    internal static bool IsValidatedCapsuleDrop(Vector2 position) =>
+        validatedCapsuleSource.HasValue && (position - validatedCapsuleSource.Value).sqrMagnitude < .01f;
+
+    internal static void OpenValidatedCapsule(BuildingEntity source, ScavPlayer opener) {
+        if (!Net.IsRunning || !Net.IsServer || source.id != "dropcapsule") {
+            source.SetHealth(0f);
+            return;
+        }
+        var previous = validatedCapsuleSource;
+        validatedCapsuleSource = source.transform.position;
+        try {
+            if (log.verbose)
+                log.l($"[drop] validated capsule open player={opener.playerId} source={validatedCapsuleSource.Value} openerDistance={Vector2.Distance(source.transform.position, opener.body.transform.position):0.00}");
+            source.SetHealth(0f);
+        } finally {
+            validatedCapsuleSource = previous;
+        }
+    }
+
+    internal static void MarkValidatedCapsuleDrop(FreshItemDrop drop) {
+        if (Net.IsRunning && Net.IsServer && IsValidatedCapsuleDrop(drop.transform.position))
+            validatedCapsuleDrops.Add(drop);
+    }
+
+    internal static bool TakeValidatedCapsuleDrop(FreshItemDrop drop) => validatedCapsuleDrops.Remove(drop);
+
     static float DistanceToPlayer(Vector2 source, Vector2 vanillaPlayer) {
         if (!Net.IsRunning || !Net.IsServer) return Vector2.Distance(source, vanillaPlayer);
+        if (IsValidatedCapsuleDrop(source)) return 0f;
         var nearest = ScavPlayer.GetDistanceToNearestLivingPlayer(source);
         float distance = Mathf.Sqrt(nearest.Item2);
         if (log.verbose) log.l($"[drop] source={source} nearestLiving={distance:0.00} hostDistance={Vector2.Distance(source, vanillaPlayer):0.00}");

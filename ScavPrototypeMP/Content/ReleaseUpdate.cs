@@ -20,7 +20,7 @@ internal static class ReleaseUpdate {
         internal long publishedAt;
         internal bool fromGitHub;
     }
-    static readonly Regex VersionPattern = new(@"^[vV]?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-cu-port)?(?:-bugfix(\d+))?(?:-(alpha|beta|rc|preview|dev)(?:[.-]?(\d+))?)?(?:\+[0-9A-Za-z.-]+)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    static readonly Regex VersionPattern = new(@"^[vV]?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-cu-port)?(?:-bugfix(\d+))?(?:-(alpha|beta|rc|preview|dev|test)(?:[.-]?(\d+))?)?(?:\+[0-9A-Za-z.-]+)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     internal static bool IsWebUrl(string value, bool allowLoopback = false) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) && string.IsNullOrEmpty(uri.UserInfo) &&

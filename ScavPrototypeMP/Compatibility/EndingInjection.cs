@@ -1,4 +1,4 @@
-﻿#if FULLGAME
+#if FULLGAME
 using HarmonyLib;
 using System;
 

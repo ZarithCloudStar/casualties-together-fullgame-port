@@ -1,4 +1,4 @@
-﻿using CasualtiesTogetherUtils;
+using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteEntitySystem;
 using LiteNetLib;
@@ -237,57 +237,67 @@ static class Body_Jump_MultiplayerPatch {
 [HarmonyPatch(typeof(Body), nameof(Body.HandlePeriodicChecks))]
 public static class Body_HandlePeriodicChecks_MultiplayerPatch {
 
-    static void Prefix(Body __instance, ref bool __state) {
-        var body = __instance;
-
-        __state = body.halfMinuteCheckTime + Time.deltaTime > 30f;
-
-        //OG: Body.Update()   V520
-        if (__state) {
-            if (body.brainHealth < 95f) { 
-                    
-                if (Util.IsBodyLocal(body)) {
-                    // reenable flash brain for local player (cuz i overriden it with the patch)
-                    if (body.consciousness > 20f && (double)UnityEngine.Random.value > (double)body.brainHealth * 0.01 && !PlayerCamera.main.lastStandPanel.activeSelf) {
-                        if (!UIInGame.SpectatorModeActive) {
-                            PlayerCamera.main.ForceFlashBrain();
-                        }
-                    }
-                } else {
-                    
-                }
-                    
-            }
+        // remote bodies share synced brainHealth; vanilla braindamagefx drives PlayerCamera.main
+        // (craft / wound / radial / timescale / etc) so other players' damage was opening local UI.
+        struct PeriodicState {
+            public bool halfMinuteTick;
+            public bool suppressedBrainFx;
+            public bool savedForceNoMovement;
         }
-        
-    }
-    static void Postfix(Body __instance, ref bool __state) {
-        var body = __instance;
 
+        static void Prefix(Body __instance, ref PeriodicState __state) {
+            Body body = __instance;
 
-        //OG: Body.Update()   V520
-        if (__state) { 
-            if (body.brainHealth < 95f) {
+            __state = new PeriodicState {
+                halfMinuteTick = body.halfMinuteCheckTime + Time.deltaTime > 30f,
+            };
 
-                if (Util.IsBodyLocal(body)) {
-                    
-                } else {
-                    if (PlayerCamera.main.threatMusicTime == 8f) { // random thread music from brain damage, disable it to remove phantom pain
-                        PlayerCamera.main.threatMusicTime = 0f;
+            if (!Net.IsRunning || !__state.halfMinuteTick || body.brainHealth >= 95f) {
+                return;
+            }
+
+            if (Util.IsBodyLocal(body)) {
+                // reenable flash brain for local player (cuz i overriden it with the patch)
+                if (body.consciousness > 20f && (double)UnityEngine.Random.value > (double)body.brainHealth * 0.01 && !PlayerCamera.main.lastStandPanel.activeSelf) {
+                    if (!UIInGame.SpectatorModeActive) {
+                        PlayerCamera.main.ForceFlashBrain();
                     }
                 }
+                return;
+            }
 
+            // vanilla gate: brainHealth < 95 && braindamagefx && !forceNoMovement
+            __state.savedForceNoMovement = body.forceNoMovement;
+            body.forceNoMovement = true;
+            __state.suppressedBrainFx = true;
+        }
+
+        static void Postfix(Body __instance, ref PeriodicState __state) {
+            Body body = __instance;
+
+            if (__state.suppressedBrainFx) {
+                body.forceNoMovement = __state.savedForceNoMovement;
+            }
+
+            if (!Net.IsRunning || !__state.halfMinuteTick || Util.IsBodyLocal(body)) {
+                return;
+            }
+
+            // belt-and-suspenders if any FX still leaked before the suppress
+            if (PlayerCamera.main != null && PlayerCamera.main.threatMusicTime == 8f) {
+                PlayerCamera.main.threatMusicTime = 0f;
             }
         }
-    }
 
-}
+    }
 
 
 
 
 [HarmonyPatch(typeof(Body), nameof(Body.PlaceBody))]
 public static class Body_PlaceBody_MultiplayerPatch {
+public static bool ShouldKeepLayerXOffset() => !Util.GameIsFull() && Multiplayer.rules.LayerFinishKeepXOffset && WorldGeneration.world != null && !WorldGeneration.world.doPod;
+
     public static bool has_spawn_location = false;
     public static Vector2 SpawnLocation = new Vector2(0,500);
 

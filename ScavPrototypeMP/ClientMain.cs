@@ -20,6 +20,8 @@ namespace Together;
 
 
 public static class CoopKeybinds {
+public const string hug = "casualtiestogether_hug";
+
     const string prefix = "casualtiestogether_";
     public const string pointfingerat = prefix + "pointfingerat"; // KeyCode.Mouse2
     public const string chat = prefix + "chat"; // KeyCode.Slash 
@@ -37,6 +39,7 @@ public static class CoopKeybinds {
         { CoopKeybinds.voicechat, KeyCode.V },
         { CoopKeybinds.woundview , KeyCode.R },
         { CoopKeybinds.push, KeyCode.F },
+        { CoopKeybinds.hug, KeyCode.H },
         { CoopKeybinds.piggyback, KeyCode.P },
         { CoopKeybinds.carry, KeyCode.O },
         { CoopKeybinds.inventory, KeyCode.I },
@@ -1094,6 +1097,7 @@ public class ClientMain : MonoBehaviour {
         // setting the settings
         try {
             WorldMP.ApplyRunSettings(runsettings);
+            AchievementBreakSync.ReadAnnouncementFlag(reader);
 
             sgap.prefs.ApplyPrefs();
 
