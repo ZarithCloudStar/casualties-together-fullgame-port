@@ -3029,6 +3029,7 @@ public class BasePlayer : PawnLogic {
         if (Util.GameIsFull() && plr != null) plr.characterSelected = characterSelected;
 #if FULLGAME
         if (Util.GameIsFull() && plr != null) {
+            if (isHost) ChipState.ApplyHostRunSettings(WorldMP.runSettings, "host created", Util.IsInWorld(), plr);
             CharacterLobby.Publish(plr);
             log.l($"sync-create kind=player id={playerEntity.Id} owner={playerEntity.OwnerId} name={plr.playerName}");
         }

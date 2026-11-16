@@ -168,6 +168,7 @@ public static class CraftCommit {
     internal static void TryClick(PlayerCamera cam) {
         if (cam == null)
             return;
+        if (!RecipeProgress.Ready(false)) { FailLocal(cam, CraftReason.StillSyncing); return; }
         Body body = Util.GetLocalBody();
         if (body == null || cam.selectedRecipe < 0 || cam.selectedRecipe >= Recipes.recipes.Count) {
             FailLocal(cam, CraftReason.BadRecipe);
@@ -517,7 +518,7 @@ public static class CraftCommit {
                 Tombstone(receipt);
             Util.DoAlert(ReasonText(receipt.reason));
         } else if (recipe != null) {
-            recipe.hasMadeBefore = true;
+            PlayerCheckpoint.NoteLocalCrafted(recipe.index);
         }
         cam.RefreshRecipeList();
     }
@@ -895,6 +896,11 @@ public static class CraftCommit {
         PlayerCrafts crafts = CraftsFor(playerId, session);
         if (crafts.receipts.TryGetValue(attempt, out Receipt cached))
             return cached;
+#if FULLGAME
+        if (DeferredPlayerSaveRestore.InProgress)
+            return Store(crafts, Deny(session, attempt, CraftReason.StillSyncing, ids, pb, recipe));
+#endif
+        PlayerCheckpoint.EnsureCraftedLoaded(pb);
 
         var resolved = new List<Item>();
         for (int i = 0; i < ids.Length; i++) {
@@ -1152,13 +1158,13 @@ public static class CraftCommit {
         ServerMain.Server_AnnounceSound(pb.pos, "combine", ServerMain.GetListOfClientIdsExceptThis(pb));
         if (pb.IsLocal && pb.body != null)
             Sound.Play("combine", pb.body.transform.position);
-        if (pb.body != null && pb.body.TryGetNetBody(out NetBody known)) {
-            if (!known.RecipesHasCrafterBefore.Contains(recipe.index)) {
-                known.RecipesHasCrafterBefore.Add(recipe.index);
-                known.body.happiness += 1f;
-                known.body.skills.AddExp(2, 10f);
+        if (pb.body != null) {
+            if (!pb.RecipesHasCrafterBefore.Contains(recipe.index)) {
+                pb.RecipesHasCrafterBefore.Add(recipe.index);
+                pb.body.happiness += 1f;
+                pb.body.skills.AddExp(2, 10f);
             }
-            PlayerCheckpoint.SendCrafted(known);
+            PlayerCheckpoint.SendCrafted(pb);
         }
     }
 
@@ -1355,7 +1361,7 @@ public static class CraftCommit {
                 recipe = Recipes.recipes[attempt.recipe];
         }
         if (recipe != null)
-            recipe.hasMadeBefore = true;
+            PlayerCheckpoint.NoteLocalCrafted(recipe.index);
         Body body = Util.GetLocalBody();
         if (body != null)
             Sound.Play("combine", body.transform.position);

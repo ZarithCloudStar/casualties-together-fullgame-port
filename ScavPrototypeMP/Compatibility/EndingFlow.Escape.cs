@@ -281,12 +281,6 @@ internal static class Ending_BeginEscapePatch {
 }
 [HarmonyPatch(typeof(GuardSpawner), "Update")]
 internal static class Ending_GuardSpawnerPatch { static bool Prefix() => !EndingFlow.Active || (Net.IsServer && !EndingFlow.SettlementLocked); }
-[HarmonyPatch(typeof(GuardSpawner), "body", MethodType.Getter)]
-internal static class Ending_GuardSpawnerTargetPatch {
-    static void Postfix(ref Body __result) {
-        if (EndingFlow.DuringEscape && Net.IsServer && EndingFlow.KeyPlayer?.body != null) __result = EndingFlow.KeyPlayer.body;
-    }
-}
 [HarmonyPatch(typeof(GuardSpawner), nameof(GuardSpawner.CreateGuard))]
 internal static class Ending_GuardSpawnCountPatch {
     static void Postfix(GuardSpawner __instance) {

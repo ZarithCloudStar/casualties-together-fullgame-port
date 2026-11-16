@@ -279,20 +279,19 @@ public class KSteam : MonoBehaviour {
 
     static bool IS_DOING_HostLobbyRecreatorLoop = false;
     static IEnumerator HostLobbyRecreatorLoop() {
-        var start = Time.realtimeSinceStartupAsDouble;
-        while (IS_IN_LOBBY && Net.TryGetSteamTransport(out var tsteam) && CURRENT_LOBBY.lobby_steamID == CSteamID.Nil) {
-            yield return null;
-
-            if ((Time.realtimeSinceStartupAsDouble - start) > 2) {
-                start = Time.realtimeSinceStartupAsDouble;
-
-                IS_DOING_HostLobbyRecreatorLoop = true;
-
-                tsteam.CreateLobby(KSteam.NumToLobbyType(UIMainMenu._STEAM_CHOSEN_LOBBYTYPE));
-
-                yield return new WaitForSeconds(1);
+        if (IS_DOING_HostLobbyRecreatorLoop || !Net.TryGetSteamTransport(out var originalTransport)) yield break;
+        IS_DOING_HostLobbyRecreatorLoop = true;
+        try {
+            var start = Time.realtimeSinceStartupAsDouble;
+            while (IS_IN_LOBBY && Net.IsRunning && Net.IsServer && Net.Transport == originalTransport
+                && CURRENT_LOBBY.lobby_steamID == CSteamID.Nil) {
+                yield return null;
+                if (Time.realtimeSinceStartupAsDouble - start > 2 && !originalTransport.LobbyCreatePending) {
+                    start = Time.realtimeSinceStartupAsDouble;
+                    originalTransport.CreateLobby(KSteam.NumToLobbyType(UIMainMenu._STEAM_CHOSEN_LOBBYTYPE));
+                }
             }
-        }
+        } finally { IS_DOING_HostLobbyRecreatorLoop = false; }
     }
 
 
@@ -1089,8 +1088,7 @@ public class KSteam : MonoBehaviour {
 
             Multiplayer.DoMultiplayerStatusMessageLog($"OnLobbyEnter failed! response: {msg}");
 
-            if (!IS_DOING_HostLobbyRecreatorLoop) {
-                IS_DOING_HostLobbyRecreatorLoop = false;
+            if (!IS_DOING_HostLobbyRecreatorLoop && !(Net.IsServer && Net.ServerEntityManager != null)) {
                 LeaveLobbyAndResetNet((CSteamID)pCallback.m_ulSteamIDLobby);
                 IS_IN_LOBBY = false;
             }
@@ -1106,7 +1104,6 @@ public class KSteam : MonoBehaviour {
 
         if (Net.IsServer) {
             if (tsteam.CreateServerSocket()) {
-                IS_DOING_HostLobbyRecreatorLoop = false;
 #if TESTING
                 Multiplayer.DoMultiplayerStatusMessageLog("CreateServerSocket Success.");
             BrowserSteamPing.EnsureHostListen();
@@ -1212,6 +1209,8 @@ public class KSteam : MonoBehaviour {
     }
 
     static void OnLobbyDataUpdate(LobbyDataUpdate_t pCallback) {
+        // Old-lobby callbacks must not restore its id while recreation waits.
+        if (CURRENT_LOBBY.lobby_steamID.m_SteamID != pCallback.m_ulSteamIDLobby) return;
 
 #if false  // not necessary to log this
         if (pCallback.m_ulSteamIDLobby == pCallback.m_ulSteamIDMember) {
@@ -1230,6 +1229,7 @@ public class KSteam : MonoBehaviour {
 
 
     static void OnLobbyChatUpdate(LobbyChatUpdate_t pCallback) {
+        if (CURRENT_LOBBY.lobby_steamID.m_SteamID != pCallback.m_ulSteamIDLobby) return;
         try { 
             var stateChange = (EChatMemberStateChange)pCallback.m_rgfChatMemberStateChange;
             if (pCallback.m_ulSteamIDUserChanged == pCallback.m_ulSteamIDMakingChange) {
@@ -1290,7 +1290,8 @@ public class KSteam : MonoBehaviour {
                     Multiplayer.DoMultiplayerStatusMessageLog($"I got removed from the lobby. But im the owner!\nAttempting to recreate lobby in a sec...");
 
                     CURRENT_LOBBY.lobby_steamID = CSteamID.Nil;
-                    tsteam.Shutdown(false); // clean up the sockets
+                    // The lobby is discovery metadata. Keep live P2P sessions,
+                    // players and their inventories while replacing it.
                     Util.StartCoroutine(HostLobbyRecreatorLoop);
                     
                     return;
@@ -1468,6 +1469,18 @@ public class KSteam : MonoBehaviour {
         SessionLog.Event("LOBBY CREATE RESULT", $"lobby={pCallback.m_ulSteamIDLobby} result={pCallback.m_eResult} ioFailure={bIOFailure}");
         steamtestlog("[" + LobbyCreated_t.k_iCallback + " - LobbyCreated] - " + pCallback.m_eResult + " -- " + pCallback.m_ulSteamIDLobby);
 
+        if (!Net.TryGetSteamTransport(out var tsteam) || !Net.IsRunning || !Net.IsServer) {
+            if (!bIOFailure && pCallback.m_eResult == EResult.k_EResultOK)
+                SteamMatchmaking.LeaveLobby((CSteamID)pCallback.m_ulSteamIDLobby);
+            return;
+        }
+        tsteam.LobbyCreatePending = false;
+        bool recreating = Net.ServerEntityManager != null;
+        if (recreating && (bIOFailure || pCallback.m_eResult != EResult.k_EResultOK)) {
+            Together.log.warn($"[steam] lobby recreation failed result={pCallback.m_eResult} ioFailure={bIOFailure}; preserving the running session and retrying");
+            return;
+        }
+
         if (bIOFailure) {
             ESteamAPICallFailure reason = SteamUtils.GetAPICallFailureReason(OnLobbyCreatedCallResult.Handle);
             Multiplayer.DoMultiplayerStatusMessageError("STEAM: OnLobbyCreated encountered an IOFailure due to: " + reason);
@@ -1501,14 +1514,10 @@ public class KSteam : MonoBehaviour {
 
         IS_IN_LOBBY = true;
 
-        var bucket = 0;
-        if (Net.TryGetSteamTransport(out var tsteam)) {
-            bucket = tsteam.hostLobbyBucket;
-        }
-
-        Net.OnTransportConnected();
+        var bucket = tsteam.hostLobbyBucket;
+        if (!recreating) Net.OnTransportConnected();
         
-        if (ScavPlayer.LocalPlayer != null) {
+        if (!recreating && ScavPlayer.LocalPlayer != null) {
             ScavPlayer.LocalPlayer.SteamId = GetLocalUserSteamID().m_SteamID;
             ScavPlayer.LocalPlayer.ApplyNameAndColor(GetLocalUsername(), UIMainMenu.LAST_VALID_INPUT_COLOR);
             
@@ -2124,8 +2133,7 @@ public class TransportSteamworks : NetTransportBase {
     //CALLED ONLY FROM  OnWantToHostLobby !!!!
     internal bool CreateServerSocket() {
         if (listenSocket != HSteamListenSocket.Invalid) {
-            log.error($"{this.GetType().Name}.CreateServerSocket : Socket already exists !!!!!!!!! {listenSocket}");
-            return false;
+            return true; // lobby recreation reuses the live listener
         }
         
         if (onConnectionChange == null)
@@ -2260,7 +2268,9 @@ public class TransportSteamworks : NetTransportBase {
     }
 
 
+    internal bool LobbyCreatePending;
     internal bool CreateLobby(ELobbyType lobbyType) {
+        if (LobbyCreatePending) return false;
         SessionLog.Event("HOST BEGIN", $"method=steam type={lobbyType} port={FixedP2PPort}");
 
 #if PLAYTEST 
@@ -2273,6 +2283,8 @@ public class TransportSteamworks : NetTransportBase {
 
         KSteam.CURRENT_LOBBY.locked = false;
         SteamAPICall_t handle = SteamMatchmaking.CreateLobby(lobbyType, Multiplayer.PLAYER_COUNT_LIMIT);
+        if (handle == SteamAPICall_t.Invalid) return false;
+        LobbyCreatePending = true;
         KSteam.OnLobbyCreatedCallResult.Set(handle);
 
         Multiplayer.DoMultiplayerStatusMessageLog("STEAM: Creating Lobby...");

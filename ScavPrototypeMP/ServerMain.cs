@@ -106,7 +106,8 @@ if (MindMemory != null) {
 nb.MindMemory = MindMemory;
 }
 if (RecipesHasCrafterBefore != null) {
-nb.RecipesHasCrafterBefore = RecipesHasCrafterBefore;
+nb.RecipesHasCrafterBefore = new(RecipesHasCrafterBefore);
+PlayerCheckpoint.MarkCraftedLoaded(nb);
 PlayerCheckpoint.SendCrafted(nb);
 }
 nb.plr.playerColor = plrcolor;
@@ -1414,6 +1415,7 @@ writer.Put(WorldSnapshotTransfer.SnapshotMode);
 writer.Put(WorldSnapshotTransfer.Token ?? "");
 #endif
 Net.Server_SendToClientsVeryReliable(writer, to_who);
+foreach (var id in to_who) RecipeProgress.SendShared(id);
 #if FULLGAME
 if (WorldSnapshotTransfer.SnapshotMode && WorldSnapshotTransfer.Applied)
 foreach (var id in to_who) WorldSnapshotTransfer.Send(id);
@@ -2066,14 +2068,31 @@ if (DebugHelp._DEV_VISUALISE_NET_EVENTS)
 DebugHelp.OnNetEvent(plr.body.transform.position,
 $"S: PlayerDrinkLiquid {plr}");
 
-var drinkblockpos = WorldGeneration.world.WorldToBlockPos(
+// New clients send the exact block they drank from. Older clients only send a bool,
+// so fall back to the old position guess to stay compatible.
+Vector2Int drinkblockpos;
+if (reader.AvailableBytes >= 4) {
+short bx = reader.GetShort();
+short by = reader.GetShort();
+drinkblockpos = new Vector2Int(bx, by);
+
+var bodyblock = WorldGeneration.world.WorldToBlockPos(plr.body.transform.position);
+if (Mathf.Abs(bx - bodyblock.x) > 8 || Mathf.Abs(by - bodyblock.y) > 8) {
+log.warn($"[drink] rejected out-of-range block=({bx},{by}) from {plr} bodyblock={bodyblock}");
+return;
+}
+} else {
+drinkblockpos = WorldGeneration.world.WorldToBlockPos(
 plr.body.transform.position - Vector3.up * 2.5f);
+}
 
 var there_is_a_fluid =
 FluidManager.main.GetLiquid(drinkblockpos.x, drinkblockpos.y);
+float thirst_before = plr.body.thirst;
 if (!plr.IsLocal) {
 FluidManager.main.DrinkLiquid(drinkblockpos, plr.body);
 }
+log.l($"[drink] SERVER block={drinkblockpos} liquid={there_is_a_fluid} thirst {thirst_before:F1} -> {plr.body.thirst:F1} plr={plr}");
 if (there_is_a_fluid != 0 || plr.IsLocal) {
 ServerMain.Server_AnnounceSound(plr.body.transform.position, "drink", ServerMain.AllClientIdsExceptHost);
 }

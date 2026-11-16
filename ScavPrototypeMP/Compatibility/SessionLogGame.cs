@@ -14,14 +14,14 @@ namespace Together;
 internal static class SessionLogGame {
     internal static void Start() {
         try {
-            string protocol = "V" + Application.version + "_MPv" + Plugin.MOD_VERSION;
+            string protocol = "V" + Application.version + "_MPv" + BuildInfo.NETWORK_VERSION;
             string fallbackFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + "Low",
                 "Orsoniks", "CasualtiesUnknown", "mp_save", "logs");
             string folder = null;
             try {
                 if (Path.IsPathRooted(Paths.GameRootPath)) folder = Path.Combine(Paths.GameRootPath, "logs");
             } catch { }
-            SessionLog.Start(folder, Path.Combine(Paths.BepInExRootPath, "LogOutput.log"),
+            SessionLog.Start(folder ?? fallbackFolder, Path.Combine(Paths.BepInExRootPath, "LogOutput.log"),
                 $"local={DateTimeOffset.Now:O}\nutc={DateTime.UtcNow:O}\nUPDATE_VERSION={BuildInfo.UPDATE_VERSION}" +
                 $"\nFULL_VERSION_TAG={protocol}\nbuild={KSteam.GetModBuildTag()}\ngame={Application.version}" +
                 $"\nos={Environment.OSVersion} osBits={(Environment.Is64BitOperatingSystem ? 64 : 32)} processBits={(IntPtr.Size * 8)}" +

@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using CasualtiesTogetherUtils;
 using LiteNetLib;
 using LiteNetLib.Utils;
@@ -13,6 +14,21 @@ namespace Together;
 // entity, inventory, chip and team-ending ownership; never reload an older body file.
 internal static class PortSpeciesSwap {
     internal static bool Rebuilding { get; private set; }
+    sealed class SkipNotice { internal bool logged; }
+    static readonly ConditionalWeakTable<ScavPlayer, SkipNotice> skipped = new();
+    static bool loggedMissingPlayer;
+
+    static void WarnNotReady(ScavPlayer player, NetBody old, byte species) {
+        if (ReferenceEquals(player, null)) {
+            if (loggedMissingPlayer) return;
+            loggedMissingPlayer = true;
+        } else {
+            var notice = skipped.GetValue(player, _ => new SkipNotice());
+            if (notice.logged) return;
+            notice.logged = true;
+        }
+        log.warn($"[species] rebuild skipped: entity not ready player={(player != null ? player.playerName : "null/destroyed")} species={species} bodyNull={player == null || player.body == null} netBodyNull={old == null} syncBodyNull={old == null || old.syncBody == null} ownerNull={old == null || old.plr == null}");
+    }
     sealed class State {
         internal CharacterHealthStateSyncPacket health;
         internal CharacterHealthPainkillerStateSyncPacket painkiller;
@@ -36,7 +52,7 @@ internal static class PortSpeciesSwap {
             MinigameMPManager.GetSessionThisPlayerIsInvolvedIn(p) is MinigameMPManager._LimbMedicalMinigameSession medical && medical.limb?.body == player.body))
             throw new InvalidOperationException("Wait until treatment on this player finishes.");
         byte chosen = (byte)CharacterSpawn.ClampChar(species);
-        Rebuild(player, chosen);
+        if (!Rebuild(player, chosen)) return;
         if (wipeXp) player.body.skills.Setup(chosen);
         else {
             float[] multipliers = Skills.BaseMultipliers(chosen);
@@ -77,20 +93,25 @@ internal static class PortSpeciesSwap {
         reader.Get(out CharacterHealthStateSyncPacket health);
         if (species > 2) throw new ArgumentException("Invalid species.");
         if (!ScavPlayer.TryGetPlayerFromClientId(id, out var player)) return;
-        Rebuild(player, species);
+        if (!Rebuild(player, species)) return;
         if (player.netBody != null) health.Apply(player.netBody, true);
         if (player.IsLocal) CharacterSelection.AdoptForced(species);
     }
 
-    internal static void Rebuild(ScavPlayer player, byte species) {
-        if (player == null || player.body == null || Rebuilding) return;
+    internal static bool Rebuild(ScavPlayer player, byte species) {
+        if (Rebuilding) return false;
+        if (player == null || player.body == null) { WarnNotReady(player, null, species); return false; }
+        var old = player.netBody;
+        if (old == null || old.syncBody == null || old.plr == null || old.plr != player || old.body != player.body) {
+            WarnNotReady(player, old, species);
+            return false;
+        }
+        skipped.GetValue(player, _ => new SkipNotice()).logged = false;
         if (player.body.charType == species) {
             player.characterSelected = species;
             if (player.IsLocal) CharacterSelection.AdoptForced(species);
-            return;
+            return true;
         }
-        var old = player.netBody;
-        if (old == null || old.syncBody == null) throw new InvalidOperationException("Missing body/entity for species change.");
         var entity = old.syncBody;
         bool viewed = WoundView.view != null && WoundView.view.body == player.body;
         var state = new State { position = player.body.transform.position,
@@ -152,6 +173,7 @@ internal static class PortSpeciesSwap {
             SharedMain.ForceUpdatePlayerLists();
             UnityEngine.Object.Destroy(oldRoot);
         } finally { Rebuilding = false; }
+        return true;
     }
 }
 #endif

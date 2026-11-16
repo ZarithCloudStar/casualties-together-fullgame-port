@@ -22,6 +22,12 @@ namespace Together.UI.TeammateList {
 
         private static string ChipNotDetected => SkinLocale.T("Chip Not Detected", "未检测到芯片");
 
+        private static string ChipUnavailableText(Slot slot) {
+            if (TeammateListHost.ViewerUnchipped)
+                return SkinLocale.T("You have no chip; teammate vitals unavailable", "你无芯片，无法读取队友数据");
+            return slot.TargetUnchipped ? SkinLocale.T("No chip implanted", "对方未植入芯片") : ChipNotDetected;
+        }
+
         private static string Terminated => SkinLocale.T("TERMINATED", "生命体征终止");
 
         private readonly List<Slot> _slots = new List<Slot>(8);
@@ -463,8 +469,9 @@ namespace Together.UI.TeammateList {
                 slot.Name = text;
             }
             if (!slot.ChipReadable) {
-                if (slot.Blood != ChipNotDetected) {
-                    slot.Blood = ChipNotDetected;
+                string unavailable = ChipUnavailableText(slot);
+                if (slot.Blood != unavailable) {
+                    slot.Blood = unavailable;
                 }
                 return;
             }
@@ -507,8 +514,9 @@ namespace Together.UI.TeammateList {
         private void ReadVitals(Slot slot) {
             Body body = slot.Body;
             if (!slot.ChipReadable) {
-                if (slot.Mind != ChipNotDetected) {
-                    slot.Mind = ChipNotDetected;
+                string unavailable = ChipUnavailableText(slot);
+                if (slot.Mind != unavailable) {
+                    slot.Mind = unavailable;
                 }
             } else {
                 string text = SkinLocale.T("Consciousness: ", "意识：") + Mathf.RoundToInt(body.consciousness) + "%";
@@ -524,8 +532,9 @@ namespace Together.UI.TeammateList {
 
         private void ReadMood(Slot slot) {
             if (!slot.ChipReadable) {
-                if (slot.Mood != ChipNotDetected) {
-                    slot.Mood = ChipNotDetected;
+                string unavailable = ChipUnavailableText(slot);
+                if (slot.Mood != unavailable) {
+                    slot.Mood = unavailable;
                 }
             } else {
                 string text = SkinLocale.T("Mood: ", "心情：") + Mathf.RoundToInt(slot.Body.totalHappiness) + "%";

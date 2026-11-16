@@ -1,10 +1,14 @@
 > **这是修改版分支，不是原项目官方版本。**
 >
 > 基于 [Casualties: Together](https://github.com/creaturefeaturelarry/casualties-together) 5.4.0 修改，
-> 适配《Casualties: Unknown》正式版 1.0.1。
+> 适配《Casualties: Unknown》正式版 1.0.2。
 >
 > 修改版作者：bilibili 星云Zarith  
 > 许可证：LGPL-2.1
+
+当前正式版移植协议：`V1.0.2_MPv5.5.2-cu-port-bugfix1`。所有玩家须更新至 `5.5.2-cu-port-bugfix1`，与旧 `5.5.2-cu-port` 不兼容。
+
+游戏运行时，日志线程每 5 秒更新 `logs/crash-report-live_<pid>.zip`，包含 session、BepInEx 和 Unity 日志的末尾及说明。崩溃或强杀后直接把留下的 zip 发给作者；正常退出会自动删除。下次启动会将已退出实例的报告改名为 `crash-report_*.zip`，保留最近 5 份。报告最多缺少最后约 5 秒的日志，不包含崩溃转储，转储位置见 zip 内 README.txt。
 
 ## 这个分支包含什么
 

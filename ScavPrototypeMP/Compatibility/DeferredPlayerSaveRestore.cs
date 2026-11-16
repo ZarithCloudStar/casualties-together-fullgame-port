@@ -20,6 +20,7 @@ internal static class DeferredPlayerSaveRestore {
         // Keep that part early, but never load a Body/inventory on this pass.
         var data = JObject.Parse(SaveSystem.Unzip(File.ReadAllBytes(Path.Combine(folder, "save.sv"))));
         EndingFlow.RestoreSave(data);
+        RecipeProgress.RestoreShared(data);
         world.biomeDepth = data.Value<int>("biome"); // already normalized by the writer; no +1
         world.totalTraveled = data.Value<int>("totalTraveled");
         world.lootRarityMultiplier = data.Value<float>("lootRarity");

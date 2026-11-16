@@ -33,7 +33,16 @@ internal static class EndingGuardSync {
         if (building.TryGetComponent<GuardScript>(out var guard)) hurtByPlayer?.SetValue(guard, true);
     }
     internal static bool Active => EndingFlow.Active && WorldGeneration.world != null && WorldGeneration.world.biomeDepth == 11;
+    internal static Body NearestLivingPlayer(Vector2 position) => ScavPlayer.ClientIdToPlayerDict.Values
+        .Where(p => p != null && p.IsAlive())
+        .OrderBy(p => (p.pos - position).sqrMagnitude).ThenBy(p => (ushort)p.playerId)
+        .Select(p => p.body).FirstOrDefault();
     static float nextSnapshot;
+    // Keep the original 30-byte records intact; old receivers ignore the tail.
+    const byte VisualsMarker = 0x47, VisualsVersion = 1;
+    const int PoseBytes = 30, LaserBytes = 13;
+    static float nextProtocolWarning;
+    static bool receivedVisualsVersion;
     static readonly HashSet<Body> shotVictims = new();
     static List<EndingGuardSave> pendingRestore;
     internal static bool Restoring => pendingRestore != null;
@@ -81,11 +90,27 @@ internal static class EndingGuardSync {
             w.Put(g.didDie); w.Put(g.doingMelee);
             w.Put((sbyte)Array.IndexOf(g.bodyMoveSprites, g.myBody.sprite));
         }
+        w.Put(VisualsMarker); w.Put(VisualsVersion); w.Put((byte)entries.Count);
+        foreach (var entry in entries) {
+            var g = entry.guard;
+            w.Put(g.laserLine != null ? g.laserLine.transform.localScale.y : 0f);
+            Vector2 dot = g.laserDot != null ? g.laserDot.transform.localPosition : Vector2.zero;
+            w.Put(dot.x); w.Put(dot.y);
+            byte flags = 0;
+            if (g.laserLine != null && g.laserLine.enabled) flags |= 1;
+            if (g.laserDot != null && g.laserDot.enabled) flags |= 2;
+            if (g.stunned) flags |= 4;
+            w.Put(flags);
+        }
         Net.Server_SendToClients(DeliveryMethod.Sequenced, w, ServerMain.AllClientIdsExceptHost);
     }
     [ClientReceiver((byte)NetmsgId.CLIENT_EndingGuards)]
     static void Receive(knetid _, NetDataReader r) {
+        if (!Net.IsClient || !Active) return;
+        if (r.AvailableBytes < 1) return;
         int count = r.GetByte();
+        if (count > 128 || r.AvailableBytes < count * PoseBytes) { WarnProtocol(); return; }
+        var visuals = new EndingGuardPresentation[count];
         for (int i = 0; i < count; i++) {
             r.Get(out knetid id); byte version = r.GetByte();
             var pos = new Vector2(r.GetFloat(), r.GetFloat()); float scale = r.GetFloat();
@@ -93,20 +118,32 @@ internal static class EndingGuardSync {
             bool dead = r.GetBool(), melee = r.GetBool(); int sprite = r.GetSByte();
             if (!Active || !NetObjectRegistry.TryGetSyncInfo(id, out var si) || si.Version != version || si.go == null ||
                 !si.go.TryGetComponent<GuardScript>(out var g)) continue;
-            g.transform.position = pos; g.transform.localScale = new Vector3(scale, 1, 1);
-            g.arms.rotation = Quaternion.Euler(0, 0, arms); g.head.rotation = Quaternion.Euler(0, 0, head);
-            g.myBody.sprite = sprite >= 0 && sprite < g.bodyMoveSprites.Length ? g.bodyMoveSprites[sprite] : g.bodyStaySprite;
+            if (!g.TryGetComponent<EndingGuardPresentation>(out var visual))
+                visual = g.gameObject.AddComponent<EndingGuardPresentation>();
+            visuals[i] = visual;
+            visuals[i].ReceivePose(g, pos, scale, arms, head, dead, melee, sprite);
             if (g.bld != null) g.bld.health = health;
-            // Preserve the normal collider so local bullets can hit this same
-            // registry object. Death changes only visuals/collision, never loot.
-            if (dead && !g.didDie) {
-                g.didDie = true;
-                if (g.col != null) g.col.enabled = false;
-                if (g.animator != null) { g.animator.enabled = true; g.animator.Play("GuardFall"); }
-            }
-            if (g.laserLine != null) g.laserLine.enabled = !dead && !melee;
-            if (g.laserDot != null) g.laserDot.enabled = !dead && !melee;
         }
+        if (r.AvailableBytes == 0) return; // legacy host: pose-only packet
+        if (r.AvailableBytes < 3 || r.GetByte() != VisualsMarker || r.GetByte() != VisualsVersion
+            || r.GetByte() != count || r.AvailableBytes != count * LaserBytes) { WarnProtocol(); return; }
+        if (!receivedVisualsVersion) {
+            receivedVisualsVersion = true;
+            log.l("[guard-visual] received laser snapshot extension v1; client interpolation active");
+        }
+        for (int i = 0; i < count; i++) {
+            float length = r.GetFloat();
+            var dot = new Vector2(r.GetFloat(), r.GetFloat());
+            byte flags = r.GetByte();
+            if (!Util.IsFinite(length) || !Util.IsFinite(dot.x) || !Util.IsFinite(dot.y) || length < 0f) continue;
+            if (visuals[i] != null) visuals[i].ReceiveLaser(length, dot, flags);
+        }
+    }
+
+    static void WarnProtocol() {
+        if (Time.unscaledTime < nextProtocolWarning) return;
+        nextProtocolWarning = Time.unscaledTime + 5f;
+        log.warn("[guard-visual] malformed or unsupported snapshot extension; keeping the base pose");
     }
 
     internal static bool ServerShotHit(Body victim) {
@@ -155,22 +192,13 @@ internal static class Ending_GuardDeathPatch {
 }
 [HarmonyPatch(typeof(GuardScript), "Update")]
 internal static class Ending_GuardUpdatePatch { static bool Prefix() => !EndingGuardSync.Active || (Net.IsServer && !EndingFlow.SettlementLocked); }
-[HarmonyPatch(typeof(GuardScript), "get_body")]
-internal static class Ending_GuardTargetPatch {
-    static void Postfix(GuardScript __instance, ref Body __result) {
-        if (!EndingGuardSync.Active || !Net.IsServer) return;
-        if (EndingFlow.DuringEscape && EndingFlow.KeyPlayer?.body != null) __result = EndingFlow.KeyPlayer.body;
-        else {
-            var target = ScavPlayer.ClientIdToPlayerDict.Values.Where(p => p != null && p.IsAlive())
-                .OrderBy(p => (p.pos - (Vector2)__instance.transform.position).sqrMagnitude).FirstOrDefault();
-            if (target != null) __result = target.body;
-        }
-    }
-}
 [HarmonyPatch(typeof(GuardScript), nameof(GuardScript.Fire))]
 internal static class Ending_GuardFirePatch {
     static bool Prefix() { if (EndingGuardSync.Active && Net.IsClient) return false; EndingGuardSync.BeginAttack(); return true; }
-    static void Postfix() => EndingGuardSync.EndAttack();
+    static void Postfix(GuardScript __instance, bool __runOriginal) {
+        EndingGuardSync.EndAttack();
+        if (__runOriginal) GuardShotVisual.ServerSend(__instance);
+    }
 }
 [HarmonyPatch(typeof(GuardScript), "MeleeAttack")]
 internal static class Ending_GuardMeleePatch {

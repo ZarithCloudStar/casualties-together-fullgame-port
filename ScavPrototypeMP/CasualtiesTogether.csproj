@@ -475,7 +475,7 @@
 	</ItemGroup>
 
 	<Target Name="GenerateBuildInfo" BeforeTargets="CoreCompile">
-		<WriteLinesToFile File="$(IntermediateOutputPath)BuildInfo.cs" Lines="namespace Together%3B public static class BuildInfo { public const string MOD_VERSION = &quot;$(FullModVersion)&quot;%3B public const string UPDATE_VERSION = &quot;$(UpdateReleaseVersion)&quot;%3B }" Overwrite="true" />
+		<WriteLinesToFile File="$(IntermediateOutputPath)BuildInfo.cs" Lines="namespace Together%3B public static class BuildInfo { public const string MOD_VERSION = &quot;$(FullModVersion)&quot;%3B public const string NETWORK_VERSION = &quot;$(NetworkVersion)&quot;%3B public const string UPDATE_VERSION = &quot;$(UpdateReleaseVersion)&quot;%3B }" Overwrite="true" />
 		<ItemGroup>
 			<Compile Include="$(IntermediateOutputPath)BuildInfo.cs" />
 		</ItemGroup>

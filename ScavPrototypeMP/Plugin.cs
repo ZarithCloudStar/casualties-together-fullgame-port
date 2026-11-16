@@ -122,10 +122,7 @@ namespace Together {
                 }
 
                 Application.Quit();
-                Process.Start(new ProcessStartInfo {
-                    FileName = $"steam://run/{KSteam.STEAM_APPID}",
-                    UseShellExecute = true
-                });
+                Application.OpenURL($"steam://run/{KSteam.STEAM_APPID}");
                 return true;
             }
             return false;
@@ -144,22 +141,6 @@ namespace Together {
                     Together.log.error("STEAM RESTART FAILED " + e.ToString());
                 }
 
-                //vvvvvvvvvv THIS SHIT DOESNT WORK CUZ BEPINEX DOESNT INJECT AFTER RESTART !! vvvvvvvvvvvvvv
-
-                //// and try launch through the exe
-                //try {
-                //    string exePath = Process.GetCurrentProcess().MainModule.FileName;
-                //    Process.Start(new ProcessStartInfo {
-                //        FileName = exePath,
-                //        UseShellExecute = false,
-                //        WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory,
-                //    });
-                //    KrokoshaCasualtiesMP.log.l("Relaunching " + exePath);
-                //    Application.Quit();
-                //    return;
-                //} catch (System.Exception e2) {
-                //    KrokoshaCasualtiesMP.log.error("GENERIC RESTART FAILED:" + e2.ToString());
-                //}
 #endif
             } catch (System.Exception e3) {
                 UnityEngine.Debug.LogError("GAME RESTART FAILED:" + e3.ToString());
@@ -170,6 +151,7 @@ namespace Together {
 
 
         private void Awake() {
+            log = base.Logger;
             SessionLogGame.Start();
 
             main = this;
@@ -190,7 +172,6 @@ namespace Together {
 
 
             // Plugin startup logic
-            log = base.Logger;
             //log = BepInEx.Logging.Logger.CreateLogSource("Krokosha_MP_CU");
             // Multiplayer Co-op Mod for Casualties: Unknown
 
@@ -293,7 +274,7 @@ namespace Together {
             if (!SupportsGameVersion(Application.version)) {
                 LoadErrorNotifier.errorstr += $"Mismatching version detected: TARGET: {TARGET_GAME_VERSION} - CURRENT: {Application.version}";
 
-                if (Util.GameIsFull()) LoadErrorNotifier.errorstr += "\n请更新游戏至 1.0.2，并确保所有玩家安装 5.5.2-cu-port。Please update the game to 1.0.2 and install 5.5.2-cu-port on every peer.";
+                if (Util.GameIsFull()) LoadErrorNotifier.errorstr += $"\n请更新游戏至 1.0.2，并确保所有玩家安装 {MOD_VERSION}。Please update the game to 1.0.2 and install {MOD_VERSION} on every peer.";
                 Together.log.error(LoadErrorNotifier.errorstr);
 
                 LoadErrorNotifier.errorstr += "\n";
@@ -1222,7 +1203,9 @@ namespace Together {
             FrameBuckets.NoteFrame(Time.unscaledDeltaTime);
             long tick = FrameBuckets.Start();
 #if FULLGAME
+            if (SUCCESFULLY_INITIALIZED) AmmoActor102.TickAttachmentPatches();
             CharacterReadyGate.Tick();
+            WorldSnapshotTransfer.TickClientLoad();
             EndingFlow.Tick();
 #if TESTING
             EndingFlowTests.Tick();

@@ -3,6 +3,7 @@ using LiteNetLib;
 using LiteNetLib.Utils;
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEngine;
 
 namespace Together {
@@ -23,6 +24,9 @@ namespace Together {
         static readonly Dictionary<ushort, double> BuffReadyAt = new Dictionary<ushort, double>();
 
         static bool _open;
+        static int _inputFrame = -1;
+        static int _tickFrame = -1;
+        static bool _awaitAttackRelease;
         static NetBody _self;
         static NetBody _target;
         static float _held;
@@ -50,7 +54,28 @@ namespace Together {
         public static bool Open => _open;
 
         public static bool Blocks(Body body) {
-            return _open && body != null && PlayerCamera.main != null && PlayerCamera.main.body == body;
+            if (body == null || PlayerCamera.main == null || PlayerCamera.main.body != body) {
+                return false;
+            }
+            // IMGUI buttons run after Update. consume the click before the pat request,
+            // and keep its held/released input out of the tool path when the UI closes.
+            if (_open || (Net.IsRunning && UIInGame.interaction_menu_target_body != null)) {
+                SuppressInput();
+                return true;
+            }
+            if (_awaitAttackRelease) {
+                if (Input.GetMouseButton(0) || Input.GetMouseButton(1) || Input.GetKey(KeyBinds.GetBind("attack"))) {
+                    return true;
+                }
+                _awaitAttackRelease = false;
+                _inputFrame = Time.frameCount;
+            }
+            return _inputFrame == Time.frameCount;
+        }
+
+        static void SuppressInput() {
+            _inputFrame = Time.frameCount;
+            _awaitAttackRelease = true;
         }
 
         [CTPostInit]
@@ -74,6 +99,9 @@ namespace Together {
         }
 
         public static void Request(NetBody self, NetBody other) {
+            if (self != null && self.body != null && PlayerCamera.main != null && PlayerCamera.main.body == self.body) {
+                SuppressInput();
+            }
             if (_open || self == null || other == null || self == other || self.plr == null || other.plr == null) {
                 return;
             }
@@ -107,9 +135,11 @@ namespace Together {
         }
 
         public static void Tick() {
-            if (!_open) {
+            // Every NetBody calls this shared session; progress/input is local, once per frame.
+            if (!_open || _tickFrame == Time.frameCount) {
                 return;
             }
+            _tickFrame = Time.frameCount;
             if (_self == null || _target == null || _self.body == null || _target.body == null || !Pattable(_target.body) || !Near(_self.body, _target.body, KeepDistance)) {
                 Close();
                 return;
@@ -257,6 +287,7 @@ namespace Together {
         }
 
         static void Close() {
+            if (_open) SuppressInput();
             _open = false;
             _self = null;
             _target = null;
@@ -325,9 +356,6 @@ namespace Together {
             float x1 = Mathf.Min(headRect.xMax, armRect.xMax);
             float y1 = Mathf.Min(headRect.yMax, armRect.yMax);
             if (x1 - x0 < 1f || y1 - y0 < 1f) {
-                return false;
-            }
-            if (headRect.width < 1f || headRect.height < 1f || armRect.width < 1f || armRect.height < 1f) {
                 return false;
             }
             int headW = head.width;
@@ -515,6 +543,20 @@ namespace Together {
         static class BlockUnarmed {
             static bool Prefix(Body __instance) {
                 return !Blocks(__instance);
+            }
+        }
+
+        [HarmonyPatch]
+        static class BlockCameraUse {
+            static IEnumerable<MethodBase> TargetMethods() {
+                yield return AccessTools.Method(typeof(PlayerCamera), "HandleAttacks");
+                yield return AccessTools.Method(typeof(PlayerCamera), nameof(PlayerCamera.ApplyWoundItem));
+                yield return AccessTools.Method(typeof(PlayerCamera), nameof(PlayerCamera.WoundSpecialAction));
+            }
+
+            [HarmonyPriority(Priority.First)]
+            static bool Prefix(PlayerCamera __instance) {
+                return !Blocks(__instance.body);
             }
         }
     }

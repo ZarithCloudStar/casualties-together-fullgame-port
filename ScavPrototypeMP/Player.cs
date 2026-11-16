@@ -331,6 +331,7 @@ public byte characterSelected;
 #if FULLGAME
 public bool characterChosen;
 public bool modUnchipped; // server-owned per-save choice, applied through SetUnchipped
+internal bool modChipChosenExplicit; // host's personal chip button beats a run-setting default
 #endif
 
 public bool unchipped;
@@ -1051,6 +1052,11 @@ body.ResetMind();
 }
 
 body.ResetHealth(unmindwipe);
+#if FULLGAME
+// Health/body recreation must retain the player's saved choice, even after
+// vanilla worldgen reset the local unchipped presentation.
+ChipState.ApplyGameplay(this);
+#endif
 
 
 if (remind_health_now) {
@@ -1115,6 +1121,9 @@ if (level_transition) body.forceWalk = false;
 body.ForceStand();
 
 Server_TeleportCharacter(pos);
+#if FULLGAME
+ChipState.ApplyGameplay(this);
+#endif
 
 }
 }

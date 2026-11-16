@@ -124,10 +124,10 @@ SpeechCharContext.PinPostfix(__instance != null ? __instance.body : null, __stat
 [HarmonyPatch(typeof(Talker), nameof(Talker.Talk), new Type[] { typeof(List<string>), typeof(Limb), typeof(bool), typeof(bool) })]
 public static class Talker_Talk_MultiplayerPatch {
 public static void Force(Talker __instance, List<string> lines, Limb limb = null, bool force = false, bool resetTalkTimer = false) {
+bool previous = force_run;
 force_run = true;
-__instance.Talk(lines, limb, force, resetTalkTimer);
-
-force_run = false;
+try { __instance.Talk(lines, limb, force, resetTalkTimer); }
+finally { force_run = previous; }
 }
 
 public static void ForceNoSpeechImpairment(this Talker talker, string message, bool resetTalkTimer = false) {

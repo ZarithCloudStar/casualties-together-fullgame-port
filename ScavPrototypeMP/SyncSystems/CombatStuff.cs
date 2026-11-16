@@ -87,6 +87,7 @@ Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_RequestUseIte
 }
 
 public static bool Prefix(Body __instance) {
+if (HeadpatSession.Blocks(__instance)) return false;
 _hostLight = false;
 if (!Util.IsWorldGenerated()) { return false; }
 
@@ -121,7 +122,8 @@ IsUsingItemInHand = true;
 
 return true;
 }
-public static void Postfix(Body __instance) {
+public static void Postfix(Body __instance, bool __runOriginal) {
+if (!__runOriginal && HeadpatSession.Blocks(__instance)) return;
 if (!Net.IsRunning) return;
 
 if (_pending.on) {
@@ -157,8 +159,9 @@ public static class Body_UseItem_MultiplayerPatch {
 public static Item current_used_item = null;
 
 public static bool Prefix(Body __instance, ref SyncInfo __state, Item item) {
-current_used_item = item;
 __state = null;
+if (HeadpatSession.Blocks(__instance)) return false;
+current_used_item = item;
 
 if (!Util.IsWorldGenerated()) return false;
 if (!Net.IsRunning) return true;
@@ -187,7 +190,8 @@ NetObjectRegistry.Client_DeleteUnregisteredSyncableObject(item.gameObject);
 
 return true;
 }
-public static void Postfix(Body __instance, ref SyncInfo __state, Item item) {
+public static void Postfix(Body __instance, ref SyncInfo __state, Item item, bool __runOriginal) {
+if (!__runOriginal && HeadpatSession.Blocks(__instance)) return;
 current_used_item = null;
 if (__state != null) { // if is registered item and not an attack item
 
@@ -956,6 +960,8 @@ return building_dmg;
     public static bool ForceOnlyRetrieveAttackInfo = false;
 
     static bool Prefix(Body __instance, ref bool __result, ref AttackInfo atk, int slot, ref _MyAttackState __state) {
+        __state = null;
+        if (HeadpatSession.Blocks(__instance)) return false;
 
         LastAttackInfo = atk;
         LastAttacker = __instance;
@@ -1013,7 +1019,10 @@ return building_dmg;
 
         return true;
     }
-    static void Postfix(Body __instance, ref bool __result, AttackInfo atk, int slot, ref _MyAttackState __state) {
+    static void Postfix(Body __instance, ref bool __result, AttackInfo atk, int slot, ref _MyAttackState __state, bool __runOriginal) {
+        // A UI input guard can skip our prefix as well as the original attack.
+        if (__state == null) return;
+        if (!__runOriginal) __state.candoattack = false;
         LastAttackResult = __result;
 
         StaticHitValidation = false;

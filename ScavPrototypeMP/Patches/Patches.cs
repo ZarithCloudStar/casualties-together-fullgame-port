@@ -1053,13 +1053,18 @@ PlayerCamera.main.LOSHole.GetComponent<VisionMask>().ClearMask();
 static class FluidManagerDrinkLiquidPatch {
 static void Postfix(FluidManager __instance, Vector2Int pos, Body body) {
 if (Net.IsRunning) {
-if (Util.IsBodyLocal(body) && body.alive) {
+if (Util.IsBodyLocal(body) && body.alive && Net.IsClient) {
 #if DEBUG
 if (log.verbose) log.l($"REQUESTING LIQUID DRINK  ");
 #endif
 if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(body.transform.position, $"C: PlayerDrinkLiquid");
 
-Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerDrinkLiquid, true);
+// send the exact block the client drank from; the old fallback guessed it from the body position
+var writer = Net.CreateWriter(NetmsgId.SERVER_PlayerDrinkLiquid);
+writer.Put((short)pos.x);
+writer.Put((short)pos.y);
+Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
+log.l($"[drink] CLIENT request block=({pos.x},{pos.y}) liquid={FluidManager.main.GetLiquid(pos.x, pos.y)} thirst={body.thirst:F1}");
 
 }
 }

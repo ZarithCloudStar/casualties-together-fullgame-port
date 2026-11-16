@@ -48,12 +48,33 @@ internal static class WorldObjectSnapshot {
         internal WorldGeneration world;
         internal object session;
         internal List<(WorldObjectRecord data, GameObject go)> spawned = new();
-        internal int skipped, removed;
+        internal int skipped, removed, criticalFailures;
+        internal string firstCriticalFailure;
         internal Dictionary<string, int> keptDynamic = new();
         internal BackgroundSnapshot.Batch backgrounds;
         internal List<WorldTraderPlacement> traders;
     }
     static Batch pending;
+
+    // Terrain/backgrounds have their own strict barrier. Never lose a container
+    // root or an interactive building while tolerating a missing prop/drop.
+    static bool Critical(WorldObjectRecord record) => record.container || (record.parent == 0 && record.building && record.usable == true);
+
+    static void SkipObject(Batch batch, WorldObjectRecord record, string phase, string reason, Exception error = null, GameObject failed = null) {
+        batch.skipped++;
+        bool critical = Critical(record);
+        string detail = $"side={(Net.IsClient ? "client" : "server")} phase={phase} id={record.id} res={record.resource} parent={record.parent} critical={critical} reason={reason}";
+        if (critical) {
+            batch.criticalFailures++;
+            if (batch.firstCriticalFailure == null) batch.firstCriticalFailure = detail;
+        }
+        log.warn("LOAD: world object skipped " + detail + (error == null ? "" : " exception=" + error));
+        SessionLog.Event("WORLD OBJECT SKIPPED", detail);
+        if (failed != null) {
+            try { Remove(failed); }
+            catch (Exception ex) { log.warn($"LOAD: failed object cleanup id={record.id} res={record.resource}: {ex}"); }
+        }
+    }
 
     internal static byte[] Serialize() {
         RequireServer();
@@ -100,29 +121,34 @@ internal static class WorldObjectSnapshot {
         var document = WorldObjectSnapshotData.Decode(bytes, world.biomeDepth, world.width, world.height, WoundView.view.cInfo[2]);
         BackgroundSnapshot.ValidateForRestore(document);
         foreach (var record in document.objects) {
-            var prefab = SnapshotPrefabCatalog.Resolve(record.resource);
-            if (prefab == null || !SafeResource(prefab, record.resource, out _) ||
-                (prefab.GetComponent<BuildingEntity>() != null) != record.building ||
-                (prefab.GetComponent<Container>() != null) != record.container)
-                throw new InvalidDataException("World object template unavailable/changed: " + record.resource);
-            if (record.noteFont.HasValue && (prefab.GetComponent<SurvivorNote>() == null || record.noteFont.Value < -1 || record.noteFont.Value >= prefab.GetComponent<SurvivorNote>().fonts.Length))
-                throw new InvalidDataException("Invalid note font reference.");
-            if (record.noteSprite != null && SnapshotPrefabCatalog.Sprite(record.noteSprite) == null) throw new InvalidDataException("Missing note sprite reference.");
-            foreach (var state in record.components) {
-                var node = prefab.transform;
-                if (state.path.Length != 0) foreach (var part in state.path.Split('/')) {
-                    var children = PrefabChildren(node); int index = int.Parse(part);
-                    if (index >= children.Length) throw new InvalidDataException("Missing component child: " + record.resource);
-                    node = children[index];
+            try {
+                var prefab = SnapshotPrefabCatalog.Resolve(record.resource);
+                if (prefab == null || !SafeResource(prefab, record.resource, out _) ||
+                    (prefab.GetComponent<BuildingEntity>() != null) != record.building ||
+                    (prefab.GetComponent<Container>() != null) != record.container)
+                    throw new InvalidDataException("World object template unavailable/changed: " + record.resource);
+                if (record.noteFont.HasValue && (prefab.GetComponent<SurvivorNote>() == null || record.noteFont.Value < -1 || record.noteFont.Value >= prefab.GetComponent<SurvivorNote>().fonts.Length))
+                    throw new InvalidDataException("Invalid note font reference.");
+                if (record.noteSprite != null && SnapshotPrefabCatalog.Sprite(record.noteSprite) == null) throw new InvalidDataException("Missing note sprite reference.");
+                foreach (var state in record.components) {
+                    var node = prefab.transform;
+                    if (state.path.Length != 0) foreach (var part in state.path.Split('/')) {
+                        var children = PrefabChildren(node); int index = int.Parse(part);
+                        if (index >= children.Length) throw new InvalidDataException("Missing component child: " + record.resource);
+                        node = children[index];
+                    }
+                    var component = node.GetComponents<MonoBehaviour>().FirstOrDefault(x => x != null && x.GetType().FullName == state.type);
+                    if (component == null) throw new InvalidDataException("Missing prefab component: " + state.type);
+                    var allowed = Fields(component.GetType()).ToDictionary(f => f.Name);
+                    foreach (var field in state.fields) {
+                        if (!allowed.TryGetValue(field.Key, out var info)) throw new InvalidDataException("Unsupported component field: " + field.Key);
+                        if (component is CustomItemBehaviour && field.Key == "data" && field.Value.Type != JTokenType.Null) field.Value.ToObject<float[]>();
+                        else field.Value.ToObject(info.FieldType);
+                    }
                 }
-                var component = node.GetComponents<MonoBehaviour>().FirstOrDefault(x => x != null && x.GetType().FullName == state.type);
-                if (component == null) throw new InvalidDataException("Missing prefab component: " + state.type);
-                var allowed = Fields(component.GetType()).ToDictionary(f => f.Name);
-                foreach (var field in state.fields) {
-                    if (!allowed.TryGetValue(field.Key, out var info)) throw new InvalidDataException("Unsupported component field: " + field.Key);
-                    if (component is CustomItemBehaviour && field.Key == "data" && field.Value.Type != JTokenType.Null) field.Value.ToObject<float[]>();
-                    else field.Value.ToObject(info.FieldType);
-                }
+            } catch (Exception ex) {
+                if (Critical(record)) throw new InvalidDataException($"Critical world object preflight failed id={record.id} res={record.resource}: {ex.Message}", ex);
+                log.warn($"LOAD: optional world object preflight failed id={record.id} res={record.resource}: {ex}");
             }
         }
         log.l($"LOAD: world preflight format={document.version} objects={document.objects.Count} backgrounds={document.backgrounds.Count} bytes={bytes.Length}");
@@ -130,7 +156,7 @@ internal static class WorldObjectSnapshot {
 
     internal static void Deserialize(byte[] bytes) {
         RequireWorld();
-        PreflightRestore(bytes); // no destructive cleanup before all templates pass
+        PreflightRestore(bytes); // no destructive cleanup before structural/critical checks pass
         var world = WorldGeneration.world;
         // Decode and validate the WHOLE file before removing any generated object.
         var document = WorldObjectSnapshotData.Decode(bytes, world.biomeDepth, world.width, world.height, WoundView.view.cInfo[2]);
@@ -146,8 +172,8 @@ internal static class WorldObjectSnapshot {
                 (prefab.GetComponent<BuildingEntity>() != null) != record.building ||
                 (prefab.GetComponent<Container>() != null) != record.container ||
                 (record.parent != 0 && !prefabs.ContainsKey(record.parent))) {
-                log.warn($"LOAD: world object skipped id={record.id} res={record.resource} reason={reason ?? "resource shape/parent mismatch"}");
-                batch.skipped++; continue;
+                SkipObject(batch, record, "prefab", reason ?? "resource shape/parent mismatch");
+                continue;
             }
             // v1/v2 persisted ChunkSleep's inactive bit without its wake registry.
             // These formats cannot distinguish sleep from intentionally disabled
@@ -172,7 +198,9 @@ internal static class WorldObjectSnapshot {
         var created = new Dictionary<int, GameObject>();
         foreach (var record in document.objects) {
             if (!prefabs.TryGetValue(record.id, out var prefab)) continue;
-            if (record.parent != 0 && !created.ContainsKey(record.parent)) { batch.skipped++; continue; }
+            if (record.parent != 0 && !created.ContainsKey(record.parent)) {
+                SkipObject(batch, record, "spawn", "Parent container was not created."); continue;
+            }
             GameObject go = null;
             try {
                 Instantiating = true;
@@ -187,9 +215,7 @@ internal static class WorldObjectSnapshot {
                 created.Add(record.id, go);
                 batch.spawned.Add((record, go));
             } catch (Exception ex) {
-                log.error($"LOAD: world object spawn failed id={record.id} res={record.resource}: {ex}");
-                if (go != null) Remove(go);
-                batch.skipped++;
+                SkipObject(batch, record, "spawn", ex.Message, ex, go);
             }
         }
         batch.backgrounds = BackgroundSnapshot.Stage(document);
@@ -238,13 +264,12 @@ internal static class WorldObjectSnapshot {
                 go.SetActive(entry.data.active);
                 ready.Add(entry.data.id, go);
             } catch (Exception ex) {
-                log.error($"LOAD: world object state failed id={entry.data.id} res={entry.data.resource}: {ex}");
-                if (go != null) Remove(go);
-                batch.skipped++;
+                SkipObject(batch, entry.data, "finish", ex.Message, ex, go);
             }
         }
         int registered = 0, registrationFailures = 0;
-        foreach (var go in ready.Values) {
+        foreach (var entry in batch.spawned) {
+            if (!ready.TryGetValue(entry.data.id, out var go)) continue;
             try {
                 // Existing spatial registry brings distant meshes in when approached.
                 if (!Net.IsServer || !go.activeInHierarchy || NetObjectRegistry.ObjectShouldNotBeSynced(go) || !NetObjectRegistry.ShouldKeepRegistered(go)) continue;
@@ -252,13 +277,14 @@ internal static class WorldObjectSnapshot {
                 if (sync == null) throw new InvalidOperationException("SyncInfo registration failed.");
                 sync.WriteObjectIntoPacket();
                 registered++;
-            } catch (Exception ex) { registrationFailures++; log.error($"LOAD: restored world object sync failed res={SyncInfo.GetItemID(go)}: {ex}"); }
+            } catch (Exception ex) { registrationFailures++; SkipObject(batch, entry.data, "register", ex.Message, ex); }
         }
         BackgroundSnapshot.Finish(batch.backgrounds);
-        log.l($"LOAD: world objects restored={ready.Count} skipped={batch.skipped} removed={batch.removed} registered={registered} layer={batch.world.biomeDepth} keptDynamic={batch.keptDynamic.Values.Sum()}");
+        log.l($"LOAD: world objects restored={ready.Count} skipped={batch.skipped} criticalFailures={batch.criticalFailures} removed={batch.removed} registered={registered} registrationFailures={registrationFailures} layer={batch.world.biomeDepth} keptDynamic={batch.keptDynamic.Values.Sum()}");
         if (Net.IsServer) TraderLoadRecovery.Queue(batch.world, batch.session, batch.traders);
-        if (batch.skipped != 0 || ready.Count != batch.spawned.Count || registrationFailures != 0)
-            throw new InvalidDataException("Incomplete world object restore.");
+        if (batch.criticalFailures != 0 || ready.Count == 0)
+            throw new InvalidDataException($"Critical world object restore failed: restored={ready.Count} skipped={batch.skipped} criticalFailures={batch.criticalFailures}; {batch.firstCriticalFailure ?? "No world objects restored."}");
+        if (batch.skipped != 0) log.warn($"LOAD: continuing after {batch.skipped} noncritical world object failures; terrain/background/container barriers passed.");
     }
 
     static IEnumerable<GameObject> Candidates() => Object.FindObjectsOfType<Item>(true).Select(x => x.gameObject)
@@ -483,10 +509,19 @@ internal static class WorldObjectSnapshot {
                 if (go.TryGetComponent<CorpseScriptMultiplayerRewrite>(out var tracker)) tracker.corpseSpriteIndex = (byte)record.corpseSprite;
             }
         }
-        if (record.hasRigid && go.TryGetComponent<Rigidbody2D>(out var rb)) {
-            rb.bodyType = (RigidbodyType2D)record.rigidType;
-            rb.velocity = new Vector2(record.velocity[0], record.velocity[1]); rb.angularVelocity = record.angularVelocity;
-            rb.simulated = Net.IsServer && final && record.simulated;
+        if (go.TryGetComponent<Rigidbody2D>(out var rb)) {
+            if (Net.IsClient) {
+                // Static roots remain queryable without running saved dynamic physics.
+                // Keep Start/the topology pass inert, and never expose inventory colliders.
+                rb.simulated = false;
+                rb.velocity = Vector2.zero; rb.angularVelocity = 0f;
+                rb.bodyType = RigidbodyType2D.Static;
+                rb.simulated = final && record.parent == 0;
+            } else if (record.hasRigid) {
+                rb.bodyType = (RigidbodyType2D)record.rigidType;
+                rb.velocity = new Vector2(record.velocity[0], record.velocity[1]); rb.angularVelocity = record.angularVelocity;
+                rb.simulated = final && record.simulated;
+            }
         }
         if (final && record.climbPoints != null && go.TryGetComponent<Climbable>(out var climb)) {
             climb.points = record.climbPoints.Select(p => new Vector2(p[0], p[1])).ToList();

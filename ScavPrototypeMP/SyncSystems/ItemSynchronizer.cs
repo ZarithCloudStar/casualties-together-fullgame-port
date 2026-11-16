@@ -656,17 +656,7 @@ public static class Item_SetupItems_Listener {
         // patch ammo shit 
         ItemInfo.Use improved_ammo_use_lamda = delegate (Body body, Item item) {
             var ammo = item.GetComponent<AmmoScript>();
-            //OG: AmmoScript.UnloadRound  V5t4
-            if (ammo.rounds > 0) {
-                // both sides run the use. only the host spawns the round, or the client grows a second one.
-                if (!Net.IsRunning || Net.IsServer) {
-                    GameObject gameObject = Utils.Create(AmmoScript.AmmoTypeToItem(ammo.ammoType), ammo.transform.position, 0);
-                    body.AutoPickUpItem(gameObject.GetComponent<Item>());
-                }
-                if (!Net.IsRunning || Net.IsServer || Util.IsBodyLocal(body))
-                    ammo.rounds--;
-                Sound.Play("gunloadshell", item.transform.position);
-            }
+            ItemSync.UnloadAmmoRound(body, ammo);
         };
 
         Item.GlobalItems["riflemagazine"].useAction = improved_ammo_use_lamda;
@@ -691,25 +681,13 @@ public static class Item_SetupItems_Listener {
 
         //OG: Item.SetupItems       V6.1
         Item.GlobalItems["blueprint"].useAction = delegate(Body body, Item item) {
+            var recipeindex = item.GetComponent<BlueprintScript>().recipeIndex;
+            if (Recipes.recipes == null || recipeindex < 0 || recipeindex >= Recipes.recipes.Count) return;
             item.condition = 0f;
             body.skills.AddExp(2, 30f);
-            var recipeindex = item.GetComponent<BlueprintScript>().recipeIndex;
             Recipe recipe = Recipes.recipes[recipeindex];
-            if (Net.IsRunning) {
-                if (Net.IsServer) {
-                    recipe.INT = 0;
-                    string other = Locale.GetOther("learnedrecipe");
-                    other = other.Replace("r1", Locale.GetItem(recipe.simpleName));
-                    PlayerCamera.main.DoAlert(other);
-
-                    Multiplayer.Server_SendRelayMessageToClients((byte)NetmsgId.CLIENT_BlueprintThing, (knetid)recipeindex, true, false);
-                }
-            } else {
-                recipe.INT = 0;
-                string other = Locale.GetOther("learnedrecipe");
-                other = other.Replace("r1", Locale.GetItem(recipe.simpleName));
-                PlayerCamera.main.DoAlert(other);
-            }
+            RecipeProgress.Learn(body, item, recipeindex);
+            if (!Net.IsRunning || (Net.IsClient && Util.IsBodyLocal(body))) RecipeProgress.Notify(recipeindex);
             if (Util.IsBodyLocal(body)) {
                 PlayerCamera.main.selectedRecipe = recipe.index;
                 if (!PlayerCamera.main.craftingPanel.activeSelf) {
@@ -818,11 +796,7 @@ public static class Item_SetupItems_Listener {
 
         reader.Get(out knetid recipeindex);
 
-        Recipe recipe = Recipes.recipes[(int)recipeindex];
-        recipe.INT = 0;
-        string other = Locale.GetOther("learnedrecipe");
-        other = other.Replace("r1", Locale.GetItem(recipe.simpleName));
-        PlayerCamera.main.DoAlert(other);
+        RecipeProgress.ReceiveLearned((int)recipeindex);
     }
 
 
@@ -2167,7 +2141,10 @@ public static void BetterUseItem( Body body, Item item) {
             item.transform.position = body.transform.position;
         }
         if (item.Stats.usable) {
-            item.Stats.useAction(body, item);
+            var previous = Body_CombineItems_MultiplayerPatch.GunLoadingBody;
+            Body_CombineItems_MultiplayerPatch.GunLoadingBody = body;
+            try { item.Stats.useAction(body, item); }
+            finally { Body_CombineItems_MultiplayerPatch.GunLoadingBody = previous; }
             if (item != null && item.condition < 0f)
                 item.condition = 0f;
             SpentDestroy(item);
@@ -2176,6 +2153,18 @@ public static void BetterUseItem( Body body, Item item) {
     public static void SetBodyOverride(Item item, Body body) {
         body.GetCoUtilsInstance().SelectForMPOverride();
         item.GetOrAddComponent<BodyGetterOverrider>().SetBody(body);
+    }
+
+    // Shared by vanilla and custom magazines. Relayed uses never spawn a
+    // second round, and the validated user receives the server-created item.
+    internal static void UnloadAmmoRound(Body body, AmmoScript ammo) {
+        if (body == null || ammo == null || ammo.rounds <= 0) return;
+        if (!Net.IsRunning || Net.IsServer) {
+            var round = Utils.Create(AmmoScript.AmmoTypeToItem(ammo.ammoType), ammo.transform.position, 0);
+            body.AutoPickUpItem(round.GetComponent<Item>());
+        }
+        if (!Net.IsRunning || Net.IsServer || Util.IsBodyLocal(body)) ammo.rounds--;
+        Sound.Play("gunloadshell", ammo.transform.position);
     }
 
     // stock only deletes a spent item from Item.Update, and that returns early outside sim range.

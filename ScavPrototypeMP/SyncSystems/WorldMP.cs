@@ -160,6 +160,9 @@ public class WorldMP : CasualtiesTogetherSingleton {
                 }
             }
         }
+#if FULLGAME
+        ChipState.ApplyHostRunSettings(newRunSettings, "ApplyRunSettings", Util.IsInWorld());
+#endif
     }
 
 
@@ -306,6 +309,9 @@ public class WorldMP : CasualtiesTogetherSingleton {
             CharacterRunMemory.EnsureIdentityForLoad("loading the save");
             CharacterRunMemory.ReapplyBindingsToPlayers("loading the save");
         }
+#if FULLGAME
+        ChipState.ApplyHostRunSettings(runSettings, loadsave ? "loading save" : "starting run", loadsave);
+#endif
         _CheckIfCanLoadAWorld();
         SavesystemPatch.PreserveSave = false;
         ResetWorldParameters();
@@ -688,6 +694,10 @@ public class WorldMP : CasualtiesTogetherSingleton {
         if (WorldSnapshotTransfer.Failed || (WorldSnapshotTransfer.SnapshotMode && !WorldSnapshotTransfer.Applied)) yield break;
 #endif
 
+        // Read loaded run settings before a new identity binds the host's chip.
+#if FULLGAME
+        ChipState.ApplyHostRunSettings(runSettings, "world generated", SaveSystem.loadedRun || world.biomeDepth > 0);
+#endif
         // The world just finished generating, so this save now has its identity.
         CharacterRunMemory.AdoptGeneratedSeed();
 
@@ -826,6 +836,11 @@ public class WorldMP : CasualtiesTogetherSingleton {
             foreach (var item in ScavPlayer.BodyToPlayerDict)
                 item.Value.ResetEntropy();
 
+#if FULLGAME
+            // Apply each saved choice before revival sends health/state packets.
+            if (Util.GameIsFull())
+                foreach (var player in ScavPlayer.ClientIdToPlayerDict.Values) ChipState.ApplyGameplay(player);
+#endif
             if (Net.IsServer) {
                 if (Multiplayer.rules.CanReviveOnNextLevel()) {
                     // offline stashes stay. a descent used to drop them, so a rejoin after the layer change was a fresh body.

@@ -234,6 +234,10 @@ public enum NetmsgId : byte {
     CLIENT_MP3Stop = ___20,
     SERVER_MP3SourceEnded = ___21,
 
+    SERVER_BlueprintLearn = ___26,
+    CLIENT_BlueprintState = ___27,
+    SERVER_RequestRecipeState = ___28,
+
 #if FULLGAME
     // Use an existing reserved byte without renumbering any P8 message.
     CLIENT_WorldSnapshot = ___22,
@@ -249,6 +253,7 @@ public enum NetmsgId : byte {
     CLIENT_CrystalState = ___13,
     CLIENT_CrystalEffect = ___14,
     SERVER_ProsthesisRepair = ___24,
+    CLIENT_GuardShotVisual = ___25,
 #endif
 
 }

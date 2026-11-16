@@ -114,6 +114,12 @@ internal static class CharacterRunMemory {
         return chips.TryGetValue(Compose(storedSeed, playerKey), out bool value) && value;
     }
 
+    internal static bool TryGetChip(string playerKey, out bool unchipped) {
+        EnsureLoaded();
+        unchipped = false;
+        return storedSeed != 0 && chips.TryGetValue(Compose(storedSeed, playerKey), out unchipped);
+    }
+
     internal static void SetChip(string playerKey, bool unchipped) {
         if (!Net.IsServer || string.IsNullOrEmpty(playerKey) || CurrentSeed == 0) return;
         string key = Compose(storedSeed, playerKey);

@@ -1865,12 +1865,7 @@ static internal List<Type> WorldSingletons = new();
 
 // CALLED ONLY FROM PLUGIN ENTRY POINT
 internal static void _FIRST_INIT() {
-FULL_VERSION_TAG = "V" + Application.version + "_MPv" + Plugin.MOD_VERSION;
-#if FULLGAME
-// 必须全员更新的版本标识（替代原来的 _WS1_SC1）。
-// 正式版独立协议标识，房主与客机均需使用 bugfix7。
-
-#endif
+FULL_VERSION_TAG = "V" + Application.version + "_MPv" + BuildInfo.NETWORK_VERSION;
 SessionLog.Event("PROTOCOL", FULL_VERSION_TAG);
 log.l($"MP VERSION TAG: {FULL_VERSION_TAG}  |  BUILD: {KSteam.GetModBuildTag()} (同版本号但不同补丁包的 DLL 构建不同) ");
 

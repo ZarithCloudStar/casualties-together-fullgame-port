@@ -500,6 +500,7 @@ public static class Net {
     public static void ShutdownReset() {
         SessionJoinLog.Reset();
         SessionLog.Mark("network shutdown/reset");
+        RecipeProgress.ResetNetwork();
 #if FULLGAME
         if (Util.GameIsFull()) {
             ClientStartupMessages.Reset();
@@ -646,8 +647,10 @@ public static class Net {
     }
 
     internal static void LiteEntitySystemInit() {
+        if ((IsClient && ClientEntityManager != null && ServerEntityManager == null)
+            || (IsServer && ServerEntityManager != null && ClientEntityManager == null)) return;
         if (ClientEntityManager != null || ServerEntityManager != null) {
-            throw new Exception("EntityManager already exists!");
+            throw new InvalidOperationException("EntityManager belongs to a different network role.");
         }
 
         var typesMap = ScavEntityTypesMap.CreateTypesMap();
@@ -679,6 +682,8 @@ public static class Net {
     }
 
     internal static void OnTransportConnected() {
+        // A lobby callback can repeat without creating a new transport/session.
+        if ((IsServer && ServerEntityManager != null) || (IsClient && ClientEntityManager != null)) return;
         SessionLog.Event("TRANSPORT CONNECTED", $"type={Type} steam={IsRunningSteam}");
         if (IsServer) SessionLog.Event("HOST SUCCEEDED", $"type={Type} steam={IsRunningSteam}");
 

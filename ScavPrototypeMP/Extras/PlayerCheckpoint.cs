@@ -19,6 +19,16 @@ public static class PlayerCheckpoint {
     static float _wait;
     static int _cursor;
     static bool _writing;
+    internal static bool RestoringBody { get; private set; }
+    static readonly HashSet<int> clientCrafted = new();
+    static readonly HashSet<ScavPlayer> craftedLoaded = new();
+    static object clientCraftedOwner;
+    internal static bool ClientCraftedReceived { get; private set; }
+
+    internal static void ResetCraftState() {
+        clientCrafted.Clear(); craftedLoaded.Clear();
+        ClientCraftedReceived = false; clientCraftedOwner = null;
+    }
 #if FULLGAME
     static bool checkedWrite;
     // Only the explicit save-and-exit batch requests exception propagation.
@@ -37,6 +47,7 @@ public static class PlayerCheckpoint {
 #if FULLGAME
     internal static void ResetSaveCaches() {
         _species.Clear(); _speciesSlot.Clear(); _gear.Clear(); _born.Clear();
+        ResetCraftState();
         _capture = false; _wait = 0; _cursor = 0;
     }
 #endif
@@ -151,6 +162,8 @@ public static class PlayerCheckpoint {
         var camera = PlayerCamera.main;
         var previousBody = camera.body;
         BeginGearCapture();
+        bool wasRestoring = RestoringBody;
+        RestoringBody = true;
         try {
             SavesystemPatch.savedatapathreplacement = folder;
             SaveSystem.loadedRun = true;
@@ -173,18 +186,20 @@ public static class PlayerCheckpoint {
             log.error($"PlayerCheckpoint.TryLoadBodyOnly {plr}\n{e}");
             return false;
         } finally {
+            RestoringBody = wasRestoring;
             EndGearCapture(plr);
             snap.Restore();
-            ApplyLocalCraftMarkers();
             SaveSystem_HasSave_MultiplayerPatch.force = false;
             SavesystemPatch.savedatapathreplacement = previousPath;
             camera.body = previousBody;
+            ApplyLocalCraftMarkers();
 #if FULLGAME
             // ForceLoad temporarily targets another player's body and changes
             // vanilla UI. Restore both players from their per-save choices.
             ChipState.ApplyGameplay(plr);
             if (ScavPlayer.LocalPlayer != plr) ChipState.ApplyGameplay(ScavPlayer.LocalPlayer);
 #endif
+            if (!RestoringBody && plr.netBody != null) SendCrafted(plr.netBody);
         }
     }
 
@@ -248,9 +263,15 @@ public static class PlayerCheckpoint {
             return;
         if (!PlayerCamera.main.body.TryGetNetBody(out NetBody nb) || nb == null || !nb.IsPlayer)
             return;
+        ReadCrafted(nb, folder);
+        SendCrafted(nb);
+    }
+
+    static void ReadCrafted(NetBody nb, string folder) {
+        MarkCraftedLoaded(nb);
+        nb.RecipesHasCrafterBefore.Clear();
         var path = Path.Combine(folder, "save.sv");
-        if (!File.Exists(path))
-            return;
+        if (!File.Exists(path)) return;
         JArray arr;
         try {
             var root = JObject.Parse(SaveSystem.Unzip(File.ReadAllBytes(path)));
@@ -261,36 +282,60 @@ public static class PlayerCheckpoint {
         }
         if (arr == null)
             return;
-        nb.ResetMind();
         for (int i = 0; i < arr.Count; i++) {
             if (arr[i] == null || arr[i].Type != JTokenType.Integer)
                 continue;
             int index = arr[i].Value<int>();
-            if (!nb.RecipesHasCrafterBefore.Contains(index))
+            if (index >= 0 && Recipes.recipes != null && index < Recipes.recipes.Count && !nb.RecipesHasCrafterBefore.Contains(index))
                 nb.RecipesHasCrafterBefore.Add(index);
         }
-        PlayerCheckpoint.SendCrafted(nb);
     }
 
-    // the craft screen reads the global flag. the host's screen should match the host's own list.
+    internal static void MarkCraftedLoaded(NetBody nb) {
+        if (nb?.plr != null) craftedLoaded.Add(nb.plr);
+    }
+
+    internal static void EnsureCraftedLoaded(NetBody nb) {
+        if (!Net.IsServer || nb?.plr == null || !craftedLoaded.Add(nb.plr)) return;
+        // Read only personal markers early. Body/inventory loading stays deferred.
+        if (!SavesystemPatch.PreserveSave && (SaveSystem.loadedRun || nb.plr.LateJoin)) ReadCrafted(nb, Folder(nb.plr));
+    }
+
+    internal static void NoteLocalCrafted(int index) {
+        if (!Net.IsClient || index < 0) return;
+        ApplyLocalCraftMarkers(); // Drop any set from a previous client manager first.
+        clientCrafted.Add(index);
+        if (ScavPlayer.LocalPlayer?.netBody != null && !ScavPlayer.LocalPlayer.netBody.RecipesHasCrafterBefore.Contains(index))
+            ScavPlayer.LocalPlayer.netBody.RecipesHasCrafterBefore.Add(index);
+    }
+
+    internal static void ClearClientCrafted() {
+        clientCrafted.Clear();
+        ScavPlayer.LocalPlayer?.netBody?.RecipesHasCrafterBefore.Clear();
+        ApplyLocalCraftMarkers();
+    }
+
+    // Never project a loaded/global hasMadeBefore table onto another player.
     internal static void ApplyLocalCraftMarkers() {
-        if (!Net.IsServer || Recipes.recipes == null)
-            return;
-        if (!Util.TryGetLocalBody(out Body body) || body == null)
-            return;
-        if (!body.TryGetNetBody(out NetBody nb) || nb == null || nb.RecipesHasCrafterBefore == null)
-            return;
+        if (!Net.IsRunning || Recipes.recipes == null) return;
+        if (Net.IsClient && !ReferenceEquals(clientCraftedOwner, Net.ClientEntityManager)) {
+            clientCrafted.Clear(); ClientCraftedReceived = false;
+            clientCraftedOwner = Net.ClientEntityManager;
+        }
+        var nb = ScavPlayer.LocalPlayer?.netBody;
         for (int i = 0; i < Recipes.recipes.Count; i++) {
             Recipe recipe = Recipes.recipes[i];
             if (recipe != null)
-                recipe.hasMadeBefore = nb.RecipesHasCrafterBefore.Contains(recipe.index);
+                recipe.hasMadeBefore = Net.IsClient ? clientCrafted.Contains(recipe.index) : nb?.RecipesHasCrafterBefore?.Contains(recipe.index) == true;
         }
     }
 
     // the craft screen is local. a rejoin has a fresh table, so the owner has to be told which ones they already made.
     internal static void SendCrafted(NetBody nb) {
-        if (!Net.IsServer || nb == null || !nb.IsPlayer || nb.plr == null || nb.plr.IsLocal)
-            return;
+        if (!Net.IsServer || nb == null || !nb.IsPlayer || nb.plr == null) return;
+        EnsureCraftedLoaded(nb);
+        if (nb.plr.IsLocal) { ApplyLocalCraftMarkers(); return; }
+        RecipeProgress.SendShared(nb.plr.playerId);
         var list = nb.RecipesHasCrafterBefore;
         int n = list == null ? 0 : list.Count;
         var writer = Net.CreateWriter(NetmsgId.CLIENT_CraftedBefore);
@@ -306,18 +351,13 @@ public static class PlayerCheckpoint {
         var got = new HashSet<int>();
         for (int i = 0; i < count; i++) {
             reader.Get(out int index);
-            got.Add(index);
+            if (index >= 0 && Recipes.recipes != null && index < Recipes.recipes.Count) got.Add(index);
         }
-        if (Recipes.recipes == null)
-            return;
-        for (int i = 0; i < Recipes.recipes.Count; i++) {
-            Recipe recipe = Recipes.recipes[i];
-            if (recipe != null)
-                recipe.hasMadeBefore = got.Contains(recipe.index);
-        }
-        PlayerCamera cam = PlayerCamera.main;
-        if (cam != null && cam.craftingPanel != null && cam.craftingPanel.activeSelf)
-            cam.RefreshRecipeList();
+        clientCraftedOwner = Net.ClientEntityManager;
+        clientCrafted.Clear(); clientCrafted.UnionWith(got); ClientCraftedReceived = true;
+        var nb = ScavPlayer.LocalPlayer?.netBody;
+        if (nb != null) { nb.RecipesHasCrafterBefore.Clear(); nb.RecipesHasCrafterBefore.AddRange(got); }
+        RecipeProgress.RefreshPanel();
     }
 
     static void StampSpecies(string folder, string species, int slot) {
@@ -587,7 +627,7 @@ public static class PlayerCheckpoint {
         int caloriesConsumed;
         float savedRunTime;
         int[] woundInfo;
-        (bool made, int intel)[] recipes;
+        int[] recipeIntel;
         int biomeOverride;
         bool unchipped;
         int endlessLoops;
@@ -617,11 +657,11 @@ public static class PlayerCheckpoint {
                 Array.Copy(WoundView.view.cInfo, s.woundInfo, 4);
             }
             if (Recipes.recipes != null) {
-                s.recipes = new (bool, int)[Recipes.recipes.Count];
+                s.recipeIntel = new int[Recipes.recipes.Count];
                 for (int i = 0; i < Recipes.recipes.Count; i++) {
                     var recipe = Recipes.recipes[i];
                     if (recipe != null)
-                        s.recipes[i] = (recipe.hasMadeBefore, recipe.INT);
+                        s.recipeIntel[i] = recipe.INT;
                 }
             }
             return s;
@@ -649,14 +689,13 @@ public static class PlayerCheckpoint {
                 for (int i = 0; i < 4; i++)
                     WoundView.view.cInfo[i] = woundInfo[i];
             }
-            if (recipes != null && Recipes.recipes != null) {
-                int n = Math.Min(recipes.Length, Recipes.recipes.Count);
+            if (recipeIntel != null && Recipes.recipes != null) {
+                int n = Math.Min(recipeIntel.Length, Recipes.recipes.Count);
                 for (int i = 0; i < n; i++) {
                     var recipe = Recipes.recipes[i];
                     if (recipe == null)
                         continue;
-                    recipe.hasMadeBefore = recipes[i].made;
-                    recipe.INT = recipes[i].intel;
+                    recipe.INT = recipeIntel[i];
                 }
             }
         }
