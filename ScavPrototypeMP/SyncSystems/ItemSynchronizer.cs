@@ -1185,7 +1185,8 @@ static class PlayerCamera_Favourite_MultiplayerPatch {
 
     static void Prefix(List<RaycastResult> uiCasts) {
         watched = null;
-        if (!Net.IsRunning || uiCasts == null)
+        if (!Net.IsRunning || uiCasts == null || (ConsoleScript.instance != null && ConsoleScript.instance.active)
+            || (PlayerCamera.main != null && PlayerCamera.main.itemCustomizer != null && PlayerCamera.main.itemCustomizer.activeSelf))
             return;
         if (!Input.GetKeyDown(KeyBinds.GetBind("favourite")))
             return;
@@ -1238,8 +1239,6 @@ static class PlayerCamera_Favourite_MultiplayerPatch {
             si.item.colorSwatch = swatch;
             si.item.label = label ?? "";
         }
-        else if (si.item.favourited == want)
-            si.item.favourited = !want;
         si.favourited.Value = si.item.favourited;
         si.itemSwatch.Value = (byte)si.item.colorSwatch;
         si.itemLabel.Value = si.item.label ?? "";
@@ -1255,7 +1254,7 @@ static class PlayerCamera_Favourite_MultiplayerPatch {
         reader.Get(out string label);
         ItemSync.ClearFavouritePending(id);
         if (ItemSync.TryGetItemSyncInfo(id, out SyncInfo si) && si != null && si.item != null)
-            { si.item.favourited = value; si.item.colorSwatch = swatch; si.item.label = label; }
+            ItemSync.ApplyFavourite(si.item, id, value, swatch, label);
     }
 }
 
@@ -2463,8 +2462,11 @@ public static void BetterUseItem( Body body, Item item) {
         FavPendingMap.Remove(id);
     }
 
+    internal static bool LocalCustomizing(Item item) => Net.IsClient && item != null
+        && PlayerCamera.main != null && PlayerCamera.main.customizedItem == item;
+
     internal static void ApplyFavourite(Item item, knetid id, bool value, byte swatch, string label) {
-        if (item == null)
+        if (item == null || LocalCustomizing(item))
             return;
         if (FavPendingMap.TryGetValue(id, out FavPending pending)) {
             if ((pending.want == value && pending.swatch == swatch && pending.label == (label ?? "")) || Time.realtimeSinceStartupAsDouble >= pending.until)

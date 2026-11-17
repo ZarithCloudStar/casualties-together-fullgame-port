@@ -633,5 +633,7 @@
   "casualtiestogether_setting_skins_choice_slot6": "槽位 6",
   "casualtiestogether_setting_skins_choice_slot7": "槽位 7",
   "casualtiestogether_setting_skins_choice_slot8": "槽位 8",
-  "casualtiestogether_setting_skins_choice_slot9": "槽位 9"
+  "casualtiestogether_setting_skins_choice_slot9": "槽位 9",
+    "casualtiestogether_rule_name_ShowTeammateList": "显示队友列表",
+    "casualtiestogether_rule_desc_ShowTeammateList": "由主机控制所有玩家是否显示队友列表。"
 }

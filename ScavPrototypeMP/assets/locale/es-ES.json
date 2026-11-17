@@ -534,5 +534,7 @@
   "casualtiestogether_plrdeath_creaturekill": "fue comido por",
   "casualtiestogether_plrdeath_objkill": "murió por",
   "casualtiestogether_mmta_port_note": "Esta versión multijugador se basa en Casualties: Together 5.5.2, con mejoras de jugabilidad adicionales.",
-  "casualtiestogether_mmta_author_note": "Port realizado por bilibili: 星云Zarith"
+  "casualtiestogether_mmta_author_note": "Port realizado por bilibili: 星云Zarith",
+    "casualtiestogether_rule_name_ShowTeammateList": "Mostrar lista de compañeros",
+    "casualtiestogether_rule_desc_ShowTeammateList": "El anfitrión controla si todos pueden ver la lista de compañeros."
 }

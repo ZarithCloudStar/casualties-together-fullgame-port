@@ -81,6 +81,11 @@ internal sealed class WorldObjectRecord {
     public float climbVelocity;
     public bool? hasCrystal;
     public CrystalSync.Snapshot crystal;
+    // Ordinary crystals lose CrystalBehaviour in GenerationFinished; their
+    // SpriteRenderer/Light2D appearance is not part of the crystal snapshot.
+    // Keep it for every crystal so restored ordinary crystals are not white.
+    public float[] crystalColor;
+    public float? crystalLight;
     public bool? usable;
     public int? noteFont;
     public string noteSprite;
@@ -172,6 +177,8 @@ internal static class WorldObjectSnapshotData {
                     Vector(effect.values, 7);
                 }
             }
+            if (obj.crystalColor != null) Vector(obj.crystalColor, 4);
+            if (obj.crystalLight.HasValue && !Finite(obj.crystalLight.Value)) throw new InvalidDataException("Invalid crystal light state.");
             if (obj.rotation.Sum(x => x * x) < 0.01f || !Finite(obj.condition) || !Finite(obj.wetAge) ||
                 !Finite(obj.angularVelocity) || obj.rigidType < 0 || obj.rigidType > 2 || obj.components == null || obj.components.Count > 256)
                 throw new InvalidDataException("Invalid world object state.");

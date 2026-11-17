@@ -201,6 +201,7 @@ public bool LastStandAllowed = true;
 
 // teammate list greys out and stops tracking people past wound-view range
 public bool TeammateListUsesRange = true;
+public bool ShowTeammateList = true;
 
 
 
@@ -2112,8 +2113,10 @@ ServerMain.Server_LastPlayerStates.Clear();
 
 var is_world = a.name == "SampleScene";
 // leaving the practice scene. the next real run is allowed to use mp_save again.
-if (!is_world)
+if (!is_world) {
 SavesystemPatch.PreserveSave = false;
+SavesystemPatch.DebugWorldUsesSave = false;
+}
 
 if (Net.IsRunning) {
 

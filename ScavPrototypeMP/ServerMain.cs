@@ -901,6 +901,16 @@ return true;
 who = null;
 return false;
 }
+public static bool HostBodyIsDead() {
+if (!Net.IsRunning || Net.IsDedicatedServer) return false;
+foreach (var player in ScavPlayer.AllPlayers)
+if (player != null && player.IsHost) return player.body != null && !player.IsAlive();
+return false;
+}
+public static bool LocalPlayerAtLayerExit() {
+var pc = PlayerCamera.main;
+return pc != null && pc.body != null && pc.body.alive && DidHeFinishTheLayer(pc.body);
+}
 public static bool DidHeFinishTheLayer(Body body) {
 #if FULLGAME
 if (EndingFlow.Active && WorldGeneration.world.biomeDepth >= 9 && WorldGeneration.world.biomeDepth <= 11) return false;

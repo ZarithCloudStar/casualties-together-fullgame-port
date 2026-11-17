@@ -16,6 +16,7 @@ public ushort Tick;
 
 
 public bool crouching;
+public bool offHand;
 
 public bool standing;
 public bool is_piggyback;
@@ -56,6 +57,7 @@ moveDir = body.moveDir;
 moveDir = Vector2.zero;
 }
 crouching = body.crouching;
+offHand = body.handSlot != 0;
 
 velocity = body.GetVelocity();
 
@@ -134,6 +136,8 @@ PlayerCamera.main.transform.position = body.transform.position;
 
 body.targetLookPos = this.targetLookPos;
 body.crouching = this.crouching;
+if (!nb.handSwitched || LiteEntitySystem.Utils.SequenceDiff(Tick, nb.handSwitchTick) > 0)
+body.handSlot = offHand ? 1 : 0;
 
 nb.moveDir = compressedmoveDir;
 if (body.conscious) {

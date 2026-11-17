@@ -1033,6 +1033,7 @@ internal static class MpSkinSync {
     }
 
     private static void Reset() {
+        SkinTrace.ClearProblems();
         _handlers = false;
         _requested = false;
         _resend = false;

@@ -56,10 +56,18 @@ internal sealed class CrystalSync : MonoBehaviour {
         sync.crystal = crystal;
         return sync;
     }
+    internal static CrystalSync Get(Component owner) {
+        // CrystalEnemy has no CrystalBehaviour. Reuse the appearance-only half
+        // of the crystal state protocol (empty effects) for its renderer/light.
+        return owner.GetOrAddComponent<CrystalSync>();
+    }
     void Awake() {
         crystal = GetComponent<CrystalBehaviour>();
         sprite = GetComponent<SpriteRenderer>();
         light = GetComponent<UnityEngine.Rendering.Universal.Light2D>();
+        // CrystalEnemy has no CrystalBehaviour; on the host it still needs the
+        // appearance-only state path so its chosen color reaches clients.
+        if (Net.IsServer && GetComponent<CrystalEnemy>() != null) appearanceReady = true;
     }
     // Native SetUpEffects removes CrystalBehaviour from ordinary crystals.
     // The GameObject, renderer and light survive and still need replication.
@@ -69,10 +77,25 @@ internal sealed class CrystalSync : MonoBehaviour {
         appearanceReady = true;
         nextState = 0f;
     }
+    // Call before native SetUpEffects destroys CrystalBehaviour on ordinary
+    // crystals. The renderer/light survive; this keeps their appearance
+    // requestable after network streaming creates them on a client.
+    internal void MarkAppearance() {
+        if (!Net.IsServer || sprite == null) return;
+        if (crystal != null) size = crystal.crystalSize;
+        appearanceReady = true;
+        nextState = 0f;
+    }
     bool HasState => appearanceReady || crystal != null && crystal.effects != null;
     void Update() {
         if (!Net.IsRunning || !SharedMain.LocalWorldIsGenerated || sprite == null || light == null) return;
         if (Net.IsServer) {
+            // ChunkScript.Update only runs while the HOST's tile renderer is
+            // enabled. Tick effects here for the union of all players' simulation
+            // ranges, including restored crystals in client-first chunks. The
+            // ChunkUpdate patch below suppresses the native tick in multiplayer.
+            if (Ready(crystal) && !WorldGeneration.world.generatingWorld)
+                foreach (var effect in crystal.effects) effect.Update();
             // Ordinary crystals are static: publish their initial appearance
             // and later changes; a newly joined replica requests its own copy.
             bool appearanceChanged = !sentAppearance || sprite.color != sentColor || light.intensity != sentIntensity;
@@ -284,7 +307,11 @@ internal sealed class CrystalSync : MonoBehaviour {
         r.Get(out knetid id); byte version = r.GetByte();
         if (!Net.IsServer || !TrySync(id, version, out var sync) || !sync.HasState ||
             !ScavPlayer.TryGetPlayerAndNetBodyFromClientId(client, out var _, out var nb) ||
-            !KM.DistanceCheck(sync.transform.position, nb.body.transform.position, 32f)) return;
+            nb.body == null || !KM.DistanceCheck(sync.transform.position, nb.body.transform.position, 128f)) return;
+        // Registration searches 80 units plus collider extent, and simulation
+        // covers a 3x3 chunk union. A 32-unit contact radius rejects visible
+        // replicas whose first state preceded entity creation. Recovery must
+        // cover that streaming range, rather than require touching the crystal.
         // Requests are recoveries, not an unbounded client-controlled broadcast.
         if (Time.unscaledTime < sync.nextState - 1.5f) return;
         sync.SendState(client);
@@ -332,6 +359,13 @@ internal sealed class CrystalSync : MonoBehaviour {
         var heater = crystal.GetComponent<Heater>();
         if (heater != null) { heater.desiredTemp = s.heaterTemp; heater.tempLerpStrength = s.heaterStrength; heater.enabled = Net.IsServer; }
         ApplyAppearance(s);
+        if (s.effects.Count == 0) {
+            // A streamed ordinary prefab still has these components, unlike
+            // the generated/snapshot root. Mirror native SetUpEffects without
+            // rolling effects or consuming the world's random sequence.
+            UnityEngine.Object.Destroy(GetComponent<UsableObject>());
+            UnityEngine.Object.Destroy(crystal);
+        }
     }
     void ApplyAppearance(Snapshot s) {
         size = s.size;
@@ -445,13 +479,16 @@ internal sealed class CrystalSync : MonoBehaviour {
 internal static class CrystalSync_AwakePatch { static void Postfix(CrystalBehaviour __instance) { if (Net.IsRunning) CrystalSync.Get(__instance); } }
 [HarmonyPatch(typeof(CrystalBehaviour), nameof(CrystalBehaviour.SetUpEffects))]
 internal static class CrystalSync_SetupPatch {
-    static bool Prefix() => !Net.IsRunning || Net.IsServer;
+    static bool Prefix(CrystalBehaviour __instance) {
+        if (Net.IsServer && __instance != null) CrystalSync.Get(__instance).MarkAppearance();
+        return !Net.IsRunning || Net.IsServer;
+    }
     static void Postfix(CrystalBehaviour __instance) {
         if (Net.IsServer) CrystalSync.Get(__instance).AppearanceInitialized();
     }
 }
 [HarmonyPatch(typeof(CrystalBehaviour), nameof(CrystalBehaviour.ChunkUpdate))]
-internal static class CrystalSync_UpdatePatch { static bool Prefix() => !Net.IsRunning || Net.IsServer; }
+internal static class CrystalSync_UpdatePatch { static bool Prefix() => !Net.IsRunning; }
 [HarmonyPatch(typeof(CrystalUnstable), nameof(CrystalUnstable.Update))]
 internal static class CrystalSync_UnstableExplosionPatch {
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {

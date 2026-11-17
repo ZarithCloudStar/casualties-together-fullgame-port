@@ -23,6 +23,8 @@ internal static string Evidence() => "simGrid=" + Grids;
 
 // false skips stock _UpdatePlayerVisibleChunks. we clear the table and stamp a 3x3 per player ourselves.
 internal static bool Rebuild() {
+WorldGeneration world = WorldGeneration.world;
+Fit(world);
 bool[,] table = Table();
 if (table == null)
 return true;
@@ -32,7 +34,6 @@ for (int y = 0; y < height; y++) {
 for (int x = 0; x < width; x++)
 table[x, y] = false;
 }
-WorldGeneration world = WorldGeneration.world;
 if (world == null || !world.worldExists)
 return false;
 int players = 0;
@@ -75,6 +76,16 @@ return Gate(instructions, "SpiderHandler.Update");
 [HarmonyTranspiler]
 static IEnumerable<CodeInstruction> Plant(IEnumerable<CodeInstruction> instructions) {
 return Gate(instructions, "GrabberPlant.Update");
+}
+
+// Rebuild runs on every visible-chunk update, including generation/layer changes/teleports.
+internal static void Fit(WorldGeneration world) {
+if (world == null || !world.worldExists) return;
+int width = (int)world.chunkWidth, height = (int)world.chunkHeight;
+if (width < 1 || height < 1) return;
+if (_table == null) _table = AccessTools.Field(typeof(SharedMain), "CHUNKS_VISIBLE_TO_PLAYERS");
+if (_table != null && (!(_table.GetValue(null) is bool[,] grid) || grid.GetLength(0) != width || grid.GetLength(1) != height))
+_table.SetValue(null, new bool[width, height]);
 }
 
 // CHUNKS_VISIBLE_TO_PLAYERS is the bool grid stock already consults.

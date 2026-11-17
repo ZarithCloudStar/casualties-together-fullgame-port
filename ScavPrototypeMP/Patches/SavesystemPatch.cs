@@ -374,6 +374,7 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
 
                                 if (jObject.TryGetValue("RULES", out var RULES)) {
                                     Multiplayer.rules = RULES.ToObject<MultiplayerGameRules>();
+                                    if (SavesystemPatch.DebugWorldUsesSave) Multiplayer.rules.DebugWorldSaveSystem = true;
                     if (jObject.Value<bool?>(AchievementBreakSync.SaveHeaderKey) == true) AchievementBreakSync.ApplyLocal(true);
                                 }
                             }
@@ -556,6 +557,7 @@ public static class SavesystemPatch {
     public static string savedatapathreplacement = "";
     // set for map debug and the tutorial. those sessions neither read nor write mp_save.
     internal static bool PreserveSave;
+    internal static bool DebugWorldUsesSave;
     const string _mpsavefolder_name = "mp_save";
     public static string MultiplayerSaveRoot {
         get {

@@ -581,5 +581,7 @@
   "casualtiestogether_character_desc_1": "Play as Milky.",
   "casualtiestogether_character_desc_2": "Play as Dune.",
   "casualtiestogether_mmta_port_note": "This multiplayer build is based on Casualties: Together 5.5.2, with additional gameplay enhancements.",
-  "casualtiestogether_mmta_author_note": "Ported by bilibili: 星云Zarith"
+  "casualtiestogether_mmta_author_note": "Ported by bilibili: 星云Zarith",
+    "casualtiestogether_rule_name_ShowTeammateList": "Show teammate list",
+    "casualtiestogether_rule_desc_ShowTeammateList": "The host controls whether the teammate list is visible for everyone."
 }

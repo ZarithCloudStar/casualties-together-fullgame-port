@@ -3,9 +3,15 @@ using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 
-// skin join/swap helpers. event and problem writes are off.
+// Skin diagnostics are intentionally enabled in ShipFullgame.
 internal static class SkinTrace {
+    static readonly Dictionary<string, float> NextEvent = new Dictionary<string, float>();
     internal static void Event(string action, string detail = null) {
+        string key = action + " " + detail;
+        if (NextEvent.TryGetValue(key, out float next) && Time.unscaledTime < next) return;
+        if (NextEvent.Count > 2048) NextEvent.Clear();
+        NextEvent[key] = Time.unscaledTime + 1f;
+        Write(false, "[skin] " + action + " " + detail);
     }
 
     internal static string SlotSummary(string slot, IReadOnlyDictionary<string, Sprite> sprites, int species) {
@@ -105,10 +111,82 @@ internal static class SkinTrace {
     static readonly Dictionary<string, string> LastProblem = new Dictionary<string, string>();
 
     internal static void Problem(string action, string detail) {
+        if (string.IsNullOrEmpty(action)) return;
+        detail ??= "";
+        if (LastProblem.TryGetValue(action, out string previous) && previous == detail) return;
+        LastProblem[action] = detail;
+        string line = "[skin] " + action + " " + detail;
+        if (action.IndexOf("leak", StringComparison.Ordinal) >= 0 || action.IndexOf("bind-local", StringComparison.Ordinal) >= 0)
+            line += " stack=" + Stack();
+        Write(true, line);
+    }
+
+    static string Stack() {
+        string trace = (Environment.StackTrace ?? "-").Replace("\r", " ").Replace("\n", " | ");
+        return trace.Length > 700 ? trace.Substring(0, 700) : trace;
+    }
+
+    static void Write(bool problem, string line) {
+        // Direct BepInEx writes: Together's release log filters must not discard skin diagnostics.
+        var logger = SpriteReplacerPlugin.Log ?? Together.Plugin.log;
+        if (logger == null) return;
+        if (problem) logger.LogWarning(line); else logger.LogInfo(line);
+    }
+
+    static readonly Dictionary<int, float> NextLeak = new Dictionary<int, float>();
+
+    internal static bool UsesLocalSprites(IReadOnlyDictionary<string, Sprite> sprites) {
+        if (sprites == null) return false;
+        if (ReferenceEquals(sprites, SpriteReplacerPlugin.LoadedSprites)) return true;
+        foreach (Sprite sprite in sprites.Values) if (IsLocalArt(sprite)) return true;
+        return false;
+    }
+
+    internal static bool IsLocalArt(Sprite sprite) {
+        if (sprite == null || SpriteReplacerPlugin.LoadedSprites == null) return false;
+        foreach (Sprite local in SpriteReplacerPlugin.LoadedSprites.Values) if (local == sprite) return true;
+        return false;
+    }
+
+    internal static void NoteDefaultLeak(string where, Body body) {
+        if (body == null || !MpBody.IsActive || MpBody.CanApply(body)) return;
+        var loaded = SpriteReplacerPlugin.LoadedSprites;
+        if (loaded == null || loaded.Count == 0 || MpSkinSync.SpritesForBody(body) != null) return;
+        int id = body.GetInstanceID();
+        if (NextLeak.TryGetValue(id, out float next) && Time.unscaledTime < next) return;
+        NextLeak[id] = Time.unscaledTime + 1f;
+        int hits = 0, total = 0, replacerLocal = 0, headHits = 0;
+        string sample = "-", head = "-";
+        if (body.limbs == null) return;
+        for (int i = 0; i < body.limbs.Length; i++) {
+            if (i == (int)Body.LimbNum.Head || body.limbs[i] == null) continue;
+            var renderer = body.limbs[i].GetComponent<SpriteRenderer>();
+            if (renderer == null || renderer.sprite == null) continue;
+            total++;
+            if (IsLocalArt(renderer.sprite)) { hits++; if (sample == "-") sample = renderer.sprite.name; }
+            var replacer = renderer.GetComponent<SkinSpriteReplacer>();
+            if (replacer != null && replacer.Active && ReferenceEquals(replacer.Sprites, loaded)) replacerLocal++;
+        }
+        int h = (int)Body.LimbNum.Head;
+        if (h >= 0 && h < body.limbs.Length && body.limbs[h] != null) {
+            var face = body.limbs[h].GetComponent<FacialExpression>();
+            if (face != null) {
+                if (face.head != null && face.head.sprite != null) {
+                    head = face.head.sprite.name;
+                    if (IsLocalArt(face.head.sprite)) headHits++;
+                }
+                if (IsLocalArt(face.defaultHead)) headHits++;
+            }
+        }
+        if (hits > 0) Problem((headHits == 0 ? "default-body-leak " : "default-full-leak ") + id,
+            "where=" + where + " net=" + MpBody.GetNetworkIdForBody(body) + " bodyHit=" + hits + "/" + total
+            + " sample=" + sample + " headHit=" + headHits + " head=" + head + " replacerLocal=" + replacerLocal + " " + BodyState(body));
     }
 
     internal static void ClearProblems() {
         LastProblem.Clear();
+        NextLeak.Clear();
+        NextEvent.Clear();
     }
 
     // null when the set matches the species. otherwise the reason a body/head would come out wrong.

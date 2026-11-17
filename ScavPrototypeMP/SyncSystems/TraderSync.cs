@@ -21,6 +21,32 @@ namespace Together;
 
 public class TrackerTrader : BaseComponentTracker<TraderScript> {
     public static TraderScript currentTrader;
+    internal static Body ClosestLiving(Vector2 position) {
+        Body best = null;
+        float distance = float.PositiveInfinity;
+        foreach (var player in ScavPlayer.AllLivingPlayers) {
+            if (player == null || player.body == null || !player.body.alive) continue;
+            float sqr = ((Vector2)player.body.transform.position - position).sqrMagnitude;
+            if (sqr < distance) { distance = sqr; best = player.body; }
+        }
+        return best;
+    }
+    internal void ClaimDeathGuilt() {
+#if FULLGAME
+        if (og == null || build == null || build.GetHealth() >= 200f || og.didDeathMoodDebuff) return;
+        og.didDeathMoodDebuff = true;
+        build.description = Locale.GetBuilding("traderdscdead");
+        build.fullName = Locale.GetBuilding("corpseseen");
+        var usable = GetComponent<UsableObject>();
+        if (usable != null) UnityEngine.Object.Destroy(usable);
+        if (Net.IsServer) og.DropInventory();
+        // Preserve recorded-killer XP and our visible-witness rules; never charge the distant host.
+        TraderMoodEffects.Death(og);
+        Body local = Util.GetLocalBodyNullable();
+        if (local != null && KM.DistanceCheck(local.transform.position, transform.position, 16f))
+            SteamManager.TryUnlockAchievement("MYSURVIVALOVERYOURS", false);
+#endif
+    }
 
     public struct TraderStatePacket : INetSerializeByMemcpy {
 
@@ -139,6 +165,7 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
 
         var owro = this.GetOrAddComponent<OnWillRenderObject_ForceForMPComponent>();
         owro.target = og;
+        ChunkSleep.Ignore(gameObject);
         HookTraderPin();
 
     }
@@ -198,7 +225,10 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
 
         if (og.hostile) {
             build.cantHit = false;
+            if (!gameObject.activeSelf) gameObject.SetActive(true);
+            ChunkSleep.Ignore(gameObject);
         }
+        ClaimDeathGuilt();
 
         if (Net.IsServer && is_registered) {
 #if !FULLGAME
@@ -235,7 +265,7 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
     private IEnumerator ScanForNearestBody() {
         while (this.gameObject && this.og) {
             if (Net.IsRunning) {
-                bgo.SetNearestBody();
+                bgo.body = ClosestLiving(transform.position);
                 if (tracker && !tracker.isNearby) {
                     yield return new WaitForSecondsRealtime(2.1021504f);
                 }
@@ -472,36 +502,51 @@ static class TraderPinLog {
 
 [HarmonyPatch(typeof(TraderScript), nameof(TraderScript.Swing))]
 static class TraderScript_Swing_MultiplayerPatch {
-    // only the host applies Swing limb damage. clients get slash fx via CLIENT_TraderSwing.
+    static readonly float[] MuscleBefore = new float[16];
+    static void Remember(Body body) {
+        for (int i = 0; i < MuscleBefore.Length; i++)
+            MuscleBefore[i] = body != null && body.limbs != null && i < body.limbs.Length && body.limbs[i] != null
+                ? body.limbs[i].muscleHealth : -1f;
+    }
+    static ushort FreshHurt(Body body) {
+        if (body == null || body.limbs == null) return 0;
+        for (int i = 0; i < body.limbs.Length && i < MuscleBefore.Length; i++)
+            if (body.limbs[i] != null && MuscleBefore[i] >= 0f && body.limbs[i].muscleHealth < MuscleBefore[i] - 0.5f)
+                return (ushort)(1 << i);
+        return 0;
+    }
     private static bool Prefix(TraderScript __instance, out bool __state) {
         __state = false;
-        if (!Net.IsRunning) {
+        if (!Net.IsRunning) { __state = true; return true; }
+        if (Net.IsClient) {
+            var local = Util.GetLocalBodyNullable();
+            if (__instance == null || !__instance.hostile || local == null) return false;
+            // Swing's body-access transpiler uses this component directly.
+            __instance.GetOrAddComponent<TrackerTrader>().focused_body = local;
+            Remember(local);
             __state = true;
             return true;
         }
-        // client get_body always pins the local body, so stock Swing would self-hit then get rolled back.
-        if (Net.IsClient) {
-            return false;
-        }
-        TrackerTrader tt = __instance.GetOrAddComponent<TrackerTrader>();
-        tt.bgo.SetNearestBody();
-        // host damages the host copy of whoever is nearest, then ForceHealth.
+        var tracker = __instance.GetOrAddComponent<TrackerTrader>();
+        tracker.focused_body = TrackerTrader.ClosestLiving(__instance.transform.position);
+        Body target = tracker.focused_body;
+        if (target != null && target.TryGetNetBody(out var nb) && nb.IsPlayer && !target.IsBodyLocal()) return false;
         __state = true;
         return true;
     }
     static void Postfix(TraderScript __instance, bool __state) {
-        if (!Net.IsRunning || !Net.IsServer || !__state) {
+        if (!Net.IsRunning || !__state) return;
+        if (Net.IsClient) {
+            ushort bit = FreshHurt(Util.GetLocalBodyNullable());
+            if (bit != 0) TrapClaim.AfterLocalTrader(__instance, bit);
             return;
         }
-        TrackerTrader tt = __instance.GetOrAddComponent<TrackerTrader>();
-        Body target = tt.focused_body;
-        if ((target != null) && target.TryGetNetBody(out NetBody body)) {
+        Body target = __instance.GetOrAddComponent<TrackerTrader>().focused_body;
+        if (target != null && target.TryGetNetBody(out NetBody body)) {
             body.OnDamageEvent(new BodyDamageEvent(__instance.build, body, 10));
-            // confirm so a later client health upload can't undo the host limb write.
             MedicalSync.ForceHealth(body);
         }
-        Vector2 aim = (target != null) ? (Vector2)target.transform.position : (Vector2)__instance.transform.position;
-        // include the victim. they skipped stock Swing, so this is their slash/sound too.
+        Vector2 aim = target != null ? (Vector2)target.transform.position : (Vector2)__instance.transform.position;
         TraderCommit.RelaySwing(__instance, aim);
         TraderCommit.Publish(__instance);
     }
@@ -837,12 +882,9 @@ static class TraderScript_get_body_MultiplayerPatch {
         }
         var tt = __instance.GetOrAddComponent<TrackerTrader>();
         var bgo = tt.bgo;
-        if (bgo.body == null) {
-            bgo.SetNearestBody();
-            if (bgo.body == null) {
-                bgo.body = PlayerCamera.main.body;
-            }
-        }
+        if (Net.IsClient && Util.GetLocalBodyNullable() != null) bgo.body = Util.GetLocalBodyNullable();
+        else bgo.body = TrackerTrader.ClosestLiving(__instance.transform.position)
+            ?? (PlayerCamera.main != null ? PlayerCamera.main.body : null);
         __result = bgo.body;
     }
 }

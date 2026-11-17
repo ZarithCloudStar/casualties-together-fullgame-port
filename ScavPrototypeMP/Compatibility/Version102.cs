@@ -37,6 +37,13 @@ internal static class GunLoadActor102 {
     }
 }
 
+// Close captures the final label, swatch and favourite after the native editor releases selection.
+[HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.CloseItemCustomizer))]
+internal static class ItemCustomizerCloseSync102 {
+    static void Prefix(PlayerCamera __instance, out Item __state) => __state = Net.IsRunning ? __instance.customizedItem : null;
+    static void Postfix(Item __state) { if (__state != null) PlayerCamera_Favourite_MultiplayerPatch.Send(__state); }
+}
+
 // Native customizer callbacks run outside HandleWhileDragging.
 [HarmonyPatch(typeof(PlayerCamera), "Start")]
 internal static class ItemCustomizerSync102 {

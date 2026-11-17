@@ -179,7 +179,7 @@ namespace Together.UI.TeammateList {
 
         public void Draw() {
             Event current = Event.current;
-            if (current == null || _collapsed || _high == 0 || Covered()) {
+            if (!Multiplayer.rules.ShowTeammateList || current == null || _collapsed || _high == 0 || Covered()) {
                 _panel = default(Rect);
                 for (int i = 0; i < 4; i++) {
                     _hit[i] = default(Rect);

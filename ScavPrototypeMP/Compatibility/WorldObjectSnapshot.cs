@@ -59,6 +59,8 @@ internal static class WorldObjectSnapshot {
     // Terrain/backgrounds have their own strict barrier. Never lose a container
     // root or an interactive building while tolerating a missing prop/drop.
     static bool Critical(WorldObjectRecord record) => record.container || (record.parent == 0 && record.building && record.usable == true);
+    static bool IsCrystalResource(string resource) =>
+        !string.IsNullOrEmpty(resource) && resource.StartsWith("crystal", StringComparison.OrdinalIgnoreCase);
 
     static void SkipObject(Batch batch, WorldObjectRecord record, string phase, string reason, Exception error = null, GameObject failed = null) {
         batch.skipped++;
@@ -120,6 +122,7 @@ internal static class WorldObjectSnapshot {
         var world = WorldGeneration.world;
         var document = WorldObjectSnapshotData.Decode(bytes, world.biomeDepth, world.width, world.height, WoundView.view.cInfo[2]);
         BackgroundSnapshot.ValidateForRestore(document);
+        int foldedHeaters = 0;
         foreach (var record in document.objects) {
             try {
                 var prefab = SnapshotPrefabCatalog.Resolve(record.resource);
@@ -131,6 +134,14 @@ internal static class WorldObjectSnapshot {
                     throw new InvalidDataException("Invalid note font reference.");
                 if (record.noteSprite != null && SnapshotPrefabCatalog.Sprite(record.noteSprite) == null) throw new InvalidDataException("Missing note sprite reference.");
                 foreach (var state in record.components) {
+                    // Compatibility for saves written before the crystal-Heater
+                    // fold: the runtime component was persisted, but the prefab
+                    // never had it. CrystalSync will recreate it from the saved
+                    // crystal snapshot, so this is not a missing prefab shape.
+                    if (record.hasCrystal == true && state.type == typeof(Heater).FullName) {
+                        foldedHeaters++;
+                        continue;
+                    }
                     var node = prefab.transform;
                     if (state.path.Length != 0) foreach (var part in state.path.Split('/')) {
                         var children = PrefabChildren(node); int index = int.Parse(part);
@@ -151,6 +162,7 @@ internal static class WorldObjectSnapshot {
                 log.warn($"LOAD: optional world object preflight failed id={record.id} res={record.resource}: {ex}");
             }
         }
+        if (foldedHeaters > 0) log.l($"LOAD: folded {foldedHeaters} legacy crystal Heater component(s) into crystal state");
         log.l($"LOAD: world preflight format={document.version} objects={document.objects.Count} backgrounds={document.backgrounds.Count} bytes={bytes.Length}");
     }
 
@@ -387,9 +399,18 @@ internal static class WorldObjectSnapshot {
             record.climbPoints = climb.points?.Select(p => new[] { p.x, p.y }).ToArray();
             record.climbVelocity = climb.downwardsVelocity;
         }
-        if (SnapshotPrefabCatalog.Resolve(resource)?.GetComponent<CrystalBehaviour>() != null) {
+        if (IsCrystalResource(resource) || SnapshotPrefabCatalog.Resolve(resource)?.GetComponent<CrystalBehaviour>() != null) {
             record.hasCrystal = go.TryGetComponent<CrystalBehaviour>(out var crystal);
             if (crystal != null && crystal.effects != null) record.crystal = CrystalSync.Get(crystal).Capture();
+            // GenerationFinished destroys CrystalBehaviour on ordinary crystals
+            // after SetColor, so their color/light is not in record.crystal.
+            if (go.TryGetComponent<SpriteRenderer>(out var crystalSprite)) {
+                var color = crystalSprite.color;
+                record.crystalColor = new[] { color.r, color.g, color.b, color.a };
+            }
+            if (go.TryGetComponent<UnityEngine.Rendering.Universal.Light2D>(out var crystalLight2D)) {
+                record.crystalLight = crystalLight2D.intensity;
+            }
         }
         if (item != null) { record.favourited = item.favourited; record.label = item.label; record.swatch = item.colorSwatch; record.wetAge = Time.time - item.wetTime; }
         if (go.TryGetComponent<Rigidbody2D>(out var rb)) {
@@ -403,6 +424,15 @@ internal static class WorldObjectSnapshot {
         }
         if (go.TryGetComponent<TrackerBuildingEntityBackgroundified>(out var background)) record.background = background.is_backgroundified;
         CaptureFields(go.transform, "", record.components);
+        // CrystalTemperature adds Heater at runtime, so it is not part of the
+        // crystalmedium prefab. CrystalSync already persists the same values
+        // (heaterTemp/heaterStrength) and recreates the component on restore.
+        // Saving it again here makes the loader demand a prefab component that
+        // cannot exist, which aborts the whole checkpoint as a critical error.
+        if (record.hasCrystal == true) {
+            int folded = record.components.RemoveAll(c => c.type == typeof(Heater).FullName);
+            if (folded > 0) log.l($"SAVE-EXIT: folded {folded} runtime crystal Heater component(s) into crystal state id={id} res={resource}");
+        }
         return record;
     }
 
@@ -460,6 +490,11 @@ internal static class WorldObjectSnapshot {
     internal static void ApplyFields(GameObject go, List<WorldObjectComponent> components) {
         if (components == null) return;
         foreach (var state in components) {
+            if (state.type == typeof(Heater).FullName && go.GetComponent<CrystalBehaviour>() != null) {
+                // Old saves: CrystalSync.Apply restores heaterTemp/heaterStrength
+                // after CrystalTemperature.Start recreates this component.
+                continue;
+            }
             var transform = go.transform;
             if (state.path.Length != 0) foreach (var part in state.path.Split('/')) transform = PrefabChildren(transform)[int.Parse(part)];
             // Resolve only an existing prefab component; never Type.GetType/AddComponent from disk.
@@ -531,6 +566,40 @@ internal static class WorldObjectSnapshot {
             if (record.hasCrystal == false) Object.DestroyImmediate(crystal);
             else if (final && record.crystal != null) CrystalSync.Get(crystal).Apply(record.crystal);
         }
+        // CrystalSync restores effectful crystals; ordinary crystals have no
+        // CrystalBehaviour left, so restore their saved renderer/light here.
+        if (record.crystalColor == null && record.crystal == null &&
+            (IsCrystalResource(record.resource) || SnapshotPrefabCatalog.Resolve(record.resource)?.GetComponent<CrystalBehaviour>() != null) &&
+            go.TryGetComponent<SpriteRenderer>(out var legacyCrystalSprite)) {
+            // Saves written before the appearance fields existed cannot recover
+            // the original random magenta/cyan shade. Recreate a stable shade
+            // from the saved position instead of leaving a pure-white crystal.
+            int seed = Mathf.Abs(Mathf.RoundToInt(record.position[0] * 17f + record.position[1] * 31f + record.position[2] * 13f));
+            Color baseColor = (seed & 1) == 0 ? Color.cyan : Color.magenta;
+            float shade = 0.9f + ((seed >> 1) % 11) * 0.01f;
+            var fallbackColor = new Color(baseColor.r * shade, baseColor.g * shade, baseColor.b * shade, 1f);
+            legacyCrystalSprite.color = fallbackColor;
+            if (go.TryGetComponent<UnityEngine.Rendering.Universal.Light2D>(out var legacyCrystalLight)) {
+                legacyCrystalLight.color = fallbackColor;
+                legacyCrystalLight.intensity = 0.6f;
+            }
+        }
+        if (record.crystalColor != null && record.crystalColor.Length == 4 &&
+            go.TryGetComponent<SpriteRenderer>(out var crystalSprite)) {
+            var crystalColor = new Color(record.crystalColor[0], record.crystalColor[1], record.crystalColor[2], record.crystalColor[3]);
+            crystalSprite.color = crystalColor;
+            if (go.TryGetComponent<UnityEngine.Rendering.Universal.Light2D>(out var crystalLight2D)) {
+                crystalLight2D.color = crystalColor;
+                if (record.crystalLight.HasValue) crystalLight2D.intensity = record.crystalLight.Value;
+            }
+        }
+        // Restore bypasses SetUpEffects, and ordinary crystals have already lost
+        // CrystalBehaviour. Publish their restored appearance through the same
+        // identity/version state protocol as generated crystals. Otherwise a
+        // streamed replacement prefab stays white: HasState is false on the host
+        // and neither its initial send nor the replica's recovery request works.
+        if (final && record.hasCrystal.HasValue && go.TryGetComponent<SpriteRenderer>(out var restoredCrystalSprite))
+            CrystalSync.Get(restoredCrystalSprite).MarkAppearance();
     }
 
     static void StripBakedChildren(GameObject root) {

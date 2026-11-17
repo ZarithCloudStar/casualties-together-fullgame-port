@@ -28,7 +28,7 @@ internal static class TeammateListHost {
     }
 
     internal static void Tick() {
-        if (Roster == null || !Multiplayer.IsNetworkActiveAndIsInGame()) {
+        if (Roster == null || !Multiplayer.IsNetworkActiveAndIsInGame() || !Multiplayer.rules.ShowTeammateList) {
             return;
         }
         Roster.Tick();

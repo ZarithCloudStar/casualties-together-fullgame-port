@@ -535,7 +535,9 @@ namespace Together {
         [HarmonyPatch(typeof(Body), nameof(Body.Attack))]
         static class BlockAttack {
             static bool Prefix(Body __instance) {
-                return !Blocks(__instance);
+                if (!Blocks(__instance)) return true;
+                Body_Attack_MultiplayerPatch.ForceOnlyRetrieveAttackInfo = false;
+                return false;
             }
         }
 

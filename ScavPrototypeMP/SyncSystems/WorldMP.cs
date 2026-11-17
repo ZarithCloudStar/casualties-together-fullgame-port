@@ -280,9 +280,11 @@ public class WorldMP : CasualtiesTogetherSingleton {
     public static void LoadDebugWorld() {
         _CheckIfCanLoadAWorld();
         SetTutorialPlayerPrefs(false);
-        // the scene starts with whatever loadedRun the menu left behind. leave the save file where it is.
-        SavesystemPatch.PreserveSave = true;
-        SaveSystem.loadedRun = false;
+        bool useSave = Multiplayer.rules.DebugWorldSaveSystem;
+        SavesystemPatch.DebugWorldUsesSave = useSave;
+        SavesystemPatch.PreserveSave = !useSave;
+        SaveSystem.loadedRun = useSave;
+        log.l(useSave ? "Debug world: multiplayer saves enabled" : "Debug world: saves preserved and skipped");
 
         if (Multiplayer.IsNetworkActiveAndIsServer()) {
             ServerMain.Server_Announce_GAME_START();
@@ -314,6 +316,7 @@ public class WorldMP : CasualtiesTogetherSingleton {
 #endif
         _CheckIfCanLoadAWorld();
         SavesystemPatch.PreserveSave = false;
+        SavesystemPatch.DebugWorldUsesSave = false;
         ResetWorldParameters();
 
         //current_instruction = null;
@@ -325,6 +328,7 @@ public class WorldMP : CasualtiesTogetherSingleton {
         _CheckIfCanLoadAWorld();
         // same as map debug. the tutorial button must not apply or replace mp_save.
         SavesystemPatch.PreserveSave = true;
+        SavesystemPatch.DebugWorldUsesSave = false;
         SaveSystem.loadedRun = false;
 
         ResetWorldParameters();

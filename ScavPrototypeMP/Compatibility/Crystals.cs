@@ -176,6 +176,15 @@ static class CrystalEnemy_Awake_MultiplayerPatch {
         if (!Net.IsRunning) return;
         var bgo = __instance.GetOrAddComponent<BodyGetterOverrider>();
         bgo.SetNearestBody(); // Just pick a nearest body
+        CrystalSync.Get(__instance);
+        __instance.GetOrAddComponent<CrystalEnemyClientVisual>();
+    }
+}
+
+[HarmonyPatch(typeof(CrystalEnemy), nameof(CrystalEnemy.Lunge))]
+static class CrystalEnemy_Lunge_MultiplayerPatch {
+    static void Postfix(CrystalEnemy __instance) {
+        if (Net.IsServer) TrapClaim.HostManifestLunged(__instance);
     }
 }
 

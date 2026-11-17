@@ -1224,6 +1224,7 @@ namespace Together {
             MoveCommit.Tick();
             FrameBuckets.Add(FrameBuckets.IdTick, tick);
             ChunkSleep.Tick();
+            HostPhysProbe.Tick();
             BagSleep.Tick();
             OptimizerMain.Tick();
         }

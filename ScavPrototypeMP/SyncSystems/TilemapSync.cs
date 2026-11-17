@@ -247,7 +247,8 @@ PlayerCamera.main.DoAlert(Lang.Get("layerfinish_wait_for_host"));
 }
 
 if (Net.IsClient) {
-world.savePanel.SetActive(value: false);
+world.savePanel.SetActive(ServerMain.HostBodyIsDead() && ServerMain.LocalPlayerAtLayerExit()
+    && ServerMain.CheckIfEnoughPeopleAreAtLayerFinish() && !LayerExitWhenHostDead.ExitBlocked());
 } else {
 var newww = ServerMain.CheckIfEnoughPeopleAreAtLayerFinish();
 if (newww != world.savePanel.activeSelf) {

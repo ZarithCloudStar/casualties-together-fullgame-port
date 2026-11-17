@@ -145,6 +145,7 @@ public class SyncBody : PredictableEntityLogic {
     private SyncVar<Vector2> _targetLookPos;
     private SyncVar<bool> _isRight;
     private SyncVar<bool> _crouching;
+    private SyncVar<bool> _offHand;
 
     internal SyncVar<bool  > _standing;
     internal SyncVar<bool  > _isPiggyback;
@@ -628,6 +629,7 @@ public class SyncBody : PredictableEntityLogic {
         _targetLookPos.Value = nb.body.targetLookPos;
         _isRight.Value = nb.body.isRight;
         _crouching.Value = nb.body.crouching;
+        _offHand.Value = nb.body.handSlot != 0;
         _standing.Value = nb.body.standing;
         // Ragdoll syncgroup is handled in Player.SlowButFastUpdate 
 
@@ -654,6 +656,7 @@ public class SyncBody : PredictableEntityLogic {
         body.targetLookPos = _targetLookPos.InterpolatedValue;
         body.moveDir = (Vector2)_moveDir.Value;
         body.crouching = _crouching.Value;
+        body.handSlot = _offHand.Value ? 1 : 0;
 
 
         if (_isPiggyback.Value) {
@@ -976,6 +979,7 @@ public class SyncInfo : PredictableEntityLogic {
         if (tracker != null && tracker.gameObject != null)
             return false;
         if (go == null) {
+            if (!Net.IsServer && TrapClaim.GlassBlocked(Id)) return false;
             if (!Util.IsWorldInstantiated() || String.IsNullOrEmpty(resourceId.Value)) {
                 return false;
             }
@@ -1779,6 +1783,8 @@ public class SyncInfo : PredictableEntityLogic {
                 specialdata1.Value = cannon.spent.ToByte();
                 if (cannon.spent)
                     specialdata2.Value = cannon.endAngle;
+            } else if (b.TryGetComponent(out FanTrap fan)) {
+                FanTrap_OnWillRenderObject_HostSim_MultiplayerPatch.Write(fan, this);
             } else  {
                 if (go.transform.childCount == 1 && go.transform.GetChild(0) is var e && e != null && e.TryGetComponent(out GeyserScript geyser)) {
                     specialdata1.Value = geyser.liquidType;
@@ -2093,6 +2099,7 @@ public class SyncInfo : PredictableEntityLogic {
         }
 
         EnemyMoveProbe.NoteObject(this, pos, currentPos, poseSnap);
+        HostPhysProbe.NoteClient(this, currentPos, pos, poseSnap);
         {
             if (shouldApplyPos) {
                 trans.position = pos;
@@ -2444,6 +2451,8 @@ public class SyncInfo : PredictableEntityLogic {
         } else if (b.TryGetComponent(out SoundCannon _)) {
             if (specialdata1.Value != 0)
                 b.GetOrAddComponent<TrackerSoundCannon>().soundcannon_spent(specialdata2.Value);
+        } else if (b.TryGetComponent(out FanTrap fan)) {
+            FanTrap_OnWillRenderObject_HostSim_MultiplayerPatch.Apply(fan, specialdata1.Value, specialdata2.Value);
         } else {
             if (go.transform.childCount == 1 && go.transform.GetChild(0) is var e && e != null && e.TryGetComponent(out GeyserScript geyser)) {
                 geyser.liquidType = specialdata1.Value;

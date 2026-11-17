@@ -798,11 +798,19 @@ public static class WorldGeneration_GenerateWorld_MultiplayerPatch {
 
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.SaveAndExit))]
 public static class WorldGenerationSaveAndExitPatch {
+    // Client host-dead requests must run before the host-only slot-save guard.
+    [HarmonyPriority(Priority.First + 100)]
     public static bool Prefix(WorldGeneration __instance) {
         if (Net.IsRunning) {
             PlayerCamera.main.body.forceWalk = false;
-
+#if FULLGAME
+            if (Net.IsServer && SavesystemPatch.DebugWorldUsesSave) {
+                SaveCurrentLayerExit.Request();
+                return false;
+            }
+#endif
             if (Net.IsClient) {
+                if (LayerExitWhenHostDead.ClientAsk(__instance, true)) return false;
                 PlayerCamera.main.DoAlert(Lang.Get("wait_for_host"));
                 return false;
             } else {
@@ -825,6 +833,7 @@ public static class WorldGeneration_ContinueRun_MultiplayerPatch {
             PlayerCamera.main.body.forceWalk = false;
 
             if (Net.IsClient) {
+                if (LayerExitWhenHostDead.ClientAsk(__instance, false)) return false;
                 PlayerCamera.main.DoAlert(Lang.Get("wait_for_host"));
                 return false;
             } else {

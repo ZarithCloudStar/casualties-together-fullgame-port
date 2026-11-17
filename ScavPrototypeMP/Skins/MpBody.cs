@@ -100,6 +100,8 @@ internal static class MpBody {
         _nextRefresh = Time.unscaledTime + 1f;
 
         Refresh();
+        foreach (var pair in Together.ScavPlayer.BodyToPlayerDict)
+            SkinTrace.NoteDefaultLeak("tick", pair.Key);
         // species cache decides the folder before the binding runs.
         SpriteReplacerPlugin.SyncSpeciesCache();
         if (!_needsApply) {
@@ -502,7 +504,7 @@ internal static class MpBody {
             + " liveSpecies=" + liveSpecies
             + " " + SkinTrace.BodyState(body)
             + " " + SkinTrace.SlotSummary(setName, mapped, liveSpecies));
-        binding.Bind(body, mapped, setName);
+        binding.Bind(body, mapped, setName, sprites);
 
         // facialExpression caches stock head/eye sprites in fields; MP used to skip face
         // replacement and only hope SpriteRenderer hooks caught them after a full Bind.

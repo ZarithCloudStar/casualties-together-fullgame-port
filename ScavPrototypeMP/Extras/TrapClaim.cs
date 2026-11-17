@@ -21,6 +21,7 @@ const byte KindGun = 7;
 const byte KindManifest = 8;
 const byte KindCryo = 9;
 const byte KindGlass = 10;
+const byte KindTrader = 11;
 
 const float ContactReach = 32f;
 const float SpikeWindow = 2f;
@@ -78,7 +79,7 @@ return Util.IsBodyLocal(body);
 }
 
 static void Send(byte kind, knetid id, ushort mask) {
-// kindGlass has no synced shard entity - id may be 0; claim is per-victim.
+// Unsynced legacy shards retain the local per-victim fallback.
 if (!Net.IsClient || (id.id == 0 && kind != KindGlass))
 return;
 var writer = Net.CreateWriter(NetmsgId.SERVER_TrapClaim);
@@ -1367,46 +1368,68 @@ else if (kind == KindCryo)
 ok = AcceptCryo(id, nb);
 #endif
 else if (kind == KindGlass)
-ok = AcceptGlass(nb, mask);
+ok = AcceptGlass(id, nb, mask);
+else if (kind == KindTrader)
+ok = AcceptTrader(id, nb, mask);
 
 if (!ok)
 Publish(nb);
 }
 
-// groundGlass shards are NOT position-synced (spawned per peer from DamageBlock loot).
-// host collisions used to stick remotes via the lagged body proxy - victim-auth only.
+// Clients claim their own hits; a spent marker prevents duplicate collision callbacks before Destroy.
+static readonly HashSet<ushort> glassGone = new HashSet<ushort>();
+static readonly HashSet<int> glassHurt = new HashSet<int>();
+
+[CTPostInit]
+static void InitGlass() {
+Multiplayer.OnSceneChangeOrWorldStartGenerate += () => { glassGone.Clear(); glassHurt.Clear(); };
+}
+internal static bool GlassBlocked(knetid id) {
+if (id.id == 0 || !glassGone.Contains(id.id)) return false;
+if (!NetObjectRegistry.TryGetSyncInfo(id, out var si) || si == null || si.IsDestroyed) {
+glassGone.Remove(id.id); return false;
+}
+return true;
+}
+static bool BeginGlass(GroundGlass shard, out knetid id, out SyncInfo si) {
+id = default; si = null;
+if (shard == null || shard.GetComponent<GlassSpent>() != null) return false;
+shard.gameObject.AddComponent<GlassSpent>();
+foreach (var collider in shard.GetComponents<Collider2D>()) collider.enabled = false;
+for (Transform t = shard.transform; t != null; t = t.parent) {
+if (NetObjectRegistry.TryGetSyncInfo(t.gameObject, out si) && si != null) { id = si.syncId; break; }
+}
+if (id.id != 0) glassGone.Add(id.id);
+return true;
+}
+static void FinishGlass(GroundGlass shard, knetid id, SyncInfo si) {
+if (id.id != 0) glassGone.Add(id.id);
+if (Net.IsServer && si != null && !si.IsDestroyed) si.Destroy();
+if (shard != null) Object.Destroy(shard.gameObject);
+}
+internal static void GlassHostSawRemote(GroundGlass shard) {
+if (Net.IsServer && BeginGlass(shard, out var id, out var si)) FinishGlass(shard, id, si);
+}
 internal static void GlassHitLocal(GroundGlass shard, Body body) {
-if (shard == null || body == null || !Util.IsBodyLocal(body)) {
-return;
-}
-if (shard.transform.position.y >= body.transform.position.y) {
-return;
-}
+if (shard == null || body == null || !Util.IsBodyLocal(body) || shard.transform.position.y >= body.transform.position.y
+    || !BeginGlass(shard, out var id, out var si)) return;
 Item boots = body.GetWearableBySlotID("feet");
+ushort mask = 0;
 if (boots) {
 boots.SetCondition(boots.condition - 0.1f * boots.Stats.wearableHitDurabilityLossMultiplier);
 Sound.Play("glassshard", shard.transform.position);
 Sound.Play("glass", shard.transform.position);
-Object.Destroy(shard.gameObject);
-return;
+} else {
+Limb limb = Random.value > 0.5f ? body.limbs[11] : body.limbs[14];
+while (limb != null && limb.dismembered && limb.connectedLimbs != null && limb.connectedLimbs.Length > 0) limb = limb.connectedLimbs[0];
+if (limb != null) { ApplyGlassLimb(limb); mask = Bit(limb); Ignore(body); }
 }
-Limb limb = (Random.value > 0.5f) ? body.limbs[11] : body.limbs[14];
-while (limb != null && limb.dismembered && limb.connectedLimbs != null && limb.connectedLimbs.Length > 0) {
-limb = limb.connectedLimbs[0];
-}
-if (limb == null) {
-Object.Destroy(shard.gameObject);
-return;
-}
-ApplyGlassLimb(limb);
-ushort mask = Bit(limb);
-Ignore(body);
-if (Net.IsClient) {
-Send(KindGlass, default, mask);
-} else if (body.TryGetNetBody(out var nb)) {
+if (Net.IsClient) Send(KindGlass, id, mask);
+else if (mask != 0 && body.TryGetNetBody(out var nb)) {
+if (id.id != 0) glassHurt.Add((id.id << 16) ^ nb.netId.id);
 Publish(nb);
 }
-Object.Destroy(shard.gameObject);
+FinishGlass(shard, id, si);
 }
 
 static void ApplyGlassLimb(Limb limb) {
@@ -1430,26 +1453,52 @@ limb.body.talker.Invoke("TalkGlass", 30f);
 }
 }
 
-static bool AcceptGlass(NetBody nb, ushort mask) {
-if (nb == null || nb.body == null) {
-return false;
-}
-// debounce per victim - shards have no sync id
-if (!TakeWindow(KindGlass, nb.netId, nb.netId, false, GlassWindow)) {
-return false;
-}
-bool applied = false;
-Each(nb.body, mask, limb => {
-if (limb != null && !limb.hasShrapnel) {
-ApplyGlassLimb(limb);
-applied = true;
-}
-});
-if (!applied) {
-// mask missing / already shrapnel - still publish whatever the client claimed
-}
+static bool AcceptGlass(knetid id, NetBody nb, ushort mask) {
+if (nb == null || nb.body == null) return false;
+if (id.id != 0) {
+// A collision observed by the host can spend the shard before the owner's claim arrives.
+bool fresh = glassHurt.Add((id.id << 16) ^ nb.netId.id);
+if (NetObjectRegistry.TryGetSyncInfo(id, out var si) && si != null) {
+if (si.go != null && si.go.GetComponentInChildren<GroundGlass>(true) == null) return false;
+FinishGlass(si.go != null ? si.go.GetComponentInChildren<GroundGlass>(true) : null, id, si);
+} else glassGone.Add(id.id);
+if (!fresh || mask == 0) return true;
+} else if (!TakeWindow(KindGlass, nb.netId, nb.netId, false, GlassWindow)) return false;
+Each(nb.body, mask, limb => { if (limb != null && !limb.hasShrapnel) ApplyGlassLimb(limb); });
 Publish(nb);
 return true;
+}
+
+internal static void AfterLocalTrader(TraderScript trader, ushort bit) {
+if (!Net.IsClient || trader == null || bit == 0 || !NetObjectRegistry.TryGetSyncInfo(trader, out var si)) return;
+if (Util.TryGetLocalBody(out var body)) Ignore(body);
+Send(KindTrader, si.syncId, bit);
+}
+static bool AcceptTrader(knetid id, NetBody nb, ushort mask) {
+if (mask == 0 || nb == null || nb.body == null || nb.body.limbs == null
+    || !NetObjectRegistry.TryGetSyncInfo(id, out var si) || si.go == null
+    || !si.go.TryGetComponent<TraderScript>(out var trader) || !trader.hostile
+    || !KM.DistanceCheck(trader.transform.position, nb.body.transform.position, 12f)
+    || !TakeWindow(KindTrader, id, nb.netId, false, 0.7f)) return false;
+for (int i = 0; i < nb.body.limbs.Length && i < 16; i++) {
+var limb = nb.body.limbs[i];
+if (limb == null || (mask & (1 << i)) == 0) continue;
+float species = trader.character == 1 ? 0.9f : trader.character == 2 ? 1.3f : 1f;
+float armor = limb.GetArmorReduction();
+limb.muscleHealth -= 20f / armor * species;
+limb.skinHealth -= Random.Range(24f, 40f) / armor * species;
+limb.bleedAmount += Random.value * 12f / armor * species;
+limb.pain += 45f / armor * species;
+limb.DamageWearables(0.3f * species);
+nb.body.adrenaline = 100f;
+nb.body.DoGoreSound();
+if (trader.character == 2 && Random.value < 0.1f && i > 2) limb.Dismember();
+nb.OnDamageEvent(new BodyDamageEvent(trader.build, nb, 10f));
+Publish(nb);
+TraderCommit.RelaySwing(trader, nb.body.transform.position, nb.plr != null ? nb.plr.playerId : default);
+return true;
+}
+return false;
 }
 
 static void AcceptJump(knetid id, NetBody nb) {
@@ -1489,7 +1538,9 @@ RaiseGun(gun, (byte)Mathf.Clamp(Mathf.CeilToInt(cooldown), 0, 255));
 if (idle)
 PlayGun(gun);
 } else if (kind == KindManifest && si.go.TryGetComponent(out CrystalEnemy manifest)) {
-// host broadcast lunge cue - victim applies if still in the ray / nearby.
+// host broadcast lunge cue - replay the line/windup for every client, then
+// let the local victim apply the authoritative hit if still in the ray.
+CrystalEnemyClientVisual.PlayAttack(manifest);
 if (Util.TryGetLocalBody(out Body local) && Near(manifest, local)) {
 RaycastHit2D[] hits = Physics2D.RaycastAll(manifest.transform.position, manifest.transform.up);
 for (int i = 0; i < hits.Length; i++) {
@@ -1641,7 +1692,9 @@ static bool Prefix(GroundGlass __instance, Collision2D collision) {
 if (!Net.IsRunning) {
 return true;
 }
-if (!TrapClaim.IsLocal(collision.collider, out Body body)) {
+if (collision == null || !Util.TryGetBodyFromObject(collision.collider, out var body) || body == null) return false;
+if (!Util.IsBodyLocal(body)) {
+if (Net.IsServer && __instance.transform.position.y < body.transform.position.y) TrapClaim.GlassHostSawRemote(__instance);
 return false;
 }
 TrapClaim.GlassHitLocal(__instance, body);

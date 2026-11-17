@@ -911,13 +911,22 @@ Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerBark, t
 
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.SwitchHands))]
 public static class PlayerCamera_SwitchHands_MultiplayerPatch {
+internal static void RefreshHandIcon(PlayerCamera pc) {
+if (!Net.IsRunning || pc == null || pc.body == null || pc.handSwapImage == null || pc.handSwapSprites == null) return;
+int slot = pc.body.handSlot;
+if (slot < 0 || slot >= pc.handSwapSprites.Length || pc.handSwapSprites[slot] == null) return;
+pc.handSwapImage.sprite = pc.handSwapSprites[slot];
+int other = slot == 0 ? 1 : 0;
+if (other < pc.handSwapSprites.Length && pc.handSwapImage.overrideSprite == pc.handSwapSprites[other])
+pc.handSwapImage.overrideSprite = null;
+}
 
 public static void Postfix() {
 if (UIInGame.SpectatorModeActive) return;
-if (Net.IsRunning) {
-
-Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerCamera_SwitchHands, (ushort)(PlayerCamera.main.body.handSlot), true);
-
+if (Net.IsRunning && PlayerCamera.main != null && PlayerCamera.main.body != null) {
+RefreshHandIcon(PlayerCamera.main);
+Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_PlayerCamera_SwitchHands, (ushort)PlayerCamera.main.body.handSlot, true);
+if (!Net.IsServer) ClientMain.Client_SendCharacterSyncPacket();
 }
 }
 
@@ -936,6 +945,11 @@ return;
 
 if (ScavPlayer.TryGetPlayerFromClientId(clientId, out var plr) && plr.IsAlive()) {
 plr.body.handSlot = (int)handslot;
+if (plr.netBody != null) {
+plr.netBody.handSwitched = true;
+plr.netBody.handSwitchTick = Net.ServerTick;
+plr.netBody.syncBody?.WriteBodyData();
+}
 
 if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(plr.body.transform.position, $"S: PlayerCamera_SwitchHands {handslot}");
 
@@ -962,8 +976,7 @@ reader.Get(out knetid who);
 reader.Get(out byte handslot);
 
 if (ScavPlayer.TryGetPlayerFromClientId(who, out var plr) && plr.body && !plr.IsLocal) {
-plr.body.handSlot = (int)handslot;
-
+// Authoritative body state carries the slot; an unordered relay may be stale.
 if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(plr.body.transform.position, $"C: PlayerCamera_SwitchHandsRelay {handslot}");
 }
 }

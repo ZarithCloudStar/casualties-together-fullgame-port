@@ -455,5 +455,7 @@
   "casualtiestogether_plrdeath_plrkill": "死於",
   "casualtiestogether_plrdeath_plrkill_using": "所使用的",
   "casualtiestogether_plrdeath_creaturekill": "死於",
-  "casualtiestogether_plrdeath_objkill": "死於"
+  "casualtiestogether_plrdeath_objkill": "死於",
+    "casualtiestogether_rule_name_ShowTeammateList": "顯示隊友清單",
+    "casualtiestogether_rule_desc_ShowTeammateList": "由主機控制所有玩家是否顯示隊友清單。"
 }

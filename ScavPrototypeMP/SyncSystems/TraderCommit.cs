@@ -270,7 +270,7 @@ internal static class TraderCommit {
         ServerMain.Server_AnnounceSound(pos, name, ids);
     }
 
-    // all in-range clients get the slash. victims skip stock Swing; host owns the damage.
+    // Relay slash effects to observers; local-hit claims exclude the victim that already played stock Swing.
     internal static void RelaySwing(TraderScript trader, Vector2 aim, knetid exceptClient = default) {
         if (!Net.IsServer || (trader == null)) {
             return;
@@ -346,7 +346,7 @@ internal static class TraderCommit {
         if (!NetObjectRegistry.TryGetSyncInfoLive(traderId, out SyncInfo si) || (si is null) || (si.trader == null)) {
             return;
         }
-        // clients skip stock Swing. host damage lands via ForceHealth. this is slash/sound for everyone.
+        // Relayed host swings and other players' accepted claims are cosmetic here.
         PlaySwingFx(si.trader, new Vector2(x, y));
     }
 

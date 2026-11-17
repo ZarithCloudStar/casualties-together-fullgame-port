@@ -6,15 +6,23 @@ public sealed class BodySkinBinding : MonoBehaviour {
     private readonly List<SkinSpriteReplacer> _replacers = new List<SkinSpriteReplacer>();
     private readonly List<SpriteRenderer> _renderers = new List<SpriteRenderer>();
     private IReadOnlyDictionary<string, Sprite> _sprites;
+    private IReadOnlyDictionary<string, Sprite> _package;
+    internal bool Wearing(IReadOnlyDictionary<string, Sprite> package) => package != null && ReferenceEquals(_package, package);
 
     internal string SetName { get; private set; }
 
-    internal void Bind(Body body, IReadOnlyDictionary<string, Sprite> sprites, string setName) {
+    internal void Bind(Body body, IReadOnlyDictionary<string, Sprite> sprites, string setName) => Bind(body, sprites, setName, sprites);
+
+    internal void Bind(Body body, IReadOnlyDictionary<string, Sprite> sprites, string setName, IReadOnlyDictionary<string, Sprite> package) {
         if (body == null) {
             return;
         }
 
+        _package = package ?? sprites;
         SetName = setName ?? "";
+        if (!MpBody.CanApply(body) && SkinTrace.UsesLocalSprites(sprites))
+            SkinTrace.Problem("bind-local-onto-remote " + body.GetInstanceID(), "set=" + SetName
+                + " net=" + MpBody.GetNetworkIdForBody(body) + " " + SkinTrace.BodyState(body));
 
         _renderers.Clear();
         foreach (SpriteRenderer renderer in body.GetComponentsInChildren<SpriteRenderer>(true)) {
@@ -27,6 +35,7 @@ public sealed class BodySkinBinding : MonoBehaviour {
             + " " + SkinTrace.BodyState(body)
             + " " + SkinTrace.SlotSummary(SetName, sprites, body.charType));
         Apply();
+        SkinTrace.NoteDefaultLeak("bind", body);
     }
 
     internal void Apply() {
@@ -86,6 +95,7 @@ public sealed class BodySkinBinding : MonoBehaviour {
         }
         _replacers.Clear();
         _sprites = null;
+        _package = null;
     }
 
     private void OnDestroy() => Reset();

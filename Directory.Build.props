@@ -3,12 +3,12 @@
   
 	<PropertyGroup>
 
-		<ModVersion>5.5.2-cu-port-bugfix1</ModVersion>
+		<ModVersion>5.5.3-cu-port</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Wire/protocol identity; intentionally separate from the package version. -->
-		<NetworkVersion>5.5.2-cu-port-fix1</NetworkVersion>
+		<NetworkVersion>5.5.3-cu-port</NetworkVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
-		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.2-cu-port-bugfix1</UpdateReleaseVersion>
+		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.3-cu-port</UpdateReleaseVersion>
 
 		<SlnRoot>$(SolutionDir)</SlnRoot>
 

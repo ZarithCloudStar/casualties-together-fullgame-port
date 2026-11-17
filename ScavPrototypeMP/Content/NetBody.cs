@@ -144,6 +144,8 @@ attackerBuildingId = evil.id;
 
 
 public class NetBody : MonoBehaviour {
+internal bool handSwitched;
+internal ushort handSwitchTick;
 public static implicit operator Body(NetBody nb) => nb.body;
 
 #region STATIC_NETBODY_GETTERS
