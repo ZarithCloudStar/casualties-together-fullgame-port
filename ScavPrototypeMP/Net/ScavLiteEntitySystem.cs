@@ -931,13 +931,11 @@ public class SyncInfo : PredictableEntityLogic {
 
 
     protected override void OnConstructed() {
-        
+        NetObjectRegistry.NetIdToSyncInfoDict[Id] = this;
         CreateObject();
 #if !RELEASE
         log.l($"CREATED SyncInfo: resourceId: {resourceId.Value} \tId:{Id} Owner:{OwnerId}");
 #endif
-        NetObjectRegistry.NetIdToSyncInfoDict[Id] = this;
-
         if (go == null) {
             if (String.IsNullOrEmpty(resourceId.Value)) {
                 if (Net.IsServer) {
@@ -964,7 +962,13 @@ public class SyncInfo : PredictableEntityLogic {
         container_data1.Value == ItemSync.OfflineStored;
 
     public bool CreateObject() {
-        if (Net.IsClient && ItemUnavailable) return false;
+        if (IsClient) {
+            if (ItemUnavailable || ClientManager != Net.ClientEntityManager) return false;
+            // Scene unload clears the object registries while remote LES entities
+            // survive. Reindex a replica before its children try to resolve it.
+            if (!NetObjectRegistry.NetIdToSyncInfoDict.TryGetValue(Id, out var indexed) || !ReferenceEquals(indexed, this))
+                NetObjectRegistry.NetIdToSyncInfoDict[Id] = this;
+        }
 #if FULLGAME
         if (WorldSnapshotTransfer.BlockClientObjects) return false;
         WorldSnapshotTransfer.Adopt(this);
@@ -1219,39 +1223,37 @@ public class SyncInfo : PredictableEntityLogic {
     void DestroyTrackedGameObject() {
         // a null go used to return here. the closed fruit stayed in the slot, and the
         // container byte never got applied because Update takes the same null path.
-        if (go == null)
+        if (go == null && objectWasSpawned)
             RebindMesh();
-        if (go == null)
+        GameObject mesh = go;
+        go = null;
+        tracker = null;
+        if (mesh == null)
             return;
-#if FULLGAME
-        if (Net.IsClient && EndingLabObjects.SceneCritical(go)) {
-            NetObjectRegistry.SyncRegistry.Remove(go);
-            if (tracker != null) tracker.syncInfo = null;
-            go = null;
+
+        // An old entity can be destroyed after a replacement bound the mesh.
+        if (NetObjectRegistry.SyncRegistry.TryGetValue(mesh, out var mapped) && !ReferenceEquals(mapped, this))
             return;
+        if (mesh.TryGetComponent(out SyncInfoGameObjectTracker onGo)) {
+            if (onGo.syncInfo != null && !ReferenceEquals(onGo.syncInfo, this))
+                return;
+            onGo.syncInfo = null;
         }
+        NetObjectRegistry.SyncRegistry.Remove(mesh);
+#if FULLGAME
+        if (Net.IsClient && EndingLabObjects.SceneCritical(mesh)) return;
 #endif
 
-        GameObject mesh = go;
-        // null the tracker first. its OnDestroy would otherwise free this id again.
-        if (tracker != null)
-            tracker.syncInfo = null;
-        else if (mesh.TryGetComponent(out SyncInfoGameObjectTracker onGo))
-            onGo.syncInfo = null;
-        NetObjectRegistry.SyncRegistry.Remove(mesh);
+        // Destruction owns cleanup only. Applying the last packet here could
+        // reparent items or recreate FreshItemDrop during LES teardown.
         try {
-            if (!Net.IsServer)
-                ApplyPacketToObject();
-            // a dead grav bag. the owner may not have run the item update before this destroy arrived.
-            if (mesh.TryGetComponent(out Item boom))
+            if (Net.IsRunning && Util.IsWorldGenerated() &&
+                (IsServer ? ServerManager == Net.ServerEntityManager : ClientManager == Net.ClientEntityManager) &&
+                mesh.TryGetComponent(out Item boom) && boom != null && boom.id == "gravbag")
                 GravBagBoom.Play(boom, Mathf.Min(boom.condition, condition.Value));
-        } catch (Exception e) {
-            log.error($"SyncInfo destroy mesh {this} - {e}");
-        }
-        // the client already destroyed its copy. leaving the host object here
-        // made the next register mint a new id onto the leftover.
-        if (mesh != null)
+        } finally {
             GameObject.Destroy(mesh);
+        }
     }
 
     protected override void OnDestroy() {
@@ -1327,6 +1329,7 @@ public class SyncInfo : PredictableEntityLogic {
     }
 
     internal void StoreOffline() {
+        FixContainerInfo.Forget(item);
         container_netId.Value = default;
         container_ver.Value = 0;
         container_data1.Value = ItemSync.OfflineStored;
@@ -1951,8 +1954,8 @@ public class SyncInfo : PredictableEntityLogic {
         updateTimer = 0;
 
         if (go.TryGetComponent(out Item item)) {
-            UpdateItem();
-            UpdateLiquids();
+            UpdateItem(item);
+            if (go != null) UpdateLiquids();
         } else if (go.TryGetComponent(out BuildingEntity b)) {
             UpdateBuilding();
         }
@@ -2393,7 +2396,7 @@ public class SyncInfo : PredictableEntityLogic {
         if (fresh.rb != null) fresh.rb.gravityScale = Mathf.Clamp01(1f - fresh.timeLeft * .5f);
     }
 
-    void UpdateItem() {
+    void UpdateItem(Item item) {
         var si = this;
         if (CraftCommit.EatDestroyed(si))
             return;
@@ -2422,6 +2425,8 @@ public class SyncInfo : PredictableEntityLogic {
         item.wetTime = Time.time - wetTime;
 
         UpdateItemContainer();
+        if (item == null || go == null)
+            return;
 
         if (Net.IsClient) {
             ApplyFreshDrop(item);

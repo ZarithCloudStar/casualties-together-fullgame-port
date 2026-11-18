@@ -61,6 +61,10 @@ internal static class PlayerPlacementCheckpoint {
         if (!queued || !ReferenceEquals(session, Net.ServerEntityManager) || !ReferenceEquals(world, WorldGeneration.world)) saved.Clear();
         queued = false; applied.Clear(); generation = WorldSnapshotTransfer.Token;
     }
+    internal static void RetireAppliedPose(ScavPlayer player, string id) {
+        // A pose already used in this generation should not supersede a later disconnect.
+        if (applied.Remove(player)) saved.Remove(id);
+    }
     internal static bool TryApply(ScavPlayer p, bool force = false) {
         if (!Net.IsServer || p == null || p.body == null || !ReferenceEquals(session, Net.ServerEntityManager) ||
             !ReferenceEquals(world, WorldGeneration.world) || generation != WorldSnapshotTransfer.Token ||
@@ -75,7 +79,6 @@ internal static class PlayerPlacementCheckpoint {
         p.Server_TeleportCharacter(new Vector2(pose.x, pose.y));
         p.body.SetVelocity(Vector2.zero);
         applied[p] = p.body;
-        p.ServerPlayerState.did_give_spawn_location_from_a_save = true;
         log.l($"[spawn] checkpoint authoritative player={p.GetPersistentId()} layer={pose.layer} x={pose.x:F3} y={pose.y:F3} right={pose.right}");
         return true;
     }

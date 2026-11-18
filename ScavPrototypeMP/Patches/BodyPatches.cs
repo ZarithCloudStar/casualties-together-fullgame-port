@@ -374,6 +374,9 @@ public static bool ShouldKeepLayerXOffset() => !Util.GameIsFull() && Multiplayer
                 has_spawn_location = true;
                 foreach (var item in NetBody.all_instances) {
                     if (item.IsPlayer && !item.IsBodyLocal()) {
+#if FULLGAME
+                        if (Util.GameIsFull() && item.plr.ServerPlayerState.spawn_placement_completed) continue;
+#endif
                         item.plr.ResetEntropy();
 #if FULLGAME
                         if (Util.GameIsFull()) {

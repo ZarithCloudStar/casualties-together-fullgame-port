@@ -87,8 +87,8 @@ si.StoreOffline();
 }
 
 public void Apply(Body body) {
-// is on the same layer
-if (Multiplayer.rules.SavePlayerPosition && savedonlayer == WorldGeneration.world.biomeDepth) {
+// Fullgame restores the position during authoritative spawn placement.
+if (!Util.GameIsFull() && Multiplayer.rules.SavePlayerPosition && savedonlayer == WorldGeneration.world.biomeDepth) {
 if (body.TryGetNetBody(out var nb)) {
 if (nb.IsPlayer) {
 nb.plr.ServerPlayerState.did_give_spawn_location_from_a_save = true;
@@ -570,6 +570,38 @@ static readonly HashSet<knetid> _spawnBusy = new HashSet<knetid>();
 
 internal static bool SpawnPlacementBusy(knetid clientId) => _spawnBusy.Contains(clientId);
 
+#if FULLGAME
+static readonly Dictionary<string, (int layer, Vector2 position)> disconnectedPositions = new();
+
+internal static void ClearDisconnectPositions() => disconnectedPositions.Clear();
+
+internal static void SaveDisconnectPosition(ScavPlayer player, string id) {
+if (!Net.IsRunning || player.IsLocal || !Multiplayer.rules.SavePlayerPosition || !Util.IsWorldGenerated() ||
+!player.ServerPlayerState.spawn_placement_completed) return;
+
+var body = player.netBody;
+// The server mirror can continue falling between the last update and a timeout.
+var position = body.alive && body.piggybacking_on == null
+    ? player.ServerPlayerState.last_client_position ?? body.GetPosition()
+    : body.GetPosition();
+if (!Body_PlaceBody_MultiplayerPatch.IsValidLayerSpawn(position)) return;
+
+var layer = WorldGeneration.world.biomeDepth;
+disconnectedPositions[id] = (layer, position);
+PlayerPlacementCheckpoint.RetireAppliedPose(player, id);
+log.l($"[spawn] disconnect saved player={id} layer={layer} at={position:F3}");
+}
+
+static bool TryRestoreDisconnectPosition(ScavPlayer player, string id) {
+if (!Multiplayer.rules.SavePlayerPosition || !disconnectedPositions.TryGetValue(id, out var saved) ||
+saved.layer != WorldGeneration.world.biomeDepth) return false;
+
+player.Server_TeleportCharacter(saved.position);
+log.l($"[spawn] disconnect authoritative player={id} layer={saved.layer} at={saved.position:F3}");
+return true;
+}
+#endif
+
 public static IEnumerator GiveSpawnLocationToPlayer(knetid clientId) {
 #if FULLGAME
 double snapshotWait = Time.realtimeSinceStartupAsDouble;
@@ -643,28 +675,23 @@ if (!pb.body.alive && Multiplayer.rules.LateJoinSpectate) {
 // dont give them any spawn location, cuz they were moved to outside of the map
 } else {
 #if FULLGAME
-if (Util.GameIsFull() && Util.IsTutorialWorld() && SandboxMode.SpawnReady) {
+if (Util.GameIsFull()) {
+var id = plr.GetPersistentId();
+if (Util.IsTutorialWorld() && SandboxMode.SpawnReady) {
 plr.Server_TeleportCharacter(SandboxMode.SpawnLocation);
 log.l($"[sandbox] authoritative spawn player={plr.playerName} at={SandboxMode.SpawnLocation:F3}");
-} else if (Util.GameIsFull() && PlayerPlacementCheckpoint.TryApply(plr, true)) {
-// The saved pose wins even for a late WS1 ACK / late join.
-} else if (Util.GameIsFull() && !plr.ServerPlayerState.did_give_spawn_location_from_a_save) {
-if (!TrySpawnLateJoinOnCompanion(plr, pb)) {
+} else if (!PlayerPlacementCheckpoint.TryApply(plr, true) &&
+!TryRestoreDisconnectPosition(plr, id) &&
+!TrySpawnLateJoinOnCompanion(plr, pb)) {
 plr.Server_TeleportCharacter(Body_PlaceBody_MultiplayerPatch.SpawnLocation);
-log.l($"[spawn] shared authoritative layer={WorldGeneration.world.biomeDepth} player={plr.GetPersistentId()} at={Body_PlaceBody_MultiplayerPatch.SpawnLocation}");
+log.l($"[spawn] shared authoritative layer={WorldGeneration.world.biomeDepth} player={id} at={Body_PlaceBody_MultiplayerPatch.SpawnLocation}");
 }
+disconnectedPositions.Remove(id);
 } else
 #endif
 if (plr.ServerPlayerState.did_give_spawn_location_from_a_save) {
 plr.ServerPlayerState.did_give_spawn_location_from_a_save = false;
 } else {
-#if FULLGAME
-if (Util.GameIsFull() && WorldGeneration.world.biomeDepth >= 10 && WorldGeneration.world.biomeDepth <= 11) {
-var spawn = Body_PlaceBody_MultiplayerPatch.SpawnLocation;
-plr.Server_TeleportCharacter(spawn);
-log.l($"[spawn] authoritative layer={WorldGeneration.world.biomeDepth} player={plr.GetPersistentId()} at={spawn}");
-} else
-#endif
 if (
 !Body_PlaceBody_MultiplayerPatch.ShouldKeepLayerXOffset() // off, or doPod (everyone in the pod)
 || WorldGeneration.world.totalTraveled <= 0  // if its the first layer all spawn in the pod
@@ -690,6 +717,9 @@ log.warn("SERVER: LateSpawnLocation actually gets called for local body lol");
 #endif
 }
 
+#if FULLGAME
+plr.ServerPlayerState.spawn_placement_completed = true;
+#endif
 if (true) {
 plr.ServerPlayerState.SaveLocationSnapshot();
 }
@@ -774,8 +804,7 @@ return false;
 
 
 #if FULLGAME
-// Saved/checkpoint poses and sandbox placement have already taken priority
-// in GiveSpawnLocationToPlayer. Only a fresh mid-run admission reaches here.
+// This fallback is available for a mid-run admission without a saved pose.
 internal static bool TrySpawnLateJoinOnCompanion(ScavPlayer joining, NetBody body) {
 if (!joining.ServerPlayerState.late_join_spawn_pending || !Multiplayer.rules.SpawnOnPlayer) return false;
 var companion = GetPlayerBodyHostOrAnyoneAlive(joining, body);
@@ -2073,6 +2102,13 @@ pack.Apply(pb);
 if (pack.IncludeRagData() && !reader.EndOfData && pb.piggybacking_on == null) {
 ClientMain.ReadRagdollPacket(ref reader, pb.body);
 }
+#if FULLGAME
+if (Util.GameIsFull() && plr.ServerPlayerState.spawn_placement_completed && pb.piggybacking_on == null) {
+var position = pb.GetPosition();
+if (Body_PlaceBody_MultiplayerPatch.IsValidLayerSpawn(position))
+plr.ServerPlayerState.last_client_position = position;
+}
+#endif
 }
 } else {
 //shouldnt happen

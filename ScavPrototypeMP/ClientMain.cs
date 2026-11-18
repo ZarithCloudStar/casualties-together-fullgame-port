@@ -702,39 +702,60 @@ public class ClientMain : MonoBehaviour {
 
 
 
-    static HashSet<Vector2Int> SetBlockChunks = new();
+    static int _setBlockBadCount;
     [ClientReceiver((byte)NetmsgId.SetBlock)]
-	static void ClientReceiver__SetBlock(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-		if (!SharedMain.LocalWorldIsGenerated) return;
+    static unsafe void ClientReceiver__SetBlock(knetid _, LiteNetLib.Utils.NetDataReader reader) {
+        if (!SharedMain.LocalWorldIsGenerated) return;
+#if FULLGAME
+        if (WorldSnapshotTransfer.BlockClientObjects) return;
+#endif
+        var world = WorldGeneration.world;
+        if (world == null || world.generatingWorld) return;
+        var blocks = world.worldBlocks;
+        var maps = world.chunks;
+        var updated = world.ChunkUpdated;
+        var tiles = world.tiles;
+        if (blocks == null || maps == null || updated == null || tiles == null) return;
+        if (reader.AvailableBytes % sizeof(WorldGeneration_SetBlock_MultiplayerPatch.ChangedBlockInfo) != 0) return;
 
+        int size = WorldGeneration.CHUNKSIZE;
+        int width = blocks.GetLength(0), height = blocks.GetLength(1);
+        // UpdateChunk indexes the tilemap, the event and the entire block
+        // rectangle. The stored world dimensions alone don't guarantee those exist.
+        int chunkWidth = Math.Min(width / size, Math.Min(maps.GetLength(0), updated.GetLength(0)));
+        int chunkHeight = Math.Min(height / size, Math.Min(maps.GetLength(1), updated.GetLength(1)));
+        var chunks = new HashSet<Vector2Int>();
         while (!reader.EndOfData) {
             reader.Get(out WorldGeneration_SetBlock_MultiplayerPatch.ChangedBlockInfo block);
             var pos = (Vector2Int)block.pos;
+            var chunk = new Vector2Int(pos.x / size, pos.y / size);
+            if (pos.x < 0 || pos.y < 0 || chunk.x >= chunkWidth || chunk.y >= chunkHeight ||
+                block.block >= tiles.Length || maps[chunk.x, chunk.y] == null || updated[chunk.x, chunk.y] == null) {
+                if (_setBlockBadCount++ % 100 == 0)
+                    log.warn($"SetBlock skipped pos={pos} tile={block.block} grid={chunkWidth}x{chunkHeight}");
+                continue;
+            }
 
 #if DEBUG
             if (DebugHelp._DEV_VISUALISE_NET_EVENTS) {
-                var realPos = WorldGeneration.world.BlockToWorldPos(pos);
+                var realPos = world.BlockToWorldPos(pos);
                 log.devevent($"C: SetBlock {block.block} - {block.GetBlockInfo()?.name}  {block.pos} -> {realPos}", realPos);
             }
 #endif
 
-            SetBlockChunks.Add(pos / WorldGeneration.CHUNKSIZE);
-
             if (block.block == 0) {
-                var bdamage = WorldGeneration.world.GetBlockDamage(pos);
-                if (bdamage != null) {
-                    bdamage.DestroySprite();
-                    WorldGeneration.world.blockDamages.Remove(bdamage);
+                var damage = world.GetBlockDamage(pos);
+                if (damage != null) {
+                    damage.DestroySprite();
+                    world.blockDamages.Remove(damage);
                 }
             }
-            WorldGeneration.world.SetBlockNoUpdate(pos, block.block);
+            // SetBlockNoUpdate clamps to width/height - 2 in CU 1.0.2.
+            blocks[pos.x, pos.y] = block.block;
+            chunks.Add(chunk);
         }
-
-        foreach (var v in SetBlockChunks) {
-            WorldGeneration.world.UpdateChunk(v);
-        }
-
-        SetBlockChunks.Clear();
+        foreach (var chunk in chunks)
+            world.UpdateChunk(chunk);
     }
 
 

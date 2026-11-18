@@ -454,6 +454,7 @@ public class WorldMP : CasualtiesTogetherSingleton {
 #if FULLGAME
         if (Net.IsServer) {
             WorldSnapshotTransfer.Reset(aaaaaaaaaaaaaaaaaaaaaaaaaaa != null);
+            ServerMain.ClearDisconnectPositions();
             PlayerPlacementCheckpoint.BeginGeneration();
         }
 #endif
@@ -993,7 +994,11 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
                 WorldChunkSync.singleton.timer_TilemapSync += 0.05f;
                 WorldChunkSync.singleton.timer_TilemapFluidSync += 0.05f;
-            } else if (plr.body != null && plr.netBody != null && Util.IsWorldGenerated() && Body_PlaceBody_MultiplayerPatch.has_spawn_location) {
+            } else if (plr.body != null && plr.netBody != null && Util.IsWorldGenerated() && Body_PlaceBody_MultiplayerPatch.has_spawn_location
+#if FULLGAME
+                && (!Util.GameIsFull() || plr.ServerPlayerState.spawn_placement_completed)
+#endif
+            ) {
                 // rejoin asks again. the flag is already set, so the first handler would have dropped it.
                 log.l($"SERVER: spawn already handed out, reminding {plr.netBody} at {plr.netBody.transform.position}");
                 plr.netBody.Server_RemindPlayersCurrentState();

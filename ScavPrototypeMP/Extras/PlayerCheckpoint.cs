@@ -217,9 +217,25 @@ public static class PlayerCheckpoint {
     public static void RegisterBody(Body body) {
         if (!Net.IsServer || body == null)
             return;
-        foreach (var item in body.GetAllItemsThorough()) {
-            if (item != null && NetObjectRegistry.ObjectShouldBeSynced(item.gameObject))
-                NetObjectRegistry.Server_EnsureItemIsNetworkRegistered(item.gameObject);
+
+        // GetAllItemsThorough only walks one container level. A rejoin can carry
+        // nested bags/pouches; a shallow register leaves their children without
+        // a live network entity, so the client sees the container but no items.
+        var items = body.GetComponentsInChildren<Item>(true);
+        for (int i = 0; i < items.Length; i++) {
+            var item = items[i];
+            if (item == null || item.gameObject == null) continue;
+            if (!NetObjectRegistry.ObjectShouldBeSynced(item.gameObject)) continue;
+            NetObjectRegistry.Server_EnsureItemIsNetworkRegistered(item.gameObject);
+        }
+
+        // Publish links after every container in the hierarchy has an ID.
+        for (int i = 0; i < items.Length; i++) {
+            var item = items[i];
+            if (item == null || item.gameObject == null) continue;
+            if (NetObjectRegistry.IsSaveStateItem(item.gameObject)) continue;
+            if (NetObjectRegistry.TryGetSyncInfo(item.gameObject, out var si) && si != null && !si.IsDestroyed)
+                si.WriteContainerInfo();
         }
     }
 
@@ -339,8 +355,13 @@ public static class PlayerCheckpoint {
 
     internal static void ClearClientCrafted() {
         clientCrafted.Clear();
-        ScavPlayer.LocalPlayer?.netBody?.RecipesHasCrafterBefore.Clear();
+        LocalNetBody()?.RecipesHasCrafterBefore.Clear();
         ApplyLocalCraftMarkers();
+    }
+
+    static NetBody LocalNetBody() {
+        var plr = ScavPlayer.LocalPlayer;
+        return plr != null && plr.body != null && plr.body.TryGetNetBody(out var nb) ? nb : null;
     }
 
     // Never project a loaded/global hasMadeBefore table onto another player.
@@ -350,7 +371,7 @@ public static class PlayerCheckpoint {
             clientCrafted.Clear(); ClientCraftedReceived = false;
             clientCraftedOwner = Net.ClientEntityManager;
         }
-        var nb = ScavPlayer.LocalPlayer?.netBody;
+        var nb = LocalNetBody();
         for (int i = 0; i < Recipes.recipes.Count; i++) {
             Recipe recipe = Recipes.recipes[i];
             if (recipe != null)
@@ -383,7 +404,7 @@ public static class PlayerCheckpoint {
         }
         clientCraftedOwner = Net.ClientEntityManager;
         clientCrafted.Clear(); clientCrafted.UnionWith(got); ClientCraftedReceived = true;
-        var nb = ScavPlayer.LocalPlayer?.netBody;
+        var nb = LocalNetBody();
         if (nb != null) { nb.RecipesHasCrafterBefore.Clear(); nb.RecipesHasCrafterBefore.AddRange(got); }
         RecipeProgress.RefreshPanel();
     }

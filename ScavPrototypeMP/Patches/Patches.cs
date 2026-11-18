@@ -962,7 +962,7 @@ if (Net.IsServer
 
 pid = pb.plr.GetPersistentId();
 
-// map debug and the tutorial start empty. the file and the disconnect copy both stay untouched.
+// Practice worlds skip file and inventory restore. Fullgame chooses the position at server placement.
 if (!SavesystemPatch.PreserveSave && ServerMain.Server_LastPlayerStates.TryGetValue(pid, out var val)) {
 int depth = WorldGeneration.world != null ? WorldGeneration.world.biomeDepth : val.savedonlayer;
 // a descent destroys the net entities on those items. the file written at disconnect still has them.

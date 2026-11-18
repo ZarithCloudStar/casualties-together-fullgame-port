@@ -33,6 +33,10 @@ public bool did_give_spawn_location_from_a_save = false;
 // One admission's spawn request, unlike ScavPlayer.LateJoin which remains
 // true after that player subsequently travels to another layer.
 public bool late_join_spawn_pending = false;
+#if FULLGAME
+internal bool spawn_placement_completed;
+internal Vector2? last_client_position;
+#endif
 public bool finished_worldgen = false;
 public bool is_loaded_in = false; // this is determined by the type of packets that are sent by the client, that are guranteed to be sent only after world generated
 public bool[,] known_chunks;
@@ -95,7 +99,8 @@ ResetKnownChunks();
 late_join_spawn_pending = false;
 did_give_spawn_location = false;
 #if FULLGAME
-if (Util.GameIsFull()) did_give_spawn_location_from_a_save = false;
+spawn_placement_completed = false;
+last_client_position = null;
 #endif
 finished_worldgen = false;
 }
@@ -103,6 +108,10 @@ finished_worldgen = false;
 public void OnSceneChangeOrWorldStartGenerate() {
 late_join_spawn_pending = false;
 did_give_spawn_location = false;
+#if FULLGAME
+spawn_placement_completed = false;
+last_client_position = null;
+#endif
 is_loaded_in = false;
 loaded_save = false;
 }
@@ -1092,6 +1101,10 @@ if (ConsoleScript.instance != null) ConsoleScript.instance.noClipPos = pos;
 netBody.SetBodyPosition(pos);
 
 if (!this.IsLocal) {
+#if FULLGAME
+if (Util.GameIsFull() && Net.IsServer && ServerPlayerState.spawn_placement_completed)
+ServerPlayerState.last_client_position = netBody.GetPosition();
+#endif
 WorldChunkSync.Server_CheckPlrPosChunk(this);
 }
 
@@ -1322,12 +1335,17 @@ public void OnDestroy() {
 try {
 // Only the host decides whether a departing player's inventory is stored or dropped.
 if (Net.IsServer && Util.IsInWorld() && body != null && Multiplayer.rules.DisconnectShouldSaveAnything) {
+var id = GetPersistentId();
+#if FULLGAME
+// Record the position before the checkpoint write, inventory transfer and body teardown.
+if (Util.GameIsFull()) ServerMain.SaveDisconnectPosition(this, id);
+#endif
 #if TESTING
 log.l($"Saved player state of {this}");
 #endif
 // the suitcase is taken apart on the next descent. the file is what a later layer can load.
 PlayerCheckpoint.WriteOne(this, false);
-ServerMain.Server_LastPlayerStates[GetPersistentId()] = (new PlayerSavedState(body));
+ServerMain.Server_LastPlayerStates[id] = new PlayerSavedState(body);
 }
 } catch (Exception e) {
 log.error($"{nameof(ScavPlayer)}.{nameof(OnDestroy)}: saving plr state: " + e.ToString());

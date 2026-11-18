@@ -95,6 +95,14 @@ internal static class FixContainerInfo
 		Cache[item.GetInstanceID()] = new Hold { Parent = parent, Net = net, Data = data, Ver = ver, Wait = wait, Known = true };
 	}
 
+	// A child can keep the same parent transform during offline storage.
+	// Invalidate its live link when publishing OfflineStored.
+	internal static void Forget(Item item)
+	{
+		if (item != null)
+			Cache.Remove(item.GetInstanceID());
+	}
+
 	// FixInvSync calls this after it stores a parent, so the next WriteContainerInfo does not rebuild the note.
 	internal static void Remember(Item item, ushort net, byte data, byte ver)
 	{
