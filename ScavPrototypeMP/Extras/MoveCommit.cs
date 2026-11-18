@@ -45,6 +45,7 @@ public static class MoveCommit {
         public uint id;
         public List<Move> moves;
         public float sentAt;
+        public float expiresAt;
     }
 
     sealed class Receipt {
@@ -62,7 +63,10 @@ public static class MoveCommit {
     }
 
     const float ResendSeconds = 2f;
+    const float SettleSeconds = 8f;
     const int Remember = 64;
+    const byte UnresolvedRow = 3;
+    const byte GoneRow = 4;
 
     static uint _session;
     static uint _next = 1;
@@ -124,11 +128,16 @@ public static class MoveCommit {
         if (Net.IsServer)
             return;
         float now = Time.realtimeSinceStartup;
+        DropIds.Clear();
         foreach (var pair in Attempts) {
             Attempt attempt = pair.Value;
-            if (now - attempt.sentAt >= ResendSeconds)
+            if (now >= attempt.expiresAt)
+                DropIds.Add(pair.Key);
+            else if (now - attempt.sentAt >= ResendSeconds)
                 Send(attempt);
         }
+        foreach (uint id in DropIds) Release(Attempts[id]);
+        DropIds.Clear();
     }
 
     internal static void Push() {
@@ -262,6 +271,8 @@ public static class MoveCommit {
         if (!found || si == null || si.syncId.id == 0)
             return false;
         ItemSync.ItemsContainerInfo ici = ItemSync.ItemGetContainerInfo(item);
+        if (si.ItemUnavailable ||
+            (!ici.has_container && item.transform.parent != null)) return false;
         move.item = si.syncId;
         if (ici.is_wearing) {
             move.kind = MoveKind.Worn;
@@ -292,6 +303,7 @@ public static class MoveCommit {
             id = id,
             moves = moves,
             sentAt = Time.realtimeSinceStartup,
+            expiresAt = Time.realtimeSinceStartup + SettleSeconds,
         };
         Hold(attempt);
         Attempts[attempt.id] = attempt;
@@ -470,7 +482,10 @@ public static class MoveCommit {
         for (int i = 0; i < touched.Count; i++) {
             if (!ItemSync.TryGetItemSyncInfo((knetid)touched[i], out SyncInfo si) || si == null)
                 continue;
-            si.WriteContainerInfo();
+            if (si.go != null && si.go.transform.parent == null)
+                si.WriteObjectIntoPacket();
+            else
+                si.WriteContainerInfo();
         }
 
         var rows = new List<Row>(touched.Count);
@@ -495,14 +510,11 @@ public static class MoveCommit {
     }
 
     static MoveReason Check(Body body, Move move) {
-        if (!ItemSync.NetIdToSyncInfoDict.TryGetValue(move.item, out SyncInfo si) || si == null)
-            return MoveReason.StillSyncing;
-        // item's getter throws once the object is gone, so the null check never gets to return missing.
-        if (si.IsDestroyed || si.go == null)
+        Item item = FindServerItem(move.item, out bool gone);
+        if (gone)
             return MoveReason.Missing;
-        Item item = si.item;
         if (item == null)
-            return MoveReason.Missing;
+            return MoveReason.StillSyncing;
         if (!ItemSync.CheckIfBodyCanStealThisItem(item, body))
             return MoveReason.Taken;
         if (!ItemSync.CheckIfBodyReachThisItem(item, body))
@@ -512,7 +524,11 @@ public static class MoveCommit {
         if (move.kind == MoveKind.World)
             return MoveReason.Ok;
         if (move.kind == MoveKind.Bag) {
-            if (move.destNet == 0 || !NetObjectRegistry.TryGetSyncInfo(move.destNet, out SyncInfo box) || box == null || box.go == null)
+            if (move.destNet == 0 || !NetObjectRegistry.TryGetSyncInfo(move.destNet, out SyncInfo box) || box == null)
+                return MoveReason.StillSyncing;
+            if (box.ItemUnavailable || NetObjectRegistry.IsSaveStateItem(box.go))
+                return MoveReason.Taken;
+            if (box.go == null)
                 return MoveReason.StillSyncing;
             Container cont = box.container;
             if (cont == null && !box.go.TryGetComponent(out cont))
@@ -633,36 +649,58 @@ public static class MoveCommit {
     }
 
     static Row Current(ushort id) {
-        var row = new Row { item = id };
-        if (!ItemSync.TryGetItemSyncInfo((knetid)id, out SyncInfo si) || si == null || si.item == null)
+        var row = new Row { item = id, data = UnresolvedRow };
+        Item item = FindServerItem(id, out bool gone);
+        if (gone) row.data = GoneRow;
+        if (item == null) return row;
+        if (NetObjectRegistry.IsSaveStateItem(item.gameObject)) {
+            row.data = ItemSync.OfflineStored;
             return row;
-        ItemSync.ItemsContainerInfo ici = ItemSync.ItemGetContainerInfo(si.item);
+        }
+        ItemSync.ItemsContainerInfo ici = ItemSync.ItemGetContainerInfo(item);
+        if (ici.containerExtraData1 == 0 && item.transform.parent != null) return row;
         row.data = ici.containerExtraData1;
         row.net = ici.knetid;
         return row;
     }
 
+    static Item FindServerItem(ushort id, out bool gone) {
+        gone = false;
+        SyncInfo si;
+        if (!NetObjectRegistry.TryGetSyncInfo(id, out si) || si == null) {
+            if (!NetObjectRegistry.TryGetSyncInfoLive(id, out si)) return null;
+        }
+        if (si.IsDestroyed || si.HasLostObject) {
+            gone = true;
+            return null;
+        }
+        Item item = si.ResolveServerItem();
+        gone = item == null && si.go != null;
+        return item;
+    }
+
     static void Apply(Receipt receipt) {
-        if (receipt == null)
+        if (receipt == null || receipt.session != _session)
             return;
         if (receipt.reason == MoveReason.StillSyncing)
             return;
         if (Attempts.TryGetValue(receipt.attempt, out Attempt attempt))
             Release(attempt);
-        if (receipt.reason == MoveReason.Missing) {
-            DestroyGone(receipt);
-            return;
-        }
         if (receipt.rows == null)
             return;
         _applying = true;
         try {
             for (int i = 0; i < receipt.rows.Count; i++) {
-                if (!Fresh(receipt.rows[i].item, receipt.attempt))
+                Row row = receipt.rows[i];
+                if (!Fresh(row.item, receipt.attempt) || row.data == UnresolvedRow || row.data == ItemSync.OfflineStored)
                     continue;
+                if (row.data == GoneRow) {
+                    if (NetObjectRegistry.TryGetSyncInfo(row.item, out SyncInfo si)) si?.RetireClientItemReplica();
+                    continue;
+                }
                 // hold this parent. a container byte from before the reply must not move it back.
-                NoteLatch(receipt.rows[i]);
-                ApplyRow(receipt.rows[i]);
+                NoteLatch(row);
+                ApplyRow(row);
             }
         } finally {
             _applying = false;
@@ -713,24 +751,6 @@ public static class MoveCommit {
         return data == (byte)(200 + move.destSlot) && net == move.destNet;
     }
 
-    // host lost this id. delete the local one, dont drop a copy on the ground.
-    static void DestroyGone(Receipt receipt) {
-        if (receipt.rows == null)
-            return;
-        _applying = true;
-        try {
-            for (int i = 0; i < receipt.rows.Count; i++) {
-                if (!Fresh(receipt.rows[i].item, receipt.attempt))
-                    continue;
-                if (!ItemSync.TryGetItem(receipt.rows[i].item, out _, out Item item) || item == null)
-                    continue;
-                UnityEngine.Object.Destroy(item.gameObject);
-            }
-        } finally {
-            _applying = false;
-        }
-    }
-
     static void ApplyRow(Row row) {
 		if (!ItemSync.TryGetItem(row.item, out _, out Item item) || item == null)
             return;
@@ -748,7 +768,7 @@ public static class MoveCommit {
             return;
         }
         if (row.data == 1) {
-            if (!NetObjectRegistry.TryGetSyncInfo(row.net, out SyncInfo box) || box == null || box.go == null)
+            if (!NetObjectRegistry.TryGetSyncInfo(row.net, out SyncInfo box) || box == null || box.ItemUnavailable || box.go == null)
                 return;
             Container cont = box.container;
             if (cont == null)

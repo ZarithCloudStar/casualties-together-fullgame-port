@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Together;
@@ -53,6 +54,11 @@ internal static class MpSkinSync {
     private static float _nextReapply;
     private static bool _manualChoice;
     private static SendWindow _localWire;
+    private static object _session;
+    private static uint _localNetwork;
+    private static Body _localBody;
+    private static int _uploadGeneration;
+    private static float _uploadDeadline;
 
     internal static bool IsCoolingDown =>
         MpBody.IsActive && Cooldown.IsActive(Time.unscaledTime);
@@ -98,10 +104,7 @@ internal static class MpSkinSync {
             + " canChangeOnce=" + (SkinLock.CanChangeOnce ? 1 : 0)
             + " " + SkinTrace.SlotSummary(SpriteReplacerPlugin.ActiveSlot,
                 SpriteReplacerPlugin.LoadedSprites, SpriteReplacerPlugin.ActiveSpecies));
-        // numpad 0 / default is stock art - drop the shared zip so peers do not keep the old slot
-        if (IsDefaultSlot(SpriteReplacerPlugin.ActiveSlot)) {
-            DropSharedLocal();
-        }
+        // The sample publishes this choice once the replacement body is ready.
     }
 
     static bool IsDefaultSlot(string slot) {
@@ -110,7 +113,7 @@ internal static class MpSkinSync {
 
     // wound view reads the viewed body's package; local body keeps using LoadedSprites.
     internal static IReadOnlyDictionary<string, Sprite> SpritesForBody(Body body) {
-        if (body == null || !MpBody.IsActive || MpBody.CanApply(body)) {
+        if (body == null || !SpriteReplacerPlugin.DownloadSkins || !MpBody.IsActive || MpBody.CanApply(body)) {
             return null;
         }
 
@@ -147,7 +150,7 @@ internal static class MpSkinSync {
     }
 
     internal static HashSet<string> ColoredWoundSpritesForBody(Body body) {
-        if (body == null || !MpBody.IsActive || MpBody.CanApply(body)) {
+        if (body == null || !SpriteReplacerPlugin.DownloadSkins || !MpBody.IsActive || MpBody.CanApply(body)) {
             return null;
         }
 
@@ -174,12 +177,12 @@ internal static class MpSkinSync {
         SkinTrace.Event("drop-shared-local",
             "prevShared=" + (_lastSharedSlot ?? "-")
             + " sentSig=" + (_sentSignature ?? "-"));
-        _sentSignature = ClearedSignature;
+        _uploadGeneration++;
+        _sentSignature = null;
         _pendingSignature = ClearedSignature;
         _awaiting = false;
         _resend = false;
         _lastSharedSlot = SkinSettings.DefaultFolder;
-        ClearLocalSkin();
         SkinLock.HasLocalSkin = false;
     }
 
@@ -210,6 +213,8 @@ internal static class MpSkinSync {
 
         _sentSignature = CurrentSignature();
         _resend = false;
+        _uploadGeneration++;
+        _awaiting = false;
         ClearLocalSkin();
     }
 
@@ -233,6 +238,7 @@ internal static class MpSkinSync {
         }
 
         if (MpBody.IsHost) {
+            RetireSuperseded(network, player);
             Remove(network, player);
             BroadcastClear(network, player);
         } else {
@@ -249,7 +255,7 @@ internal static class MpSkinSync {
                 ["playerId"] = player,
                 ["clear"] = true
             };
-            MultiplayerApi.RequestServer(FullChannel, payload, OnUploadResponse, true);
+            MultiplayerApi.RequestServer(FullChannel, payload, null, true);
         } catch (Exception ex) {
             Log("clear request failed: " + ex.Message);
         }
@@ -269,11 +275,13 @@ internal static class MpSkinSync {
     }
 
     internal static void Tick() {
-        if (Together.Net.IsClient && (Together.Net.Transport == null || Together.Net.IsConnecting || Together.ScavPlayer.LocalPlayer == null)) return;
-        if (!MpBody.IsActive) {
+        object session = Net.IsRunning ? Net.EntityManager : null;
+        if (!ReferenceEquals(_session, session)) {
             Reset();
-            return;
+            _session = session;
         }
+        if (Together.Net.IsClient && (Together.Net.Transport == null || Together.Net.IsConnecting || Together.ScavPlayer.LocalPlayer == null)) return;
+        if (session == null || !MpBody.IsActive) return;
 
         if (Time.unscaledTime < _nextTick) {
             return;
@@ -283,8 +291,24 @@ internal static class MpSkinSync {
 
         EnsureHandlers();
 
-        if (!MpBody.TryGetLocalIds(out uint localNetwork, out uint localPlayer)) {
+        if (!MpBody.TryGetLocalIds(out uint localNetwork, out uint localPlayer) || localNetwork == 0) {
             return;
+        }
+
+        // wait until local body + world are up before fetching remotes - early apply was
+        // binding torso-only bodies (stock head) and clearing Pending.
+        Body localBody = ResolveLocalBodySafe();
+        if (!SharedMain.LocalWorldIsGenerated || !MpBody.IsBodyFullyReady(localBody)) return;
+
+        // A restored body can replace the original while retaining its network ID.
+        if (_localNetwork != localNetwork || _localBody != localBody) {
+            _resend = _localNetwork != 0 && _lastSharedSlot == SpriteReplacerPlugin.ActiveSlot;
+            _localNetwork = localNetwork;
+            _localBody = localBody;
+            _sentSignature = null;
+            _requested = _awaiting = false;
+            _uploadGeneration++;
+            _nextSample = 0f;
         }
 
         if (Time.unscaledTime >= _nextSample) {
@@ -292,27 +316,19 @@ internal static class MpSkinSync {
             SampleLocalSkin(localNetwork, localPlayer);
         }
 
-        // wait until local body + world are up before fetching remotes - early apply was
-        // binding torso-only bodies (stock head) and clearing Pending.
-        bool joinReady = MpBody.HasLocalBody
-            && MpBody.IsBodyFullyReady(ResolveLocalBodySafe())
-            && SharedMain.LocalWorldIsGenerated;
-
-        if (!_requested && joinReady && !IsCoolingDown && SpriteReplacerPlugin.DownloadSkins
+        if (!_requested && !IsCoolingDown && SpriteReplacerPlugin.DownloadSkins
             && MpBody.IsClient && !MpBody.IsHost) {
             _requested = true;
             SkinTrace.Event("request-existing", SkinTrace.Ids(localNetwork, localPlayer)
-                + " " + SkinTrace.BodyState(ResolveLocalBodySafe())
+                + " " + SkinTrace.BodyState(localBody)
                 + " skinsStored=" + Skins.Count
                 + " pending=" + Pending.Count);
             RequestExistingSkins(localNetwork);
         }
 
-        if (joinReady) {
-            ApplyPending();
-        }
+        ApplyPending();
 
-        if (joinReady && Time.unscaledTime >= _nextReapply) {
+        if (Time.unscaledTime >= _nextReapply) {
             _nextReapply = Time.unscaledTime + 3f;
             if (SpriteReplacerPlugin.DownloadSkins) {
                 foreach (KeyValuePair<uint, MpSkinPackage> pair in Skins) {
@@ -463,6 +479,7 @@ internal static class MpSkinSync {
             payload["clientId"] = ownerNetwork;
 
             if (payload.Value<bool?>("clear") == true) {
+                RetireSuperseded(ownerNetwork, ownerPlayer);
                 Remove(ownerNetwork, ownerPlayer);
                 MultiplayerApi.Broadcast(ApplyChannel, payload, false, true);
                 Log("cleared skin from client " + ownerNetwork + ".");
@@ -490,7 +507,9 @@ internal static class MpSkinSync {
             if (decision == MpUploadPolicy.Decision.Reject) {
                 package.Dispose();
                 Log("rejected locked skin from player " + ownerPlayer + ".");
-                return SkinLock.Payload(false);
+                var rejected = SkinLock.Payload(false);
+                rejected["stored"] = false;
+                return rejected;
             }
 
             bool allow = SkinLock.IsLocked && !sameSkin &&
@@ -512,7 +531,9 @@ internal static class MpSkinSync {
 
             MultiplayerApi.Broadcast(ApplyChannel, payload, false, true);
 
-            return SkinLock.Payload(allow);
+            var response = SkinLock.Payload(allow);
+            response["stored"] = true;
+            return response;
         } catch (Exception ex) {
             Log("server full failed: " + ex);
             return new JValue("error");
@@ -542,6 +563,7 @@ internal static class MpSkinSync {
                 entries.Add(new JObject {
                     ["clientId"] = pair.Key,
                     ["playerId"] = player,
+                    ["species"] = pair.Value.Species,
                     ["hash"] = pair.Value.Hash,
                     ["setName"] = pair.Value.SetName
                 });
@@ -654,9 +676,7 @@ internal static class MpSkinSync {
             return;
         }
 
-        Skins[network] = package;
-        PlayerIds[network] = player;
-        LastContent[player] = package.ContentHash;
+        Store(network, player, package);
         SkinTrace.Event("ensure-local", SkinTrace.Ids(network, player)
             + " " + SkinTrace.PackageSummary(package));
     }
@@ -680,6 +700,7 @@ internal static class MpSkinSync {
 
             if (payload.Value<bool?>("clear") == true) {
                 SkinTrace.Event("recv-clear", SkinTrace.Ids(ownerNetwork, ownerPlayer));
+                RetireSuperseded(ownerNetwork, ownerPlayer);
                 Remove(ownerNetwork, ownerPlayer);
                 return;
             }
@@ -687,6 +708,8 @@ internal static class MpSkinSync {
             string hash = payload.Value<string>("hash") ?? string.Empty;
             if (MpSkinCache.IsHash(hash) &&
                 Skins.TryGetValue(ownerNetwork, out MpSkinPackage existing) &&
+                existing.Species == (payload.Value<int?>("species") ?? 0) &&
+                PlayerIds.TryGetValue(ownerNetwork, out uint existingPlayer) && existingPlayer == ownerPlayer &&
                 string.Equals(existing.Hash, hash, StringComparison.OrdinalIgnoreCase)) {
                 SkinTrace.Event("recv-same", SkinTrace.Ids(ownerNetwork, ownerPlayer)
                     + " hash=" + (hash.Length <= 8 ? hash : hash.Substring(0, 8)));
@@ -738,6 +761,7 @@ internal static class MpSkinSync {
 
                 uint owner = ReadUInt(item, "clientId");
                 uint player = ReadUInt(item, "playerId");
+                int species = item.Value<int?>("species") ?? -1;
                 string hash = item.Value<string>("hash") ?? string.Empty;
                 string setName = item.Value<string>("setName") ?? string.Empty;
                 if (owner == 0 || owner == localNetwork || !MpSkinCache.IsHash(hash)) {
@@ -745,13 +769,17 @@ internal static class MpSkinSync {
                 }
 
                 if (Skins.TryGetValue(owner, out MpSkinPackage existing) &&
-                    string.Equals(existing.Hash, hash, StringComparison.OrdinalIgnoreCase)) {
+                    string.Equals(existing.Hash, hash, StringComparison.OrdinalIgnoreCase) &&
+                    (species < 0 || existing.Species == species)) {
                     continue;
                 }
 
-                if (Cache.TryRead(hash, out byte[] zip)) {
+                // Older hosts omitted species. Fetch the full envelope so the
+                // cache never guesses Experiment for a Milky or Dune package.
+                if (species >= 0 && species <= 2 && Cache.TryRead(hash, out byte[] zip)) {
                     MpSkinPackage package = MpSkinPackage.FromZip(zip, hash, setName);
                     if (package != null) {
+                        package.Species = species;
                         Store(owner, player, package);
                         cached++;
                         continue;
@@ -807,19 +835,26 @@ internal static class MpSkinSync {
         Log("sync response: " + (token == null ? "null" : token.ToString()));
     }
 
-    private static void OnUploadResponse(JToken token) {
+    private static void OnUploadResponse(int generation, JToken token) {
+        if (generation != _uploadGeneration || !ReferenceEquals(_session, Net.EntityManager)) return;
         _awaiting = false;
         if (token != null && token.Type == JTokenType.String) {
             string text = token.Value<string>();
             Log("upload response: " + text);
-            if (text != "busy") {
+            if (text == "reject") {
                 _sentSignature = _pendingSignature;
             }
+            _nextSample = Time.unscaledTime + 3f;
             return;
         }
 
+        if (token is not JObject payload) return;
         _sentSignature = _pendingSignature;
         SkinLock.ApplyRemote(token);
+        if (payload.Value<bool?>("stored") != false) {
+            SkinLock.HasLocalSkin = true;
+            SkinLock.HadLocalSkin = true;
+        }
         HandleRateLimit(token, false);
     }
 
@@ -881,8 +916,9 @@ internal static class MpSkinSync {
     }
 
     private static bool SendToServer(MpSkinPackage package, uint localNetwork, uint localPlayer) {
+        int generation = ++_uploadGeneration;
         bool sent = MultiplayerApi.RequestServer(FullChannel,
-            ToPayload(package, localNetwork, localPlayer), OnUploadResponse, true);
+            ToPayload(package, localNetwork, localPlayer), token => OnUploadResponse(generation, token), true);
         Log("sent local skin (" + package.SetName + ") network=" + localNetwork
             + " player=" + localPlayer + " result=" + sent + ".");
         return sent;
@@ -914,40 +950,36 @@ internal static class MpSkinSync {
             packages.Add(pending);
         }
 
-        foreach (MpSkinPackage package in packages) {
-            package.Dispose();
-        }
-
         Skins.Clear();
         Pending.Clear();
         PlayerIds.Clear();
         Waiting.Clear();
+        foreach (MpSkinPackage package in packages) Release(package);
     }
 
-    private static void Remove(uint ownerNetwork, uint ownerPlayer) {
+    private static void Remove(uint ownerNetwork, uint ownerPlayer, bool clearBody = true) {
+        Skins.Remove(ownerNetwork, out MpSkinPackage package);
+        Pending.Remove(ownerNetwork, out MpSkinPackage pending);
         // host clearing *own* package: local body already ResetBodyToStock via ApplyLocalSkin.
         // clearRemoteSkin resolves remotes only and used to hit another player when
         // netBody.netId collided with their playerId (net=3 -> Sauce plrid 3).
-        if (ownerNetwork != MpBody.LocalClientId && ownerPlayer != MpBody.LocalPlayerId) {
+        if (clearBody && ownerNetwork != MpBody.LocalClientId && ownerPlayer != MpBody.LocalPlayerId) {
             MpBody.ClearRemoteSkin(ownerNetwork, ownerPlayer);
         }
 
-        if (Skins.TryGetValue(ownerNetwork, out MpSkinPackage package)) {
-            package.Dispose();
-            Skins.Remove(ownerNetwork);
-        }
-
-        if (Pending.TryGetValue(ownerNetwork, out MpSkinPackage pending) &&
-            !ReferenceEquals(pending, package)) {
-            pending.Dispose();
-        }
-
-        Pending.Remove(ownerNetwork);
+        Release(package);
+        if (!ReferenceEquals(pending, package)) Release(pending);
         PlayerIds.Remove(ownerNetwork);
         Waiting.Remove(ownerNetwork);
         if (ownerPlayer != 0) {
             LastContent.Remove(ownerPlayer);
         }
+    }
+
+    private static void Release(MpSkinPackage package) {
+        if (package == null) return;
+        WoundViewIntegration.UnbindPackage(package);
+        package.Dispose();
     }
 
     private static bool HasStoredSkin(uint playerId) {
@@ -960,11 +992,22 @@ internal static class MpSkinSync {
         return false;
     }
 
+    private static void RetireSuperseded(uint ownerNetwork, uint ownerPlayer) {
+        // One player can get a new NetBody on reload. The old network ID no
+        // longer identifies their body and must not be advertised to joiners.
+        var superseded = PlayerIds.Where(p => p.Value == ownerPlayer && p.Key != ownerNetwork)
+            .Select(p => p.Key).ToArray();
+        foreach (uint network in superseded) Remove(network, ownerPlayer, clearBody: false);
+    }
+
     private static void Store(uint ownerNetwork, uint ownerPlayer, MpSkinPackage package) {
+        RetireSuperseded(ownerNetwork, ownerPlayer);
         MpSkinPackage old = null;
         if (Skins.TryGetValue(ownerNetwork, out MpSkinPackage existing) &&
             !ReferenceEquals(existing, package)) {
             old = existing;
+            Skins.Remove(ownerNetwork);
+            Pending.Remove(ownerNetwork);
             // drop the old bind first; empty-Head slots must not keep prior head textures alive mid-frame.
             uint player = PlayerIds.TryGetValue(ownerNetwork, out uint id) ? id : ownerPlayer;
             SkinTrace.Event("store-replace", SkinTrace.Ids(ownerNetwork, ownerPlayer)
@@ -981,9 +1024,7 @@ internal static class MpSkinSync {
         LastContent[ownerPlayer] = package.ContentHash;
         Pending[ownerNetwork] = package;
 
-        if (old != null) {
-            old.Dispose();
-        }
+        Release(old);
     }
 
     private static void ApplyPending() {
@@ -1041,7 +1082,12 @@ internal static class MpSkinSync {
         _sentSignature = null;
         _pendingSignature = null;
         _awaiting = false;
+        _localNetwork = 0;
+        _localBody = null;
+        _uploadGeneration++;
+        _nextTick = 0f;
         _nextSample = 0f;
+        _nextReapply = 0f;
         _manualChoice = false;
         _localWire = new SendWindow();
         UploadWindows.Clear();
@@ -1050,15 +1096,12 @@ internal static class MpSkinSync {
             packages.Add(package);
         }
 
-        foreach (MpSkinPackage package in packages) {
-            package.Dispose();
-        }
-
         Skins.Clear();
         Pending.Clear();
         PlayerIds.Clear();
         LastContent.Clear();
         Waiting.Clear();
+        foreach (MpSkinPackage package in packages) Release(package);
         UploadPolicy.Clear();
         RequestLimiter.Clear();
         FetchLimiter.Clear();
@@ -1067,7 +1110,7 @@ internal static class MpSkinSync {
     }
 
     private static string CurrentSignature() {
-        return SpriteReplacerPlugin.ActiveSlot + ":" + SpriteReplacerPlugin.LoadedSprites.Count;
+        return SpriteReplacerPlugin.ActiveSpecies + ":" + SpriteReplacerPlugin.ActiveSlot + ":" + SpriteReplacerPlugin.LoadedSprites.Count;
     }
 
     // once a second, send the slot that is selected now. keypresses do not send.
@@ -1080,6 +1123,7 @@ internal static class MpSkinSync {
         if (IsDefaultSlot(SpriteReplacerPlugin.ActiveSlot)
             || SpriteReplacerPlugin.LoadedSprites.Count == 0) {
             if (!string.Equals(_sentSignature, ClearedSignature, StringComparison.Ordinal)) {
+                _uploadGeneration++;
                 SkinTrace.Event("sample-clear", SkinTrace.Ids(localNetwork, localPlayer)
                     + " slot=" + (SpriteReplacerPlugin.ActiveSlot ?? "-")
                     + " sprites=" + SpriteReplacerPlugin.LoadedSprites.Count);
@@ -1109,9 +1153,7 @@ internal static class MpSkinSync {
             return;
         }
 
-        if (_awaiting) {
-            return;
-        }
+        if (_awaiting && Time.unscaledTime < _uploadDeadline) return;
 
         MpSkinPackage package = MpSkinPackage.FromSlot(SpriteReplacerPlugin.ActiveSlot);
         if (package == null) {
@@ -1144,18 +1186,18 @@ internal static class MpSkinSync {
         }
 
         _pendingSignature = signature;
+        _awaiting = true;
+        _uploadDeadline = Time.unscaledTime + 8f;
         bool sent = SendToServer(package, localNetwork, localPlayer);
         package.Dispose();
         if (!sent) {
+            _awaiting = false;
             SkinTrace.Event("sample-send-fail", SkinTrace.Ids(localNetwork, localPlayer));
             return;
         }
 
-        _awaiting = true;
         _resend = false;
         _lastSharedSlot = SpriteReplacerPlugin.ActiveSlot;
-        SkinLock.HasLocalSkin = true;
-        SkinLock.HadLocalSkin = true;
         if (_manualChoice) {
             _manualChoice = false;
             SkinLock.ConsumeChoice();

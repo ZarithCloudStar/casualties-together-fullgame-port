@@ -568,7 +568,7 @@ public static class CraftCommit {
         try {
             List<Item> inventory = body.GetAllItemsThorough();
             for (int i = 0; i < inventory.Count; i++)
-                AddItem(list, inventory[i], mode, reachable: true);
+                AddItem(list, inventory[i], mode);
             Collider2D[] hits = Physics2D.OverlapCircleAll(body.transform.position, 10f, LayerMask.GetMask("Item"));
             for (int i = 0; i < hits.Length; i++) {
                 if (!hits[i].TryGetComponent(out Item item))
@@ -578,7 +578,7 @@ public static class CraftCommit {
                 bool reach = ItemSync.CheckIfBodyReachThisItem(item, body);
                 if (mode != PoolMode.Wide && !reach)
                     continue;
-                AddItem(list, item, mode, reach);
+                AddItem(list, item, mode);
             }
             return list;
         } finally {
@@ -586,14 +586,12 @@ public static class CraftCommit {
         }
     }
 
-    static void AddItem(List<Item> list, Item item, PoolMode mode, bool reachable) {
+    static void AddItem(List<Item> list, Item item, PoolMode mode) {
         if (item == null)
             return;
-        if (mode == PoolMode.Wide && !reachable) {
-            list.Add(item);
-            return;
-        }
         bool synced = ItemSync.TryGetSyncInfo(item, out SyncInfo si) && si != null;
+        if (synced && (si.ItemUnavailable || si.go != item.gameObject))
+            return;
         if (mode == PoolMode.SyncedReachable && !synced)
             return;
         list.Add(item);
@@ -905,11 +903,11 @@ public static class CraftCommit {
         var resolved = new List<Item>();
         for (int i = 0; i < ids.Length; i++) {
             knetid syncId = ids[i];
-            if (!ItemSync.TryGetItemSyncInfo(syncId, out SyncInfo si) || si == null || !si.IsItem() || si.item == null)
-                return Store(crafts, Deny(session, attempt, CraftReason.Taken, ids, pb, recipe));
-            if (!ItemSync.CheckIfBodyReachThisItem(si, pb.body))
+            if (!ItemSync.TryGetItem(syncId, out _, out Item ingredient))
+                return Store(crafts, Deny(session, attempt, CraftReason.Taken, new[] { ids[i] }, pb, recipe));
+            if (!ItemSync.CheckIfBodyReachThisItem(ingredient, pb.body))
                 return Store(crafts, Deny(session, attempt, CraftReason.Unreachable, ids, pb, recipe));
-            resolved.Add(si.item);
+            resolved.Add(ingredient);
         }
 
         var favourites = new List<Item>();

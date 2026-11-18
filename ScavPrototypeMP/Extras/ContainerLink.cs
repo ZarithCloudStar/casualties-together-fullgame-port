@@ -38,7 +38,7 @@ internal static class ContainerLink {
         if (id == 0) {
             return false;
         }
-        if (!NetObjectRegistry.TryGetSyncInfo(new knetid(id), out bag) || bag == null || bag.go == null) {
+        if (!NetObjectRegistry.TryGetSyncInfo(new knetid(id), out bag) || bag == null || bag.ItemUnavailable || bag.go == null) {
             return false;
         }
         if (bag.Version != item.container_ver.Value) {

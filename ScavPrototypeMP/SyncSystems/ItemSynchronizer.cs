@@ -1594,13 +1594,13 @@ public static class PlayerCamera_HandleReleaseDragging_MultiplayerPatch {
             var body = pc.body;
            
             if (pc.dragItem) {
-                if (ItemSync.TryGetSyncInfo(pc.dragItem, out var si)) {
+                if (ItemSync.TryGetSyncInfo(pc.dragItem, out var si) && si != null && !si.ItemUnavailable) {
 
                     last_ici = ItemSync.ItemGetContainerInfo(pc.dragItem);
                     __state = si;
-                } else {
-                    // it will check if the item is ignored for network
-                    NetObjectRegistry.Client_DeleteUnregisteredSyncableObject(pc.dragItem.gameObject);
+                } else if (Net.IsClient && NetObjectRegistry.ObjectShouldBeSynced(pc.dragItem.gameObject)) {
+                    pc.dragItem = null;
+                    NetObjectRegistry.AlertObjectNotRegistered(true);
                 }
             }
         }
@@ -1687,6 +1687,9 @@ static class PlayerCamera_TryPerformWorldActions_MultiplayerPatch {
 
 
 internal class ItemSync : CasualtiesTogetherSingleton {
+
+    // Existing container byte, distinct from world (0), bag (1), worn and slots.
+    internal const byte OfflineStored = 2;
 
     public static bool verbose => Multiplayer.verbose;
 
@@ -2532,9 +2535,10 @@ public static void BetterUseItem( Body body, Item item) {
 
 #endif
     public static bool TryGetItem(knetid syncid, out SyncInfo isi, out Item item) {
-        if (NetIdToSyncInfoDict.TryGetValue(syncid, out var isii) && isii.go != null && isii.IsItem()) {
+        if (NetIdToSyncInfoDict.TryGetValue(syncid, out var isii) && isii != null && !isii.ItemUnavailable &&
+            isii.item is Item live && live != null && (!Net.IsServer || !NetObjectRegistry.IsSaveStateItem(live.gameObject))) {
             isi = isii;
-            item = isii.item;
+            item = live;
             return true;
         }
         isi = null;
@@ -2649,7 +2653,8 @@ public static void BetterUseItem( Body body, Item item) {
 
     // its more like Check if can take and manipulate the file, without violating any rules
     public static bool CheckIfBodyReachThisItem(GameObject item, Body my_body, float maxdist = 20f, bool check_obstruction = false) {
-        if (item != null && item.TryGetComponent(out Item held)) {
+        if (item == null || (Net.IsServer && NetObjectRegistry.IsSaveStateItem(item))) return false;
+        if (item.TryGetComponent(out Item held)) {
             SnapOntoContainer(held);
             // slept bag contents stay off. they are still in the bag, so the world distance does not apply.
             if (Carried(held, my_body))
@@ -2792,6 +2797,7 @@ public static void BetterUseItem( Body body, Item item) {
     }
 
     public static bool CheckIfBodyCanStealThisItem(Item item, Body my_body, ItemsContainerInfo ici = null) {
+        if (item == null || (Net.IsServer && NetObjectRegistry.IsSaveStateItem(item.gameObject))) return false;
         ici ??= ItemGetContainerInfo(item);
         if (ici.has_container) { 
             if (ici.bodynpc != null)
@@ -2819,14 +2825,7 @@ public static void BetterUseItem( Body body, Item item) {
         si = null;
         return false;
     }
-    public static bool TryGetItemSyncInfo(knetid item_syncid, out SyncInfo si) {
-        if (NetIdToSyncInfoDict.TryGetValue(item_syncid, out var isi) && isi.IsItem()) {
-            si = isi;
-            return si != null;
-        }
-        si = null;
-        return false;
-    }
+    public static bool TryGetItemSyncInfo(knetid item_syncid, out SyncInfo si) => TryGetItem(item_syncid, out si, out _);
 
 
     public static bool ItemCanBeIgnoredForNetwork(Item item) {

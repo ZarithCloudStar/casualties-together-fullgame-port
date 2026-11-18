@@ -60,7 +60,7 @@ plrcolor = nb.plr.playerColor;
 
 if (Multiplayer.rules.SavePlayerInventory) {
 invholder = new GameObject($"SAVESTATE_{nb}");
-inventory = new Item[8];
+inventory = new Item[body.slots.Length];
 
 
 var l = new List<Item>(8);
@@ -78,6 +78,10 @@ item.transform.SetParent(invholder.transform);
 }
 
 invholder.SetActive(false);
+foreach (var item in invholder.GetComponentsInChildren<Item>(true)) {
+if (NetObjectRegistry.TryGetSyncInfo(item, out var si) && si != null && !si.IsDestroyed)
+si.StoreOffline();
+}
 }
 
 }
@@ -115,12 +119,12 @@ nb.plr.playerColor = plrcolor;
 }
 }
 if (Multiplayer.rules.SavePlayerInventory && invholder != null && inventory != null) {
+var storedItems = invholder.GetComponentsInChildren<Item>(true);
 invholder.SetActive(true);
 
-for (int i = 0; i < inventory.Length; i++) {
+for (int i = 0; i < Mathf.Min(inventory.Length, body.slots.Length); i++) {
 var item = inventory[i];
-if (item != null) {
-item.transform.parent = null;
+if (item != null && item.transform.parent == invholder.transform) {
 body.PickUpItem(item, i, true);
 }
 }
@@ -134,18 +138,29 @@ l.Add(item);
 
 foreach (var item in l) { // wear the wearables
 body.AutoPickUpItem(item);
+if (item.transform.parent == invholder.transform) {
+// A changed or occupied slot must not make the holder destroy saved gear.
+item.transform.position = body.transform.position + Vector3.up;
+HeldSeat.Detach(item);
+}
 }
 
+foreach (var item in storedItems) {
+if (item != null && !NetObjectRegistry.IsSaveStateItem(item.gameObject) &&
+    NetObjectRegistry.TryGetSyncInfo(item, out var si) && si != null && !si.IsDestroyed)
+si.WriteContainerInfo();
 }
-// because the state gets delete instantly just delete the thing
-if (invholder != null) {
-GameObject.Destroy(invholder);
 }
+Discard();
 }
 
 // the holder still owns the items. used when a later layer loads the file instead.
 public void Discard() {
 if (invholder != null) {
+foreach (var item in invholder.GetComponentsInChildren<Item>(true)) {
+if (NetObjectRegistry.TryGetSyncInfo(item, out var si) && si != null && !si.IsDestroyed)
+si.Destroy();
+}
 GameObject.Destroy(invholder);
 invholder = null;
 }

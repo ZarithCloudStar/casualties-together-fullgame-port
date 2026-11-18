@@ -108,7 +108,7 @@ internal static class SkinLock {
     }
 
     internal static void Reset() {
-        if (!State.IsLocked && !State.HasLocalSkin && !State.CanChangeOnce) {
+        if (!State.IsLocked && !State.HasLocalSkin && !State.HadLocalSkin && !State.CanChangeOnce) {
             return;
         }
 

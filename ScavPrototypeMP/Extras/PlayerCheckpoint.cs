@@ -166,6 +166,17 @@ public static class PlayerCheckpoint {
         RestoringBody = true;
         try {
             SavesystemPatch.savedatapathreplacement = folder;
+            // Vanilla assumes an empty inventory: an occupied saved slot is
+            // interpreted as a bag containing the next record. Deferred restore
+            // may run on an already equipped body. Validate before replacing it.
+            var saved = JObject.Parse(SaveSystem.Unzip(File.ReadAllBytes(Path.Combine(folder, "save.sv"))));
+            if (saved["items"] is not JArray || saved["itemComponents"] is not JArray ||
+                saved["body"] is not JObject || saved["limbs"] is not JArray)
+                throw new InvalidDataException("Incomplete body checkpoint.");
+            if (((JArray)saved["items"]).Count != ((JArray)saved["itemComponents"]).Count)
+                throw new InvalidDataException("Checkpoint item/component count mismatch.");
+            _gear.Remove(plr.playerId); // never reclaim the retired inventory during EndGearCapture
+            ClearRestoredInventory(plr.body);
             SaveSystem.loadedRun = true;
             SaveSystem_HasSave_MultiplayerPatch.force = true;
             camera.body = plr.body;
@@ -209,6 +220,23 @@ public static class PlayerCheckpoint {
         foreach (var item in body.GetAllItemsThorough()) {
             if (item != null && NetObjectRegistry.ObjectShouldBeSynced(item.gameObject))
                 NetObjectRegistry.Server_EnsureItemIsNetworkRegistered(item.gameObject);
+        }
+    }
+
+    static void ClearRestoredInventory(Body body) {
+        // Include inactive bag contents and prior root-parked gear. Detach now:
+        // Unity Destroy is deferred, and vanilla must see empty slots this frame.
+        var items = body.GetComponentsInChildren<Item>(true);
+        for (int i = items.Length - 1; i >= 0; i--) {
+            var item = items[i];
+            if (item == null) continue;
+            if (item.TryGetComponent<Wearable>(out var wear)) wear.ClearSprites();
+            item.gameObject.SetActive(false);
+            item.transform.SetParent(null);
+            if (NetObjectRegistry.TryGetSyncInfo(item.gameObject, out var sync) && sync != null && !sync.IsDestroyed)
+                sync.Destroy();
+            else
+                UnityEngine.Object.Destroy(item.gameObject);
         }
     }
 
@@ -545,7 +573,8 @@ public static class PlayerCheckpoint {
             log.l($"load gear back on {body} x{moved}");
     }
 
-    // empty slot, then a bag that is already on him, then wear. last resort rides the body so the teleport cannot drop it.
+    // A body-root parent has no wire representation (it is published as ground).
+    // If no seat exists, keep a real loose item at the body rather than a ghost.
     static bool Seat(Body body, Item item) {
         if (item.Stats != null && item.Stats.wearable && TryWear(body, item))
             return true;
@@ -553,11 +582,11 @@ public static class PlayerCheckpoint {
             return true;
         if (TryBag(body, item))
             return true;
-        if (item.rb != null)
-            item.rb.simulated = false;
-        item.transform.SetParent(body.transform);
-        item.transform.localPosition = Vector3.zero;
-        return true;
+        item.transform.SetParent(null);
+        item.transform.position = body.transform.position;
+        HeldSeat.Release(item);
+        log.warn($"LOAD: no inventory seat for {item.id}; retained as a world item");
+        return false;
     }
 
     static bool TryWear(Body body, Item item) {

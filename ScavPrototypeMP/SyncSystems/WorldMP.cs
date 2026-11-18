@@ -161,6 +161,10 @@ public class WorldMP : CasualtiesTogetherSingleton {
             }
         }
 #if FULLGAME
+        if (Util.IsInWorld() && FluidManager.main != null &&
+            newRunSettings.TryGetValue("liquidpushing", out var pushing) && pushing is bool enabled) {
+            FluidManager.main.liquidPushing = enabled;
+        }
         ChipState.ApplyHostRunSettings(newRunSettings, "ApplyRunSettings", Util.IsInWorld());
 #endif
     }
@@ -305,6 +309,12 @@ public class WorldMP : CasualtiesTogetherSingleton {
         // Every world entry (host start, load, menu button) funnels through here,
         // so the "everyone picked a character" gate lives at this choke point.
         if (!CharacterReadyGate.Allow(loadsave ? "LoadVanillaGeneratedWorld(load)" : "LoadVanillaGeneratedWorld(new)")) return;
+        _CheckIfCanLoadAWorld();
+#if FULLGAME
+        // WaitLoad announces the run before the new scene reads its checkpoint.
+        if (loadsave && Net.IsServer && SaveSlots.LoadPrepared)
+            SaveSlots.ApplyPreparedSettings();
+#endif
         // A loaded save owns the character of everyone it already knows about:
         // override whatever the lobby picked before the world is created.
         if (loadsave) {
@@ -314,7 +324,6 @@ public class WorldMP : CasualtiesTogetherSingleton {
 #if FULLGAME
         ChipState.ApplyHostRunSettings(runSettings, loadsave ? "loading save" : "starting run", loadsave);
 #endif
-        _CheckIfCanLoadAWorld();
         SavesystemPatch.PreserveSave = false;
         SavesystemPatch.DebugWorldUsesSave = false;
         ResetWorldParameters();

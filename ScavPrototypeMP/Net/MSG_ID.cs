@@ -237,6 +237,7 @@ public enum NetmsgId : byte {
     SERVER_BlueprintLearn = ___26,
     CLIENT_BlueprintState = ___27,
     SERVER_RequestRecipeState = ___28,
+    CLIENT_StructuralHitNumber = ___29,
 
 #if FULLGAME
     // Use an existing reserved byte without renumbering any P8 message.

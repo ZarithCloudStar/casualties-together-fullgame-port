@@ -65,7 +65,7 @@ internal static class FixContainerInfo
 			return true;
 		}
 		// same transform, new entity life. the cached id now belongs to whatever spawned next.
-		if (LiveVer(item, out byte live) && live != hold.Ver)
+		if (LiveParent(item, out ushort liveNet, out byte live) && (liveNet != hold.Net || live != hold.Ver))
 		{
 			__state.Via = "generation";
 			return true;
@@ -115,8 +115,9 @@ internal static class FixContainerInfo
 	}
 
 	// version of the entity on this parent. false when that entity is not registered yet.
-	static bool LiveVer(Item item, out byte ver)
+	static bool LiveParent(Item item, out ushort net, out byte ver)
 	{
+		net = 0;
 		ver = 0;
 		Transform parent = item.transform.parent;
 		if (parent == null)
@@ -125,17 +126,20 @@ internal static class FixContainerInfo
 		if (slot != null && slot.body != null && slot.body.TryGetNetBody(out NetBody nb) && nb.syncBody != null)
 		{
 			ver = nb.syncBody.Version;
+			net = nb.netId;
 			return true;
 		}
 		Limb limb = parent.GetComponent<Limb>();
 		if (limb != null && limb.body != null && limb.body.TryGetNetBody(out NetBody worn) && worn.syncBody != null)
 		{
 			ver = worn.syncBody.Version;
+			net = worn.netId;
 			return true;
 		}
 		if (parent.GetComponent<Container>() != null && NetObjectRegistry.TryGetSyncInfo(parent.gameObject, out SyncInfo bag) && bag != null)
 		{
 			ver = bag.Version;
+			net = bag.syncId;
 			return true;
 		}
 		return false;

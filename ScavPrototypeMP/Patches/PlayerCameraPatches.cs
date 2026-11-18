@@ -823,19 +823,14 @@ static void Postfix(PlayerCamera __instance, ref List<RaycastResult> uiCasts) {
 if (!Net.IsRunning) return;
 
 var pc = __instance;
-var body = pc.body;
 var dragItem = __instance.dragItem;
 
 if (dragItem == null) return;
 
-if (!NetObjectRegistry.IsRegistered(dragItem.gameObject) && NetObjectRegistry.ObjectShouldBeSynced(dragItem.gameObject)) {
-NetObjectRegistry.Client_DeleteUnregisteredSyncableObject(dragItem.gameObject);
-
-log.warn($"PlayerCamera.TryPickupFromUI:  User tried to drag an item from UI that is not registered yet! {dragItem?.id} ");
-
-// dont allow picking up items in inventory that arent registered yet, cuz they will be soon
-dragItem = null;
-
+if (Net.IsClient && NetObjectRegistry.ObjectShouldBeSynced(dragItem.gameObject) &&
+    (!ItemSync.TryGetSyncInfo(dragItem, out var sync) || sync == null || sync.ItemUnavailable)) {
+// A drag can race registration. Leave the item in its current seat and cancel the gesture.
+pc.dragItem = null;
 NetObjectRegistry.AlertObjectNotRegistered(true);
 }
 

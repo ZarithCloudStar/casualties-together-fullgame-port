@@ -3,6 +3,7 @@ using CasualtiesTogetherUtils;
 using HarmonyLib;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -119,6 +120,22 @@ internal static class SaveSlots {
             } catch (Exception ex) { loading = 0; Report("读档失败，原存档已保留。", ex); }
         });
     }
+    internal static void ApplyPreparedSettings() {
+        var settings = ReadRunSettings(ReadRoot(DirectoryPath));
+        var header = JObject.Parse(File.ReadAllText(Path.Combine(DirectoryPath, SavesystemPatch.mpsaveheaderfile)));
+        Multiplayer.rules = header["RULES"].ToObject<MultiplayerGameRules>();
+        WorldMP.ApplyRunSettings(settings);
+        log.l($"SLOTS: applied saved run settings and multiplayer rules before starting slot={loading}");
+    }
+
+    internal static Dictionary<string, object> ReadRunSettings(JObject root) {
+        var settings = WorldMP.GetNormalRunSettings();
+        var saved = root["runSettings"]?.ToObject<List<(string, string)>>();
+        if (saved != null)
+            foreach (var entry in SaveSystem.TupleListToDic(saved)) settings[entry.Key] = entry.Value;
+        return settings;
+    }
+
     internal static void LoadCompleted(bool success) {
         if (!Enabled || loading == 0) return;
         if (success) { RememberActive(loading); log.l($"SLOTS: load completed slot={loading}"); }

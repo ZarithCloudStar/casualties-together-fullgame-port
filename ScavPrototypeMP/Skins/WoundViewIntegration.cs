@@ -1,11 +1,18 @@
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 using UnityEngine.UI;
 
 internal static class WoundViewIntegration {
-    private static readonly Dictionary<int, Sprite> Originals = new Dictionary<int, Sprite>();
-    // vanilla slot size, taken while the stock sprite is still on the image
-    private static readonly Dictionary<int, Vector2> StockSizes = new Dictionary<int, Vector2>();
+    private sealed class StockImage {
+        internal Sprite Sprite;
+        internal Vector2 Size;
+    }
+
+    // Unity instance IDs can be reused after leaving the map. Bind stock art to
+    // the Image itself so a new panel cannot inherit the previous panel's skin.
+    private static readonly ConditionalWeakTable<Image, StockImage> Images = new();
+    private static readonly ConditionalWeakTable<SpriteRenderer, StockImage> Renderers = new();
 
     internal static void ApplyAll() {
         foreach (WoundView view in Resources.FindObjectsOfTypeAll<WoundView>()) {
@@ -27,17 +34,16 @@ internal static class WoundViewIntegration {
             return;
         }
 
-        int id = image.GetInstanceID();
-        Originals[id] = image.sprite;
-        StockSizes[id] = image.rectTransform.sizeDelta;
+        var stock = Images.GetOrCreateValue(image);
+        stock.Sprite = image.sprite;
+        stock.Size = image.rectTransform.sizeDelta;
     }
 
-    // Replacement art loads at 8 pixels per unit, so scale the native size by the ratio to the stock sprite.
-    private static void SizeLikeStock(Image image, Sprite stock, Sprite replacement) {
-        image.SetNativeSize();
-        if (stock != null && stock.pixelsPerUnit > 0f && replacement.pixelsPerUnit > 0f) {
-            image.rectTransform.sizeDelta *= replacement.pixelsPerUnit / stock.pixelsPerUnit;
-        }
+    internal static void RememberPanel(WoundView view) {
+        foreach (Image image in view.GetComponentsInChildren<Image>(true))
+            if (image != null && !Images.TryGetValue(image, out _) && image.sprite != null &&
+                SkinImporter.WoundViewNames.Contains(image.sprite.name))
+                RememberStock(image);
     }
 
     internal static void Apply(WoundView view) {
@@ -47,59 +53,47 @@ internal static class WoundViewIntegration {
 
         IReadOnlyDictionary<string, Sprite> sprites = SpritesForView(view);
         HashSet<string> colored = ColoredForView(view);
-        HashSet<string> replaced = new HashSet<string>();
         foreach (Image image in view.GetComponentsInChildren<Image>(true)) {
-            if (image == null || image.sprite == null) {
+            if (image == null) {
                 continue;
             }
 
-            int id = image.GetInstanceID();
-            Sprite original;
-            if (!Originals.TryGetValue(id, out original) || original == null) {
-                original = image.sprite;
-                Originals[id] = original;
+            if (!Images.TryGetValue(image, out var stock)) {
+                if (image.sprite == null || !SkinImporter.WoundViewNames.Contains(image.sprite.name)) continue;
+                RememberStock(image);
+                stock = Images.GetOrCreateValue(image);
             }
-            // only sample the box while stock art is showing. a custom sprite's size is the one we just wrote.
-            if (image.sprite == original) {
-                StockSizes[id] = image.rectTransform.sizeDelta;
-            }
+            Sprite original = stock.Sprite;
+            if (original == null) continue;
             DefaultSpriteExport.Capture(original);
 
-            Sprite replacement;
-            if (sprites != null && sprites.TryGetValue(original.name, out replacement) && replacement != null) {
-                if (image.sprite != replacement) {
-                    image.sprite = replacement;
-                    // custom wound art is often larger/square vs stock; match vanilla Start() sizing.
-                    image.SetNativeSize();
-                }
-                // vanilla slot times how the new png compares to the stock sprite. gunsaw does this.
-                // setNativeSize was ignoring that slot, and our sprites are 8 pixels per unit, so they blew up.
-                FitToStock(image, id, original, replacement);
-                replaced.Add(replacement.name);
-            } else if (image.sprite != original) {
-                image.sprite = original;
-                if (StockSizes.TryGetValue(id, out Vector2 stockSize)) {
-                    image.rectTransform.sizeDelta = stockSize;
-                }
-            }
+            if (sprites != null && sprites.TryGetValue(original.name, out var replacement) && replacement != null) {
+                image.sprite = replacement;
+                // Keep the prefab's anchors. SetNativeSize changes them as well
+                // as the size, making a restored stretched image a large quad.
+                image.rectTransform.sizeDelta = new Vector2(
+                    stock.Size.x * replacement.rect.width / original.rect.width,
+                    stock.Size.y * replacement.rect.height / original.rect.height);
+            } else Restore(image, stock);
         }
 
         foreach (SpriteRenderer renderer in view.GetComponentsInChildren<SpriteRenderer>(true)) {
-            if (renderer == null || renderer.sprite == null) {
+            if (renderer == null) {
                 continue;
             }
 
-            Sprite original;
-            if (!Originals.TryGetValue(renderer.GetInstanceID(), out original) || original == null) {
-                original = renderer.sprite;
-                Originals[renderer.GetInstanceID()] = original;
+            if (!Renderers.TryGetValue(renderer, out var stock)) {
+                if (renderer.sprite == null || !SkinImporter.WoundViewNames.Contains(renderer.sprite.name)) continue;
+                stock = Renderers.GetOrCreateValue(renderer);
+                stock.Sprite = renderer.sprite;
             }
+            Sprite original = stock.Sprite;
+            if (original == null) continue;
             DefaultSpriteExport.Capture(original);
 
             Sprite replacement;
             if (sprites != null && sprites.TryGetValue(original.name, out replacement) && replacement != null) {
                 renderer.sprite = replacement;
-                replaced.Add(replacement.name);
             } else {
                 renderer.sprite = original;
             }
@@ -110,22 +104,43 @@ internal static class WoundViewIntegration {
         DefaultSpriteExport.ExportNew();
     }
 
-    // gunsaw keeps the vanilla box, then grows it only by how the new drawing compares to the stock sprite.
-    private static void FitToStock(Image image, int id, Sprite stock, Sprite custom) {
-        if (!StockSizes.TryGetValue(id, out Vector2 box)) {
-            box = image.rectTransform.sizeDelta;
-            StockSizes[id] = box;
-        }
+    private static void Restore(Image image, StockImage stock) {
+        image.sprite = stock.Sprite;
+        image.rectTransform.sizeDelta = stock.Size;
+    }
 
-        float stockW = stock != null ? stock.rect.width : 0f;
-        float stockH = stock != null ? stock.rect.height : 0f;
-        float scaleX = stockW > 0.5f ? custom.rect.width / stockW : 1f;
-        float scaleY = stockH > 0.5f ? custom.rect.height / stockH : 1f;
-        image.rectTransform.sizeDelta = new Vector2(box.x * scaleX, box.y * scaleY);
+    internal static void UnbindPackage(MpSkinPackage package) {
+        foreach (WoundView view in Resources.FindObjectsOfTypeAll<WoundView>()) {
+            if (view == null || !view.gameObject.scene.IsValid()) continue;
+            foreach (Image image in view.GetComponentsInChildren<Image>(true)) {
+                if (Images.TryGetValue(image, out var stock) && stock.Sprite != null && UsesPackage(image.sprite, package))
+                    Restore(image, stock);
+            }
+            foreach (SpriteRenderer renderer in view.GetComponentsInChildren<SpriteRenderer>(true)) {
+                if (Renderers.TryGetValue(renderer, out var stock) && stock.Sprite != null && UsesPackage(renderer.sprite, package))
+                    renderer.sprite = stock.Sprite;
+            }
+        }
+    }
+
+    private static bool UsesPackage(Sprite sprite, MpSkinPackage package) => sprite != null &&
+        package.Sprites.TryGetValue(sprite.name, out var replacement) && sprite == replacement;
+
+    // An Image whose Sprite was destroyed otherwise draws a solid, tinted quad.
+    private static void RestoreMissing(Image image) {
+        if (image != null && image.sprite == null && Images.TryGetValue(image, out var stock) && stock.Sprite != null)
+            Restore(image, stock);
     }
 
     // the game tints the inner wound near black. keep a custom color visible.
     internal static void ShowCustomColors(WoundView view) {
+        if (view != null && view.limbImages != null) {
+            foreach (Image image in view.limbImages) {
+                RestoreMissing(image);
+                if (image != null && image.transform.childCount > 0)
+                    RestoreMissing(image.transform.GetChild(0).GetComponent<Image>());
+            }
+        }
         ShowCustomColors(view, ColoredForView(view));
     }
 

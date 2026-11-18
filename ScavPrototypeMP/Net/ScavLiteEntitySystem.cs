@@ -956,7 +956,15 @@ public class SyncInfo : PredictableEntityLogic {
         useIgnoreArmed = false;
     }
 
+    // A container ID can outlive its GameObject while a child still names it.
+    private const byte MissingObject = 5;
+    private bool clientItemRetired;
+    internal bool HasLostObject => container_data1.Value == MissingObject;
+    internal bool ItemUnavailable => IsDestroyed || clientItemRetired || HasLostObject ||
+        container_data1.Value == ItemSync.OfflineStored;
+
     public bool CreateObject() {
+        if (Net.IsClient && ItemUnavailable) return false;
 #if FULLGAME
         if (WorldSnapshotTransfer.BlockClientObjects) return false;
         WorldSnapshotTransfer.Adopt(this);
@@ -980,6 +988,10 @@ public class SyncInfo : PredictableEntityLogic {
             return false;
         if (go == null) {
             if (!Net.IsServer && TrapClaim.GlassBlocked(Id)) return false;
+            // A carried item has no current world pose. Do not create a dynamic
+            // loose replica at its stale pose while its owner is still loading.
+            // RetryNullObject retries this same entity; no provisional mesh/id.
+            if (Net.IsClient && container_data1.Value != 0 && !CarryParentReady()) return false;
             if (!Util.IsWorldInstantiated() || String.IsNullOrEmpty(resourceId.Value)) {
                 return false;
             }
@@ -1022,6 +1034,18 @@ public class SyncInfo : PredictableEntityLogic {
         } catch (Exception) {
         }
         return pos;
+    }
+
+    bool CarryParentReady() {
+        if (!Util.IsWorldGenerated()) return false;
+        byte data = container_data1.Value;
+        if (data >= 100) {
+            if (!ContainerLink.TryBody(this, out NetBody owner) || owner.body == null) return false;
+            if (data == 100) return owner.body.limbs != null;
+            int slot = data - 200;
+            return owner.body.slots != null && slot >= 0 && slot < owner.body.slots.Length && owner.body.slots[slot] != null;
+        }
+        return data == 1 && ContainerLink.TryBag(this, out SyncInfo bag) && bag.container != null;
     }
 
 
@@ -1139,7 +1163,7 @@ public class SyncInfo : PredictableEntityLogic {
 
     // go was cleared but the tracker is still on the fruit in the slot.
     void RebindMesh() {
-        if (go != null)
+        if (go != null || HasLostObject)
             return;
         if (tracker != null && tracker.gameObject != null && ReferenceEquals(tracker.syncInfo, this)) {
             go = tracker.gameObject;
@@ -1154,6 +1178,42 @@ public class SyncInfo : PredictableEntityLogic {
                 tracker = found;
             return;
         }
+    }
+
+    internal void RetireClientItemReplica() {
+        if (!Net.IsClient) return;
+        clientItemRetired = true;
+        RemoveClientItemReplica();
+    }
+
+    void RemoveClientItemReplica() {
+        if (!Net.IsClient || go == null) return;
+        GameObject replica = go;
+        if (replica.TryGetComponent(out Wearable wearable)) wearable.ClearSprites();
+        if (replica.TryGetComponent(out SyncInfoGameObjectTracker attached) && ReferenceEquals(attached.syncInfo, this))
+            attached.syncInfo = null;
+        if (NetObjectRegistry.SyncRegistry.TryGetValue(replica, out var mapped) && ReferenceEquals(mapped, this))
+            NetObjectRegistry.SyncRegistry.Remove(replica);
+        go = null;
+        tracker = null;
+#if FULLGAME
+        if (EndingLabObjects.SceneCritical(replica)) return;
+#endif
+        replica.SetActive(false);
+        GameObject.Destroy(replica);
+    }
+
+    internal void MarkObjectLost() {
+        go = null;
+        tracker = null;
+        container_netId.Value = default;
+        container_ver.Value = 0;
+        container_data1.Value = MissingObject;
+    }
+
+    internal Item ResolveServerItem() {
+        if (go == null && !IsDestroyed) RebindMesh();
+        return item;
     }
 
     void DestroyTrackedGameObject() {
@@ -1229,6 +1289,10 @@ public class SyncInfo : PredictableEntityLogic {
                 //    WriteObjectIntoPacket();
                 //}
             } else if (IsClient) {
+                if (ItemUnavailable) {
+                    RemoveClientItemReplica();
+                    return;
+                }
                 // a null mesh is not finished. the ignore window used to skip the only retry, so this one ignores that gate.
                 // a few hundred ms, not every tick. once go is set we stop.
                 if (go == null && tracker != null)
@@ -1262,7 +1326,15 @@ public class SyncInfo : PredictableEntityLogic {
          UpdateTransform();
     }
 
+    internal void StoreOffline() {
+        container_netId.Value = default;
+        container_ver.Value = 0;
+        container_data1.Value = ItemSync.OfflineStored;
+    }
+
     internal void WriteContainerInfo() {
+        if (Net.IsServer && container_data1.Value == ItemSync.OfflineStored && NetObjectRegistry.IsSaveStateItem(go))
+            return;
         // q writes the container once, after both hands land.
         // a lifted ingredient keeps its old byte. writing 0 here lands on the id after it is reused for the result.
         if (CraftCommit.Silenced(this))
@@ -2119,6 +2191,13 @@ public class SyncInfo : PredictableEntityLogic {
     void UpdateItemContainer() {
         if (go == null || item == null)
             return;
+        // A previously loose replica can receive a carried byte before the
+        // parent. Suspend physics while waiting, too; do not teleport it every
+        // packet against the local physics simulation.
+        if (Net.IsClient && container_data1.Value != 0 && !CarryParentReady()) {
+            if (item.rb != null) item.rb.simulated = false;
+            return;
+        }
         ItemSync.ParentTestHand(item);
         // still waiting on the move. a stale ground byte shouldnt dump it.
         if (MoveCommit.Held(syncId))
@@ -2557,7 +2636,7 @@ public class SyncInfo : PredictableEntityLogic {
 #endif
 
     public bool IsItem() {
-        return go.GetComponent<Item>() != null;
+        return item != null;
     }
     public bool CanBeUsedToAmputate() {
         return IsItem() && Item_DoAmputate_MultiplayerPatch.ItemsThatCanAmputate.Contains(item.id);

@@ -326,7 +326,7 @@ internal static class FixInvSync
 	static int Publish(SyncInfo info)
 	{
 		Item item = info.item;
-		if (item == null)
+		if (item == null || info.container_data1.Value == ItemSync.OfflineStored)
 			return 0;
 		if (MoveCommit.Held(info.syncId))
 			return 0;
@@ -414,8 +414,16 @@ internal static class FixInvSync
 		Transform parent = info.item.transform.parent;
 		if (parent == null)
 			return false;
-		if (data >= 100)
-			return parent.GetComponent<InventorySlot>() != null || parent.GetComponent<Limb>() != null;
+		if (data >= 100) {
+			if (!ContainerLink.TryBody(info, out NetBody owner) || owner.body == null) return false;
+			if (data == 100) {
+				Limb limb = parent.GetComponent<Limb>();
+				return limb != null && limb.body == owner.body;
+			}
+			int slot = data - 200;
+			return owner.body.slots != null && slot >= 0 && slot < owner.body.slots.Length
+				&& owner.body.slots[slot] != null && parent == owner.body.slots[slot].transform;
+		}
 		ushort net = info.container_netId.Value;
 		byte ver = info.container_ver.Value;
 		if (net == 0)

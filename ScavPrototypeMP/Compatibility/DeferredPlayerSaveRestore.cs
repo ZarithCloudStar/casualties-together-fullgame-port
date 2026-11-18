@@ -27,7 +27,7 @@ internal static class DeferredPlayerSaveRestore {
         world.trapRarityMultiplier = data.Value<float>("trapRarity");
         world.endlessLoops = data.Value<int>("endlessLoops");
         world.isMercRun = data.Value<bool>("isMercRun") || EndingFlow.State.isMercRun;
-        WorldGeneration.runSettings = SaveSystem.TupleListToDic(data["runSettings"].ToObject<List<(string, string)>>());
+        WorldGeneration.runSettings = SaveSlots.ReadRunSettings(data);
         SaveSystem.savedRunTime = data.Value<float>("runTime");
         PlayerCamera.main.caloriesConsumed = data.Value<int>("caloriesConsumed");
         WoundView.view.SetCharDetails(data.Value<int>("cHeight"), data.Value<int>("cAge"), data.Value<int>("cId"), data.Value<int>("cVer"));

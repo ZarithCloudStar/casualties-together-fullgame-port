@@ -286,16 +286,15 @@ public class SyncInfoGameObjectTracker : MonoBehaviour {
 
 	void OnDestroy() {
 
-        NetObjectRegistry.SyncRegistry.Remove(gameObject); // for sure 
+        if (NetObjectRegistry.SyncRegistry.TryGetValue(gameObject, out var mapped) && ReferenceEquals(mapped, syncInfo))
+            NetObjectRegistry.SyncRegistry.Remove(gameObject);
 
         // null syncInfo means DestroyTrackedGameObject is already killing this go. don't free the id twice.
         if (syncInfo != null) {
             if ( Net.IsServer ) {
-                // the go is going away but a bag id has to stay taken while any item still names it.
-                // parked SAVESTATE_ stays too, mesh and id.
+                // Reserve the ID if needed, but stop advertising a mesh which was destroyed.
                 if (NetObjectRegistry.KeepFarMesh(syncInfo, gameObject)) {
-                    syncInfo.tracker = null;
-                    syncInfo.go = null;
+                    NetObjectRegistry.RetainLostObject(syncInfo);
                     syncInfo = null;
                     return;
                 }
@@ -349,6 +348,7 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
 
     public static Dictionary<GameObject, SyncInfo> SyncRegistry = new Dictionary<GameObject, SyncInfo>();
     public static Dictionary<knetid, SyncInfo> NetIdToSyncInfoDict = new Dictionary<knetid, SyncInfo>();
+    static readonly HashSet<SyncInfo> LostObjects = new();
 
 
 
@@ -361,6 +361,10 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
         foreach (var si in new List<SyncInfo>(NetObjectRegistry.SyncRegistry.Values)) {
             si.Destroy();
         }
+        foreach (var si in LostObjects) {
+            if (!si.IsDestroyed) si.Destroy();
+        }
+        LostObjects.Clear();
         NetObjectRegistry.NetIdToSyncInfoDict.Clear();
         NetObjectRegistry.SyncRegistry.Clear();
         foreach (var item in GameObject.FindObjectsOfType<SyncInfoGameObjectTracker>()) {
@@ -397,6 +401,7 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
 
         SyncRegistry.Clear();
         NetIdToSyncInfoDict.Clear();
+        LostObjects.Clear();
         foreach (var item in GameObject.FindObjectsOfType<SyncInfoGameObjectTracker>()) {
             item.syncInfo = null;
             SyncInfoGameObjectTracker.Destroy(item);
@@ -447,7 +452,7 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
             return false;
         byte ver = si.Version;
         foreach (SyncInfo other in SyncRegistry.Values) {
-            if (other == null || other == si)
+            if (other == null || other == si || other.ItemUnavailable)
                 continue;
             if (TryNet(other, out ushort net, out byte namedVer) && net == id && namedVer == ver)
                 return true;
@@ -460,6 +465,28 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
         if (ContainerStillNamed(si))
             return true;
         return go != null && IsSaveStateItem(go);
+    }
+
+    internal static void RetainLostObject(SyncInfo si) {
+        si.MarkObjectLost();
+        LostObjects.Add(si);
+    }
+
+    static void ReleaseUnreferencedLostObjects() {
+        if (LostObjects.Count == 0) return;
+
+        var named = new HashSet<int>();
+        foreach (SyncInfo other in SyncRegistry.Values) {
+            if (other != null && !other.ItemUnavailable && TryNet(other, out ushort id, out byte version) && id != 0)
+                named.Add(NameKey(id, version));
+        }
+
+        LostObjects.RemoveWhere(si => {
+            if (si.IsDestroyed) return true;
+            if (named.Contains(NameKey(si.syncId, si.Version))) return false;
+            si.Destroy();
+            return true;
+        });
     }
 
     static bool OnABody(SyncInfo si) {
@@ -560,8 +587,8 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
         }
     }
 
-    static bool IsSaveStateItem(GameObject go) {
-        Transform walk = go.transform.parent;
+    internal static bool IsSaveStateItem(GameObject go) {
+        Transform walk = go != null ? go.transform.parent : null;
         while (walk != null) {
             if (walk.name != null && walk.name.StartsWith("SAVESTATE_"))
                 return true;
@@ -756,6 +783,7 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
             // the rare pass still drops far trackers, then queues dead players or the
             // living-player downward circle. SlowStamp runs one of those circles every 0.1s.
             if (do_slow_mode) {
+                ReleaseUnreferencedLostObjects();
 
                 { // do unregistering
                     int autounregistercount = 0;
@@ -864,7 +892,7 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
     }
     // the id map can miss after a reused id is destroyed late. the mesh map still has the live object.
     public static bool TryGetSyncInfoLive(knetid syncid, out SyncInfo si) {
-        if (TryGetSyncInfo(syncid, out si) && (si is not null) && !si.IsDestroyed) {
+        if (TryGetSyncInfo(syncid, out si) && (si is not null) && !si.IsDestroyed && !si.HasLostObject) {
             return true;
         }
         si = null;
@@ -872,7 +900,7 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
             return false;
         }
         foreach (SyncInfo cur in SyncRegistry.Values) {
-            if ((cur is null) || cur.IsDestroyed) {
+            if ((cur is null) || cur.IsDestroyed || cur.HasLostObject) {
                 continue;
             }
             try {
@@ -998,6 +1026,8 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
                     existing.syncInfo.go = go;
                 return existing.syncInfo;
             }
+
+            if (IsSaveStateItem(go)) return null;
 
 #if TESTING
             if (ObjectShouldNotBeSynced(go)) {

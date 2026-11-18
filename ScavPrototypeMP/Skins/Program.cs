@@ -1144,7 +1144,7 @@ public class SettingsApplyAllPatch {
 [HarmonyPatch(typeof(WoundView), "Awake")]
 public class WoundViewAwakePatch {
     static void Postfix(WoundView __instance) {
-        WoundViewIntegration.Apply(__instance);
+        WoundViewIntegration.RememberPanel(__instance);
     }
 }
 
@@ -1156,10 +1156,19 @@ public class WoundViewStartPatch {
             return;
         }
 
-        Image head = __instance.limbImages[0];
-        WoundViewIntegration.RememberStock(head);
-        if (head != null && head.transform.childCount > 0) {
-            WoundViewIntegration.RememberStock(head.transform.GetChild(0).GetComponent<Image>());
+        // Vanilla Start replaces the head with stock art for Milky and Dune.
+        // Experiment leaves the current image in place, which may already be custom.
+        if (__instance.body != null && (__instance.body.charType == 1 || __instance.body.charType == 2)) {
+            Image head = __instance.limbImages[0];
+            int index = __instance.body.charType * 2;
+            var sprites = __instance.headCharSprites;
+            if (head != null && sprites != null && index + 1 < sprites.Length) {
+                if (head.sprite == sprites[index]) WoundViewIntegration.RememberStock(head);
+                if (head.transform.childCount > 0) {
+                    var inner = head.transform.GetChild(0).GetComponent<Image>();
+                    if (inner != null && inner.sprite == sprites[index + 1]) WoundViewIntegration.RememberStock(inner);
+                }
+            }
         }
 
         WoundViewIntegration.Apply(__instance);

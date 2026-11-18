@@ -1304,7 +1304,7 @@ WoundView.view.body = PlayerCamera.main.body;
 }
 
 
-Server_DropAllInventory();
+if (Net.IsServer) Server_DropAllInventory();
 
 ScavPlayer.BodyToPlayerDict.Remove(body);
 
@@ -1320,8 +1320,7 @@ void Test(ScavPlayer plr) {
 public void OnDestroy() {
 
 try {
-// host only. clients that also built PlayerSavedState parked gear under a local
-// sAVESTATE_ without DetachSyncKeepMesh, then path5 fought a loose trashbag ghost.
+// Only the host decides whether a departing player's inventory is stored or dropped.
 if (Net.IsServer && Util.IsInWorld() && body != null && Multiplayer.rules.DisconnectShouldSaveAnything) {
 #if TESTING
 log.l($"Saved player state of {this}");

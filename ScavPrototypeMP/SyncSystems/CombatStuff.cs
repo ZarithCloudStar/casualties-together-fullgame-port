@@ -2,6 +2,7 @@ using CasualtiesTogetherUtils;
 using HarmonyLib;
 using KrokV5Optimization;
 using LiteNetLib;
+using LiteNetLib.Utils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -100,9 +101,11 @@ if (Util.IsBodyLocal(body)) { // its local
 
 //OG: Body.UseItemInHand
 if (body.conscious && body.GetItem(body.handSlot) is var item && item != null && item.Stats != null && item.Stats.usable && item.Stats.usableWithLMB) {
-// guns still skip the next health snapshot. their shots already go out on their own.
-if (CombatStuff.ItemIsUsedForAttacking(item) && NetObjectRegistry.TryGetSyncInfoOrRegister(item.gameObject, out var si))
-si.SetIgnoreTimeForRoundTrip();
+// Register attack tools before use. Guns still protect their predicted shot state;
+// melee arms its own window only for swings that actually predict item changes.
+if (CombatStuff.ItemIsUsedForAttacking(item) && NetObjectRegistry.TryGetSyncInfoOrRegister(item.gameObject, out var si)) {
+if (si.IsGun()) si.SetIgnoreTimeForRoundTrip();
+}
 else if (!Net.IsServer && !CombatStuff.ItemIsUsedForAttacking(item)
 && body.TryGetNetBody(out var nb) && nb.IsLocal
 && ItemSync.TryGetSyncInfo(item, out var useSi)) {
@@ -677,6 +680,9 @@ return building_dmg;
     static BuildingEntity _LastHitBuilding;
     static Vector2 _LastHitPos;
     static bool _LastHitWasBlock;
+    // Host sends are synchronous. The receiver reports a confirmed world hit to
+    // the original swing, so its tool delegate can spend condition exactly once.
+    static _MyAttackState hostWorldSwing;
 
     // vanilla pickaxe AttackInfo.distance (Item.SetupItems). 2x so lag/lerp don't reject real hits.
     public const float BlockHitReachReference = 5.2f;
@@ -690,6 +696,8 @@ return building_dmg;
         public AttackInfo atk;
         public Body body;
         public float atkpwr;
+        public bool confirmedReplayHit;
+        public bool confirmedWorldHit;
     }
 
     // return true if its not a body
@@ -736,11 +744,10 @@ return building_dmg;
             var islocal = Util.IsBodyLocal(LastAttacker);
             var isphysactive = ScavMPBuildingSynchronizer.BuildingHasActivePhysics(b);
 
-            if (islocal) {
-                if (b.TryGetSyncInfo(out var si)) {
-                    si.SetIgnoreTimeForRoundTrip();
-                }
-            }
+            // Only animal damage is predicted locally. Renewing this window on a
+            // structure hit suppresses its authoritative health until swings stop.
+            if (islocal && b.animal && b.TryGetSyncInfo(out var si))
+                si.SetIgnoreTimeForRoundTrip();
 
             // the client reported nothing for this swing, so nobody else applies the damage: let the vanilla code do it on the host copy.
             if (StaticHitValidation) {
@@ -756,7 +763,7 @@ return building_dmg;
 
             // local MP swing: skip vanilla static damage. Host loopbacks SERVER_PlayerBodyAttack
             // onto the same world - vanilla + ServerReceiver was double-hitting.
-            // pure clients predict in Postfix; server applies once for everyone.
+            // The postfix predicts animal hits; structural health comes from the host.
             if (islocal) {
                 _LastHitBuilding = b;
                 _LastHitPos = hit.point;
@@ -773,6 +780,7 @@ return building_dmg;
 
     const int CorpseHitCharType = 2; // corpseScript.Start: only a Dune can hit a world corpse
     static Body hostRerunAttacker;
+    static bool hostRerunConfirmedHit;
 
     // corpseScript.Start sets cantHit from this machine's own player, so a non-Dune host never hits a corpse for a Dune client.
     // while the host re-runs a client swing the attacker's species decides instead; Body.Attack calls this in place of reading cantHit.
@@ -975,6 +983,7 @@ return building_dmg;
             atk = atk,
             atkpwr = CalculateAttackPower(__instance, LastAttackInfo),
             body = __instance,
+            confirmedReplayHit = Net.IsServer && hostRerunConfirmedHit && hostRerunAttacker == __instance,
         };// only possible thing to change that i dont really want for remote peers
 
 
@@ -1025,6 +1034,11 @@ return building_dmg;
         if (!__runOriginal) __state.candoattack = false;
         LastAttackResult = __result;
 
+        // The server already applied the hit. Its mirror can still be on local
+        // cooldown, but the tool delegate must spend condition for that hit.
+        if (__runOriginal && __state.confirmedReplayHit)
+            __result = true;
+
         StaticHitValidation = false;
         breakTheAttackLoop = false;
 
@@ -1062,6 +1076,11 @@ return building_dmg;
                             pb.SetNetHealthSyncIgnoreTime();
                         }
 
+                    } else if (_LastHitBuilding != null && !_LastHitBuilding.animal) {
+                        // The host publishes structural health. Keep immediate
+                        // impact feedback without editing the replica's health.
+                        if (attackerIsLocal)
+                            Sound.Play(_LastHitBuilding.hitSound, _LastHitPos);
                     } else if (_LastHitBuilding != null) {
 
                         float totaldmg = DamageBuilding(__instance, __state.atk, _LastHitBuilding, __state.atkpwr, true, _LastHitPos);
@@ -1079,6 +1098,7 @@ return building_dmg;
 
                 if (Util.IsBodyLocal(__instance)) {
                     AnyObjectNetId victim_netid = new AnyObjectNetId();
+                    bool worldHit = false;
                     {
                         if (_LastHitLimb != null) {
                             if (_LastHitLimb.TryGetNetBody(out var pb)) {
@@ -1087,11 +1107,13 @@ return building_dmg;
                         } else if (_LastHitBuilding != null) {
                             if (NetObjectRegistry.TryGetSyncInfoOrRegister(_LastHitBuilding, out var victim_si)) {
                                 victim_netid = new AnyObjectNetId(victim_si);
+                                worldHit = !_LastHitBuilding.animal;
                                 victim_si.relaxed_combat_sync = true;
-                                victim_si.SetIgnoreTimeForRoundTrip();
+                                if (!worldHit) victim_si.SetIgnoreTimeForRoundTrip();
                             }
                         } else if (_LastHitWasBlock) {
                             victim_netid = AnyObjectNetId.ForBlockHit();
+                            worldHit = true;
                         }
                     }
 
@@ -1109,11 +1131,11 @@ return building_dmg;
                         if (Body_UseItem_MultiplayerPatch.current_used_item != null && NetObjectRegistry.TryGetSyncInfo(Body_UseItem_MultiplayerPatch.current_used_item.gameObject, out var si1)) {
                             writer.Put(si1.syncId);
 
-                            si1.SetIgnoreTimeForRoundTrip();
+                            if (!worldHit) si1.SetIgnoreTimeForRoundTrip();
                         } else if (holditem != null && holditem.Stats.usable && CombatStuff.ItemIsUsedForAttacking(holditem) && NetObjectRegistry.TryGetSyncInfo(holditem.gameObject, out var si)) {
                             writer.Put(si.syncId);
 
-                            si.SetIgnoreTimeForRoundTrip();
+                            if (!worldHit) si.SetIgnoreTimeForRoundTrip();
                         } else {
                             writer.Put((knetid)0);
                         }
@@ -1128,7 +1150,16 @@ return building_dmg;
                         if (_LastHitBuilding != null)
                             EvidenceBag.Line("hit send " + EvidenceBag.Side() + " victim=" + victim_netid + " " + EvidenceBag.Building(_LastHitBuilding));
 
-                        Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
+                        var previousWorldSwing = hostWorldSwing;
+                        if (Net.IsServer && worldHit) hostWorldSwing = __state;
+                        try {
+                            Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
+                        } finally {
+                            hostWorldSwing = previousWorldSwing;
+                        }
+                        // Clients take structural tool condition from the host.
+                        // Terrain hit effects still run immediately in vanilla.
+                        if (worldHit) __result = Net.IsServer && __state.confirmedWorldHit;
                         // WRITER END;
 
 #if DEBUG 
@@ -1188,7 +1219,7 @@ return building_dmg;
             if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(plr.body.transform.position, $"S: PlayerBodyAttack {clientId} to didhit:{didhit}  unarmed:{unarmed} hitobj:{hitobj}");
 
             SyncInfo tool_si;
-            if (!unarmed && NetObjectRegistry.TryGetSyncInfo(attackitem_syncid, out tool_si) && tool_si.IsItem() && CombatStuff.ItemIsUsedForAttacking(tool_si.item) && ItemSync.CheckIfBodyReachThisItem(tool_si, plr.body, 20, true)) {
+            if (!unarmed && NetObjectRegistry.TryGetSyncInfo(attackitem_syncid, out tool_si) && tool_si?.item is Item tool && tool != null && CombatStuff.ItemIsUsedForAttacking(tool) && ItemSync.CheckIfBodyReachThisItem(tool_si, plr.body, 20, true)) {
 #if DEBUG
                 log.l($"actually using a tool, ok?  {tool_si}  ");
 #endif
@@ -1222,6 +1253,11 @@ return building_dmg;
             Plugin.log.LogWarning($"COPYING atkinfo {LastAttackInfo?.damage} ");
 #endif
             var atkinfo = LastAttackInfo.CloneViaSerialization();
+            // The retrieval-only attack skips vanilla Body.Attack, which applies
+            // this run setting before calculating either kind of hit damage.
+            float damageRule = WorldGeneration.GetRunSettingFloat("attackdamage");
+            atkinfo.damage *= damageRule;
+            atkinfo.structuralDamage *= damageRule;
 
 
             var atkdir = KM.NormalTo(limb1pos, targetlookpos);
@@ -1296,7 +1332,7 @@ return building_dmg;
 
                 }
 
-            } else if (hitobj.TryGetSyncInfo(out var building_si) && building_si.IsBuilding()) {
+            } else if (hitobj.TryGetSyncInfo(out var building_si) && building_si?.go != null && building_si.IsBuilding()) {
                 Body_Attack_MultiplayerPatch.ForceOnlyStaminaUse = true; // we know the hit
 #if DEBUG
                 log.l($"{plr}  CHECKING CombatStuff.AttackHitType.Building ");
@@ -1313,10 +1349,20 @@ return building_dmg;
                     }
 
                     float totaldmg = DamageBuilding(plr.body, atkinfo, building_si.building, attackpower, true, hitPos);
+                    if (!building_si.IsDestroyed && building_si.go != null)
+                        building_si.WriteObjectIntoPacket();
                     didhitconfirmed = true;
 
 
-                    WorldGeneration.CreateDamageNumber((Vector2)building_si.building.transform.position + Vector2.up * 2, (int)totaldmg);
+                    Vector2 numberPos = (Vector2)building_si.building.transform.position + Vector2.up * 2;
+                    int damageNumber = (int)totaldmg;
+                    WorldGeneration.CreateDamageNumber(numberPos, damageNumber);
+                    if (!pb.IsLocal && !building_si.building.animal && damageNumber > 0) {
+                        var number = Net.CreateWriter(NetmsgId.CLIENT_StructuralHitNumber);
+                        number.Put(numberPos);
+                        number.Put(damageNumber);
+                        Net.Server_SendTo(DeliveryMethod.ReliableUnordered, number, clientId);
+                    }
 
 
                     //netObjectRegistry.Server_QueueSync(building_si);
@@ -1333,20 +1379,34 @@ return building_dmg;
             log.l($"{plr}  {hitobj} applied damages ");
 #endif
 
-            LastAttackResult = true; // reset it ig man
-
-
-            plr.body.limbs[1].transform.position = limb1pos;
-            plr.body.targetLookPos = targetlookpos;
-            try {
-                Body_Attack_MultiplayerPatch.hostRerunAttacker = plr.body;
-                if (tool_si == null) {
-                    plr.body.Attack(CombatStuff.default_unarmed_attackinfo, plr.body.handSlot);
-                } else {
-                    ItemSync.BetterUseItem(pb.body, tool_si.item);
+            if (pb.IsLocal && hostWorldSwing?.body == plr.body) {
+                // The original host swing already used stamina and played its
+                // animation. Its delegate will consume condition on return.
+                hostWorldSwing.confirmedWorldHit = didhitconfirmed;
+                ForceOnlyStaminaUse = false;
+                LastAttackResult = false;
+            } else {
+                LastAttackResult = true;
+                plr.body.limbs[1].transform.position = limb1pos;
+                plr.body.targetLookPos = targetlookpos;
+                var previousRerunAttacker = hostRerunAttacker;
+                bool previousConfirmedHit = hostRerunConfirmedHit;
+                try {
+                    hostRerunAttacker = plr.body;
+                    hostRerunConfirmedHit = didhitconfirmed;
+                    if (tool_si == null) {
+                        plr.body.Attack(CombatStuff.default_unarmed_attackinfo, plr.body.handSlot);
+                    } else {
+                        ItemSync.BetterUseItem(pb.body, tool_si.item);
+                        if (didhitconfirmed && tool_si.go != null && !tool_si.IsDestroyed)
+                            tool_si.WriteObjectIntoPacket();
+                    }
+                } finally {
+                    hostRerunAttacker = previousRerunAttacker;
+                    hostRerunConfirmedHit = previousConfirmedHit;
+                    ForceOnlyStaminaUse = false;
+                    StaticHitValidation = false;
                 }
-            } finally {
-                Body_Attack_MultiplayerPatch.hostRerunAttacker = null;
             }
 
             if (!LastAttackResult && // if the flag wasnt true
@@ -1382,6 +1442,14 @@ return building_dmg;
     }
 
 
+
+    [ClientReceiver((byte)NetmsgId.CLIENT_StructuralHitNumber)]
+    static void Client_StructuralHitNumber(knetid _, NetDataReader reader) {
+        reader.Get(out Vector2 pos);
+        int damage = reader.GetInt();
+        if (Net.IsClient && Util.IsWorldGenerated() && pos.IsFinite() && damage > 0)
+            WorldGeneration.CreateDamageNumber(pos, damage);
+    }
 
     [ClientReceiver((byte)NetmsgId.CLIENT_PlayerBodyAttack_Relay)]
     static void Client_ReceiveAndVisualizePlayerBodyAttack(knetid _, LiteNetLib.Utils.NetDataReader reader) {
