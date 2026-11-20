@@ -349,9 +349,10 @@ public static class WorldGeneration_CreateExplosion_MultiplayerPatch {
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.RegenerateWorld))]
 public static class RegenerateWorldPatch {
 
-    public static void Prefix(WorldGeneration __instance) {
+    public static void Prefix(WorldGeneration __instance, bool __0) {
 
         try {
+			LobbyHostTransfer.ArmBoundary(__instance, __0);
 			
             Con.UnNoclip();
 

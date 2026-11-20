@@ -187,6 +187,7 @@ __instance.image.raycastTarget = __instance.image.color.a >= 0.02f;
 public static class PlayerCamera_LateUpdate_TraderHold {
 private static void Postfix(PlayerCamera __instance) {
 TraderPinLog.Hold(__instance);
+PlayerCamera_SwitchHands_MultiplayerPatch.RefreshHandIcon(__instance);
 
 // keep the vanilla body-based reading for living players. Once the
 // local player is dead, make the reading follow the spectator camera.
@@ -259,6 +260,7 @@ var body = pc.body;
 
 if (!prev_radialOpen && pc.radialOpen) {
 
+PlayerCamera_SwitchHands_MultiplayerPatch.RefreshHandIcon(pc);
 UIInGame.StopPlayerInteractionMenu();
 
 } else {

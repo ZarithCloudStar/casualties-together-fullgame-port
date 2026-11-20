@@ -2033,6 +2033,7 @@ public class TransportSteamworks : NetTransportBase {
             } else if (pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ClosedByPeer
                 || pCallback.m_info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ProblemDetectedLocally) {
                 bool mapped = connectionMapping.TryGetValue(remote, out var data) && data.connection == pCallback.m_hConn;
+                if (LobbyHostTransfer.HandlePlannedDisconnect(remote)) return;
                 if (currentTransport && Net.IsClient && ownDial && remote == KSteam.CURRENT_LOBBY.ownerID.m_SteamID)
                     SessionJoinLog.Failure(pCallback.m_info.m_eState + ":" + pCallback.m_info.m_eEndReason, pCallback.m_info.m_szEndDebug, true);
                 SessionLog.Event("STEAM DISCONNECTED", $"remote={remote} state={pCallback.m_info.m_eState} end={pCallback.m_info.m_eEndReason} debug={OneLine(pCallback.m_info.m_szEndDebug)} mapped={mapped}");
@@ -2046,8 +2047,14 @@ public class TransportSteamworks : NetTransportBase {
                     return;
                 }
                 bool clientFailed = Net.IsClient && ownDial;
-                if (clientFailed) RecordClientFailure();
+                bool keepLobbyForTransfer = clientFailed && LobbyHostTransfer.KeepLobbyForReconnect(remote);
+                if (clientFailed && !keepLobbyForTransfer) RecordClientFailure();
                 RemoveSteamUser(remote);
+                if (keepLobbyForTransfer) {
+                    Multiplayer.DoMultiplayerStatusMessageLog("迁移连接暂时失败，保留大厅并重试。");
+                    LobbyHostTransfer.ScheduleReconnect();
+                    return;
+                }
                 if (clientFailed) {
                     Multiplayer.ShutdownNetwork(); // includes ShutdownReset, even after an established session fails
                     Multiplayer.DoMultiplayerStatusMessageLog("与房主的连接已断开，请稍后重新连接。");

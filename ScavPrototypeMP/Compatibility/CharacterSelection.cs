@@ -149,13 +149,9 @@ internal static class CharacterSelection {
             return false;
         }
 
-        // A save that already owns this player's character refuses any change, even
-        // while the host is back in the lobby between runs.
-        if (chosen && CharacterLobby.LockedBySave && Local != (byte)chr) {
-            log.warn($"CHARACTER: refused changing chr={chr}; this save already binds chr={Local}.");
-            Multiplayer.DoMultiplayerStatusMessageLog(Text("character_locked_saved", "This save already has your character; it cannot be changed."));
-            return false;
-        }
+        // The save binding is authoritative on the server, but it must not make
+        // the lobby page read-only. The local preview can differ until the host
+        // starts; applying the binding happens on the next world load.
 
         // Once a body exists the character is locked: the server cannot rebuild a
         // live body, and a client-only swap desyncs the appearance between peers.
@@ -245,8 +241,9 @@ internal static class CharacterSelection {
         player.characterSelected = chr;
         player.characterChosen = chosen;
         if (chosen && modUnchipped.HasValue) {
-            CharacterRunMemory.SetIfAbsent(CharacterRunMemory.PlayerKey(player.SteamId, player.playerName), chr);
-            ChipState.ApplyServer(player, modUnchipped.Value, true);
+            bool inWorld = Util.IsInWorld();
+            if (inWorld) CharacterRunMemory.SetIfAbsent(CharacterRunMemory.PlayerKey(player.SteamId, player.playerName), chr);
+            ChipState.ApplyServer(player, modUnchipped.Value, inWorld);
         }
         CharacterLobby.Publish(player);
         // netBody dereferences body inside its getter. A lobby player may not
@@ -341,6 +338,13 @@ internal static class PreRunScript_SelectCharacter_RememberPatch {
     static void Prefix(ref int chr) {
         if (CharacterSelection.CommandLineOverride.HasValue) chr = CharacterSelection.Local;
     }
-    static void Postfix(int chr) => CharacterSelection.Choose(chr);
+    static void Postfix(int chr) {
+        if (Net.IsClient && CharacterLobby.ShouldShowPanel) {
+            CharacterLobby.Preview(chr);
+            if (CharacterLobby.LocalChosen) CharacterLobby.CommitDraft();
+            return;
+        }
+        CharacterSelection.Choose(chr);
+    }
 }
 #endif

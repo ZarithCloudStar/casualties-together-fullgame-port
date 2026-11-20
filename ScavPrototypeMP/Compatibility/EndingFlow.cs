@@ -161,11 +161,13 @@ internal static partial class EndingFlow {
         Restore(saved);
     }
 
-    static void Publish() {
+    internal static void SendTo(knetid clientId) => Publish(new[] { clientId });
+
+    static void Publish(IEnumerable<knetid> clients = null) {
         if (!Net.IsServer) return;
         var writer = Net.CreateWriter(NetmsgId.CLIENT_EndingState);
         writer.Put(JsonConvert.SerializeObject(Capture()));
-        Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, ServerMain.AllClientIdsExceptHost);
+        Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, clients ?? ServerMain.AllClientIdsExceptHost);
     }
 
     [ClientReceiver((byte)NetmsgId.CLIENT_EndingState)]

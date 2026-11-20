@@ -25,6 +25,7 @@ public static class BagSleep
 	static readonly HashSet<int> Holds = new HashSet<int>();
 	internal static bool IsSleeping(GameObject go) => go != null && Holds.Contains(go.GetInstanceID());
 	static readonly Dictionary<int, bool> Lights = new Dictionary<int, bool>();
+	static readonly Dictionary<int, List<Behaviour>> Paused = new Dictionary<int, List<Behaviour>>();
 	static int _sleepLeft;
 
 	internal static void Note(Item item)
@@ -54,7 +55,9 @@ public static class BagSleep
 		for (int i = 0; i < Rows.Count; i++)
 		{
 			Item item = Rows[i].Item;
-			if (item == null || item.gameObject.activeSelf)
+			if (item == null)
+				continue;
+			if (item.gameObject.activeSelf && !Paused.ContainsKey(Rows[i].Id))
 				continue;
 			if (!item.TryGetComponent(out SyncInfoGameObjectTracker tracker))
 				continue;
@@ -99,7 +102,13 @@ public static class BagSleep
 			}
 			Hold(item);
 			GameObject go = item.gameObject;
-			if (go.activeSelf)
+			if (WornShow(box))
+			{
+				if (!go.activeSelf)
+					go.SetActive(true);
+				Pause(item);
+			}
+			else if (go.activeSelf)
 			{
 				if (_sleepLeft <= 0)
 					continue;
@@ -107,9 +116,21 @@ public static class BagSleep
 				_sleepLeft--;
 			}
 			item.HandleDecay();
+			TickTrade(item);
 			if (Net.IsServer)
 				ItemSync.SpentDestroy(item);
 		}
+	}
+
+	static void TickTrade(Item item)
+	{
+		if (!item.TryGetComponent(out BoughtItem bought))
+			return;
+		if (Net.IsClient && NetObjectRegistry.IsRegistered(item.gameObject))
+			return;
+		bought.time -= Time.deltaTime;
+		if (bought.time < 0f)
+			UnityEngine.Object.Destroy(bought);
 	}
 
 	internal static void WakeContents(Container box)
@@ -153,6 +174,13 @@ public static class BagSleep
 				continue;
 			}
 			Hold(child);
+			if (WornShow(box))
+			{
+				if (!child.gameObject.activeSelf)
+					child.gameObject.SetActive(true);
+				Pause(child);
+				continue;
+			}
 			if (!child.gameObject.activeSelf)
 				continue;
 			if (left <= 0)
@@ -175,6 +203,7 @@ public static class BagSleep
 		int id = Rows[index].Id;
 		Ids.Remove(id);
 		Holds.Remove(id);
+		Paused.Remove(id);
 		int last = Rows.Count - 1;
 		Rows[index] = Rows[last];
 		Rows.RemoveAt(last);
@@ -189,8 +218,42 @@ public static class BagSleep
 
 	static void Release(Item item)
 	{
-		Holds.Remove(item.gameObject.GetInstanceID());
+		int id = item.gameObject.GetInstanceID();
+		Resume(id);
+		Holds.Remove(id);
 		ChunkSleep.Watch(item);
+	}
+
+	static bool WornShow(Container box)
+	{
+		if (box == null || !box.TryGetComponent(out Item bag) || bag.id == null)
+			return false;
+		return bag.id == "belt" || bag.id == "traumarig";
+	}
+
+	static void Pause(Item item)
+	{
+		int id = item.gameObject.GetInstanceID();
+		if (Paused.ContainsKey(id))
+			return;
+		var list = new List<Behaviour>();
+		foreach (MonoBehaviour script in item.GetComponentsInChildren<MonoBehaviour>(true))
+		{
+			if (script == null || !script.enabled)
+				continue;
+			script.enabled = false;
+			list.Add(script);
+		}
+		Paused[id] = list;
+	}
+
+	static void Resume(int id)
+	{
+		if (!Paused.TryGetValue(id, out List<Behaviour> list))
+			return;
+		foreach (Behaviour script in list)
+			if (script != null) script.enabled = true;
+		Paused.Remove(id);
 	}
 
 	// chunk wake asks this before setactive. a closed bag stays off, an open one does not.
@@ -208,7 +271,7 @@ public static class BagSleep
 		Item item = go.GetComponent<Item>();
 		if (item == null)
 			return false;
-		if (HeldOpen(box) || Breaking(box) || MoveCommit.Busy(item) || KeepLit(item, box))
+		if (HeldOpen(box) || Breaking(box) || MoveCommit.Busy(item) || KeepLit(item, box) || WornShow(box))
 			return false;
 		return true;
 	}

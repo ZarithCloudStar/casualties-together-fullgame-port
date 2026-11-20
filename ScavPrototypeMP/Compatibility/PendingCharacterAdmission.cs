@@ -68,10 +68,19 @@ internal static class PendingCharacterAdmission {
     internal static bool HasName(string name) => pending.Values.Any(p => p.Intro.userName == name);
     internal static bool IsPending(knetid id) => pending.ContainsKey(id);
 
+    internal static bool TryGetSteamId(knetid id, out ulong steamId) {
+        foreach (var entry in pending.Values) {
+            if (entry.Id.Equals(id)) { steamId = entry.SteamId; return true; }
+        }
+        steamId = 0;
+        return false;
+    }
+
     internal static bool CanDispatch(knetid caller, ushort message) {
         ushort id = caller;
         if (id < FirstTemporaryId || id > LastTemporaryId) return true;
         if (!pending.TryGetValue(caller, out var entry)) return false;
+        if (message == (byte)NetmsgId.CustomMessage && LobbyHostTransfer.AllowPendingControl) return true;
         if (message == (byte)NetmsgId.SERVER_SetCharacter && !entry.Creating) return true;
         if (!entry.LoggedIgnoredMessage) {
             entry.LoggedIgnoredMessage = true;
@@ -171,8 +180,9 @@ internal static class PendingCharacterAdmission {
             entry.Promote(entity); // rebind the transport before Unity Start
             promoted.Add(entity);
             Remove(entry);
-            if (chosen) CharacterRunMemory.SetIfAbsent(CharacterRunMemory.PlayerKey(entry.SteamId, entry.CreationName), entry.Intro.characterSelected);
-            ChipState.ApplyServer(entity.player, entry.ModUnchipped, chosen);
+              bool bindToWorld = chosen && Util.IsInWorld();
+              if (bindToWorld) CharacterRunMemory.SetIfAbsent(CharacterRunMemory.PlayerKey(entry.SteamId, entry.CreationName), entry.Intro.characterSelected);
+              ChipState.ApplyServer(entity.player, entry.ModUnchipped, bindToWorld);
             log.l($"CHARACTER: admitted player={entry.Intro.userName} tempId={entry.Id} playerId={entity.OwnerId} reason={(chosen ? "confirmed" : "timeout")}");
             if (chosen) log.l($"CHARACTER: player={entry.Intro.userName} chose chr={entry.Intro.characterSelected} ({ServerMain.GetCharacterPrefabPath(entry.Intro.characterSelected)})");
             return true;

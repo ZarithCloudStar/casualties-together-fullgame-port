@@ -149,6 +149,9 @@ public class SyncInfoGameObjectTracker : MonoBehaviour {
     public bool IsContainer() {
         return GetComponent<Container>() != null;
     }
+    public bool IsCrystal() {
+        return GetComponent<CrystalEnemy>() != null;
+    }
     public bool IsBuilding() {
         return GetComponent<BuildingEntity>() != null;
     }
@@ -783,6 +786,9 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
             // the rare pass still drops far trackers, then queues dead players or the
             // living-player downward circle. SlowStamp runs one of those circles every 0.1s.
             if (do_slow_mode) {
+#if FULLGAME
+                if (Util.GameIsFull()) LayerBuildingStream.RegisterNearby();
+#endif
                 ReleaseUnreferencedLostObjects();
 
                 { // do unregistering

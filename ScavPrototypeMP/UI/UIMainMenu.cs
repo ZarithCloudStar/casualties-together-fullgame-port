@@ -224,6 +224,13 @@ label.text = Lang.Get(open ? "mainmenu_mainbutton_close" : "mainmenu_mainbutton"
 }
 
 public static bool mainmenu_open { get; private set; }
+#if FULLGAME
+internal static void OpenConnectedRoom() {
+current_tab = menutab_directconnect;
+_CONNECTIONSECONDPANEL_TOOLBAR = 0;
+SetOpen(true);
+}
+#endif
 public static void SetOpen(bool open_or_nah) {
 if (open_or_nah && !CoreLibLoaded) {
 ApplyMpMenuButton(false);
@@ -378,6 +385,7 @@ GUI.skin.label.fontSize = ogfontsize;
 GUI.skin.label.alignment = ogalign;
 
 _GUI__PanelInfo();
+HostTransferUI.DrawLobbyAction();
 
 var should_do_buttons_usable = Util.IsInWorld() && !UIMainMenu.IsOpen();
 
@@ -1684,30 +1692,47 @@ _SCROLL_FULLRULELIST = GUILayout.BeginScrollView(_SCROLL_FULLRULELIST);
 
 
 var rule_fields = typeof(MultiplayerGameRules).GetFields(BindingFlags.Instance | BindingFlags.Public).ToList();
-
-if (!String.IsNullOrWhiteSpace(_GUI____RenderRuleField_search)) {
-rule_fields = rule_fields.Where(f => f.Name.ContainsInsensitive(_GUI____RenderRuleField_search)
-|| (Lang.Get("rule_name_" + f.Name, true) ?? f.Name).ContainsInsensitive(_GUI____RenderRuleField_search)).ToList();
+var searching = !String.IsNullOrWhiteSpace(_GUI____RenderRuleField_search);
+var groups = RuleCategories.Group(rule_fields);
+if (searching) {
+    groups = groups.Select(g => (
+        g.category,
+        fields: g.category.Title.ContainsInsensitive(_GUI____RenderRuleField_search)
+            ? g.fields
+            : g.fields.Where(f => f.Name.ContainsInsensitive(_GUI____RenderRuleField_search)
+                || (Lang.Get("rule_name_" + f.Name, true) ?? f.Name).ContainsInsensitive(_GUI____RenderRuleField_search)).ToList()
+    )).Where(g => g.fields.Count > 0).ToList();
 }
 
-if (rule_fields.Count == 0) {
-GUI.skin.label.alignment = TextAnchor.UpperCenter;
-GUILayout.Label(Lang.Get("filter_found_nothing"));
+if (groups.Count == 0) {
+    GUI.skin.label.alignment = TextAnchor.UpperCenter;
+    GUILayout.Label(Lang.Get("filter_found_nothing"));
 } else {
-_GUI____RenderRuleField_cur_max_width = 0;
-foreach (var fld in rule_fields) {
-GUILayout.BeginHorizontal();
-try {
-_GUI____RenderRuleField(fld, can_edit, r2);
-} catch (Exception e) {
-log.error($"_GUI___ConnectionSecondPanel_ContentRender_RenderRulesList: \nFLD: {fld} \n{e.ToString()}");
+    _GUI____RenderRuleField_cur_max_width = 0;
+    foreach (var group in groups) {
+        var category = group.category;
+        var fields = group.fields;
+        bool open = searching || RuleCategories.IsExpanded(category);
+        int changed = fields.Count(f => !RuleCategories.IsDefault(f, f.GetValue(Multiplayer.rules)));
+        string header = string.Format("{0} {1} ({2}{3})", open ? "[-]" : "[+]", category.Title, fields.Count,
+            changed > 0 ? ", " + (Lang.Get("mmct_rules_changed", true) ?? "changed") + ": " + changed : "");
+        if (GUILayout.Button(header) && !searching) {
+            Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
+            RuleCategories.SetExpanded(category, !open);
+        }
+        if (!open) continue;
+        foreach (var fld in fields) {
+            GUILayout.BeginHorizontal();
+            try {
+                _GUI____RenderRuleField(fld, can_edit, r2);
+            } catch (Exception e) {
+                log.error($"_GUI___ConnectionSecondPanel_ContentRender_RenderRulesList: {fld}\n{e}");
+            }
+            GUILayout.EndHorizontal();
+        }
+    }
+    _GUI____RenderRuleField_last_max_width = Mathf.Min(r2.width * 0.5f, _GUI____RenderRuleField_cur_max_width);
 }
-GUILayout.EndHorizontal();
-}
-_GUI____RenderRuleField_last_max_width = Mathf.Min(r2.width * 0.5f, _GUI____RenderRuleField_cur_max_width);
-
-}
-
 GUILayout.EndScrollView();
 
 }

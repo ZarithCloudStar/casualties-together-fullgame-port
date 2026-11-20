@@ -1727,8 +1727,8 @@ fld.SetValueDirect(rulesref, p);
 }
 
 
-if (rules.VoicechatQuality >= Voicechat.STANDART_FREQUENCIES.Length || rules.VoicechatQuality < 0) {
-rules.VoicechatQuality = (byte)Voicechat.STANDART_FREQUENCIES.Length;
+if (rules.VoicechatQuality >= Voicechat.STANDART_FREQUENCIES.Length) {
+rules.VoicechatQuality = (byte)(Voicechat.STANDART_FREQUENCIES.Length - 1);
 }
 Voicechat.SAMPLE_RATE = Voicechat.STANDART_FREQUENCIES[rules.VoicechatQuality];
 
@@ -1866,7 +1866,7 @@ static internal List<Type> WorldSingletons = new();
 
 // CALLED ONLY FROM PLUGIN ENTRY POINT
 internal static void _FIRST_INIT() {
-FULL_VERSION_TAG = "V" + Application.version + "_MPv" + BuildInfo.NETWORK_VERSION;
+FULL_VERSION_TAG = "V" + Application.version.TrimStart('v', 'V') + "_MPv" + BuildInfo.NETWORK_VERSION;
 SessionLog.Event("PROTOCOL", FULL_VERSION_TAG);
 log.l($"MP VERSION TAG: {FULL_VERSION_TAG}  |  BUILD: {KSteam.GetModBuildTag()} (同版本号但不同补丁包的 DLL 构建不同) ");
 
@@ -2339,7 +2339,7 @@ log.error($"ClientCustomReceiver: \"{messageStr}\": {e.Message}\n{s}");
 [ServerReceiver((byte)NetmsgId.CustomMessage)]
 static void ServerReceiver__CustomMessage(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
 reader.Get(out uint hash);
-if (ScavPlayer.TryGetPlayerFromClientId(clientId, out var plr) && _ServerReceivers.TryGetValue(hash, out var func)) {
+if (_ServerReceivers.TryGetValue(hash, out var func) && ScavPlayer.TryGetPlayerFromClientId(clientId, out var plr)) {
 try {
 func(plr, reader);
 } catch (Exception e) {
@@ -2348,6 +2348,11 @@ var messageStr = _ReceiversOriginalNames.GetValueSafe(hash) ?? hash.ToString();
 log.error($"ServerCustomReceiver: \"{messageStr}\": {e.Message}\n{s}");
 }
 }
+#if FULLGAME
+else if (PendingCharacterAdmission.TryGetSteamId(clientId, out ulong steamId)) {
+    LobbyHostTransfer.HandlePendingServerMessage(steamId, reader);
+}
+#endif
 }
 
 

@@ -300,9 +300,10 @@ public class ClientMain : MonoBehaviour {
     }
 
 
-    public static void ReadRagdollPacket(ref LiteNetLib.Utils.NetDataReader reader, Body body) {
-        body.Ragdoll();
-        bool apply = body != null;
+    public static void ReadRagdollPacket(ref LiteNetLib.Utils.NetDataReader reader, Body body, bool updateRagdollState = true) {
+        if (body == null) return;
+        if (updateRagdollState) body.Ragdoll();
+        bool apply = true;
         var center = body.GetUpperTorso().GetPosition();
         foreach (var limb in body.limbs) {
             reader.Get(out Vector2 limb_rb_position);
@@ -328,7 +329,7 @@ public class ClientMain : MonoBehaviour {
                 limb.rb.angularVelocity = Util_MPExtensions.UnquantizeFloatFromShort(limb_rb_angularVelocity, _RAGDOLL_ANGVEL_QUANTIZE);
             }
         }
-        if (body.IsRagdolling() && body.TryGetNetBody(out var nb))  {
+        if (Net.IsServer && body.IsRagdolling() && body.TryGetNetBody(out var nb)) {
             nb.SetBodyPosition(center);
         }
     }
@@ -520,6 +521,7 @@ public class ClientMain : MonoBehaviour {
                         // Deactivate the copy, keeping the live local character playable.
                         ServerMain.CHARACTER_PREFAB = GameObject.Instantiate(localBody.transform.root.gameObject);
                         ServerMain.CHARACTER_PREFAB.SetActive(false);
+                        MpBody.ResetBodyToStock(ServerMain.CHARACTER_PREFAB.GetComponentInChildren<Body>(true));
                     } else {
                         log.error($"FULLGAME CHARACTER TEMPLATE: Resources.Load failed for '{path}' and PlayerCamera.main.body is missing.");
                         if (Net.IsRunning) {
@@ -558,6 +560,7 @@ public class ClientMain : MonoBehaviour {
                 ServerMain.CHARACTER_PREFAB = GameObject.Instantiate(og_char);
 
                 ServerMain.CHARACTER_PREFAB.SetActive(false);
+                MpBody.ResetBodyToStock(ServerMain.CHARACTER_PREFAB.GetComponentInChildren<Body>(true));
             } else {
                 if (Net.IsRunning) {
                     Multiplayer.DoMultiplayerStatusMessageError("PLAYER CHARACTER NOT FOUND!!!!!!!!!!!!!!!! RESTART THE GAME! RESTART !!!!!!!!!!!!!!!!!!!!");
@@ -1066,12 +1069,21 @@ public class ClientMain : MonoBehaviour {
     
     [ClientReceiver((byte)NetmsgId.CLIENT_ragdollpack)]
     static void ClientReceiver__ragdollpack(knetid _, LiteNetLib.Utils.NetDataReader reader) {
-        reader.Get(out knetid netbodyid);
-        if (NetBody.TryGetNetBodyFromId(netbodyid,out var nb)) {
-            reader = reader.DecompressReader();
+        if (!Net.IsRunning || !Net.IsClient || reader.AvailableBytes < 5) return;
 
-            //ClientMain.ReadRagdollPacket(ref reader, nb.body);
-        }
+        reader.Get(out knetid netbodyid);
+        reader.Get(out byte version);
+        reader.Get(out ushort tick);
+        if (!NetBody.TryGetNetBodyFromId(netbodyid, out var nb) || nb.body == null ||
+            nb.syncBody == null || nb.syncBody.Version != version ||
+            nb.body.standing || nb.IsPiggybacking() || (nb.IsLocal && nb.body.alive)) return;
+
+        // LES owns standing and carrying. A delayed limb pose must not trigger either transition.
+        if (nb.syncBody._standing.Value || nb.syncBody._isPiggyback.Value) return;
+        reader = reader.DecompressReader();
+        const int limbPoseBytes = 18;
+        if (reader.AvailableBytes != nb.body.limbs.Length * limbPoseBytes || !nb.syncBody.AcceptRagdollPose(tick)) return;
+        ReadRagdollPacket(ref reader, nb.body, updateRagdollState: false);
     }
 
     [ClientReceiver((byte)NetmsgId.GenerateWorld_SeedAnnounce)]
@@ -1132,6 +1144,7 @@ public class ClientMain : MonoBehaviour {
             Multiplayer.DoMultiplayerStatusMessageLog($"### STARTING GAME (RECEIVED ANNOUNCEMENT FROM SERVER) ###");
 #if FULLGAME
             EndingFlow.ClientStartingRun();
+            CharacterLobby.CloseForWorldStart();
 #endif
 
             ScavGameStartPatch.starting_game = true;

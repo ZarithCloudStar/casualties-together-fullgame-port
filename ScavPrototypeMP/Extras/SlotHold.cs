@@ -14,6 +14,7 @@ static class SlotHold
 	}
 
 	const float Seconds = 0.2f;
+	const int ExpireScanAt = 32;
 
 	static readonly System.Collections.Generic.Dictionary<long, Row> Rows = new System.Collections.Generic.Dictionary<long, Row>();
 
@@ -23,11 +24,25 @@ static class SlotHold
 			return;
 		if (slot < 0 || slot >= body.slots.Length)
 			return;
+		DropExpired();
 		Rows[Key(body, slot)] = new Row
 		{
 			Item = item.GetInstanceID(),
 			Until = Time.realtimeSinceStartup + Seconds,
 		};
+	}
+
+	static void DropExpired()
+	{
+		if (Rows.Count < ExpireScanAt)
+			return;
+		float now = Time.realtimeSinceStartup;
+		var expired = new System.Collections.Generic.List<long>();
+		foreach (var pair in Rows)
+			if (pair.Value.Until < now)
+				expired.Add(pair.Key);
+		foreach (long key in expired)
+			Rows.Remove(key);
 	}
 
 	internal static void Release(Body body, Item item)

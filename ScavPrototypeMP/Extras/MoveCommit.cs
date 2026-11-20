@@ -85,6 +85,8 @@ public static class MoveCommit {
     static readonly Dictionary<ushort, Latch> Latches = new Dictionary<ushort, Latch>();
     static readonly List<Item> Gesture = new List<Item>();
     static readonly Dictionary<knetid, Book> Books = new Dictionary<knetid, Book>();
+
+    internal static void Forget(knetid player) => Books.Remove(player);
     static readonly List<uint> DropIds = new List<uint>();
 
     // the reply named this parent. ignore container bytes until they say the same thing, or this runs out.

@@ -54,7 +54,66 @@ static int _pingSampleIndex;
 static bool _pingFirstPassDone;
 static int _pingSortFingerprint = int.MinValue;
 
-static void ResetPingSamplerFast() {
+// rows drawn this frame. layout fills these, repaint reuses them.
+    // the bools are the bits that add or skip a control.
+    struct BrowserRowShape {
+        public bool badVersion;
+        public bool friendIcon;
+        public bool locked;
+        public bool steam;
+        public bool customMode;
+        public bool listPlayers;
+        public bool listMods;
+        public bool showDesc;
+        public bool showLayer;
+        public bool showMood;
+        public string mood;
+    }
+    static NetPublicServerInfo[] _browserRows = Array.Empty<NetPublicServerInfo>();
+    static BrowserRowShape[] _rowShapes = Array.Empty<BrowserRowShape>();
+
+    static void CaptureBrowserRows() {
+        int n = CurFilteredServerList.Count;
+        var rows = new List<NetPublicServerInfo>(n);
+        var shapes = new List<BrowserRowShape>(n);
+        string ver = Multiplayer.FULL_VERSION_TAG;
+        bool hideDesc = HideDescriptions;
+        for (int i = 0; i < n; i++) {
+            NetPublicServerInfo lobby = CurFilteredServerList[i];
+            if (lobby == null) {
+                continue;
+            }
+            BrowserRowShape shape = new BrowserRowShape();
+#if RELEASE
+            shape.badVersion = lobby.version != ver;
+#endif
+            shape.friendIcon = lobby.friends_tooltip != null;
+            shape.locked = lobby.haspassword;
+            shape.steam = lobby.steam_lobby_info != null;
+            shape.listPlayers = lobby.plr_count > 0 && shape.steam;
+            shape.listMods = lobby.modlist != null && lobby.modlist.Length > 0;
+            shape.showDesc = !hideDesc && !string.IsNullOrWhiteSpace(lobby.description);
+            shape.showLayer = lobby.cur_layer != -1;
+            int clayer1 = lobby.cur_layer + 1;
+            bool hasTitle = Locale.currentLang != null && Locale.currentLang.other != null && Locale.currentLang.other.TryGetValue("layertitle" + clayer1, out _);
+            if (hasTitle && shape.showLayer && lobby.gamemode != "tutorial") {
+                shape.customMode = lobby.gamemode != "debug_world" && lobby.gamemode != "loading" && lobby.gamemode != "vanilla";
+            }
+            if (shape.showLayer && Locale.currentLang != null && Locale.currentLang.other != null) {
+                int num = Mathf.RoundToInt(lobby.avg_happiness * 0.1f);
+                if (Locale.currentLang.other.TryGetValue("moodrange" + num.ToString(), out var moodrange)) {
+                    shape.showMood = true;
+                    shape.mood = moodrange;
+                }
+            }
+            rows.Add(lobby);
+            shapes.Add(shape);
+        }
+        _browserRows = rows.ToArray();
+        _rowShapes = shapes.ToArray();
+    }
+
+    static void ResetPingSamplerFast() {
 _pingSampleIndex = 0;
 _pingSampleAccum = 0f;
 _pingFirstPassDone = false;
@@ -127,503 +186,495 @@ return;
 }
 
 static void _GUI_RenderServerBrowser(Rect r) {
-TickPingSampler();
+        // ping sort and steam updates change the list between layout and repaint.
+        // imgui then asks for a control the group never recorded.
+        if (Event.current == null || Event.current.type == EventType.Layout) {
+            TickPingSampler();
+            CaptureBrowserRows();
+        }
 
-GUI.skin.label.alignment = TextAnchor.UpperCenter;
-//uIBullshit._GUI_BiggerLabel(Lang.Get("mmtb_serverbrowser"), 1.4f);
-GUI.skin.label.alignment = TextAnchor.UpperLeft;
+        GUI.skin.label.alignment = TextAnchor.UpperCenter;
+        //uIBullshit._GUI_BiggerLabel(Lang.Get("mmtb_serverbrowser"), 1.4f);
+        GUI.skin.label.alignment = TextAnchor.UpperLeft;
 #if RELEASE
-if( !KSteam.Loaded ) {
-UIBullshit._GUI_BiggerLabel("Steam not loaded", 1.4f);
-return;
-}
+        if( !KSteam.Loaded ) {
+            UIBullshit._GUI_BiggerLabel("Steam not loaded", 1.4f);
+            return;
+        }
 #endif
 
-var fieldnameswidth = r.width * 0.12f;
-var fieldswidth = r.width * 0.26f;
-var bigheight = 50 * GetMenuUIScale();
-var fieldheight = 30 * GetMenuUIScale();
+        var fieldnameswidth = r.width * 0.12f;
+        var fieldswidth = r.width * 0.26f;
+        var bigheight = 50 * GetMenuUIScale();
+        var fieldheight = 30 * GetMenuUIScale();
 
-GUILayout.BeginHorizontal();
-GUILayout.BeginVertical();
-{
-{
-UIBullshit._GUI_SetButtonSkinTexture(GUI.skin.button, false);
+        GUILayout.BeginHorizontal();
+        GUILayout.BeginVertical();
+        {
+            {
+                UIBullshit._GUI_SetButtonSkinTexture(GUI.skin.button, false);
 
-GUILayout.BeginHorizontal();
-{
-GUI.skin.label.alignment = TextAnchor.MiddleRight;
+                GUILayout.BeginHorizontal();
+                {
+                    GUI.skin.label.alignment = TextAnchor.MiddleRight;
 
-GUILayout.Label(Lang.Get("mmsb_sort"));
+                    GUILayout.Label(Lang.Get("mmsb_sort"));
 
-GUI.skin.label.alignment = TextAnchor.MiddleLeft;
+                    GUI.skin.label.alignment = TextAnchor.MiddleLeft;
 
-if (GUILayout.Button(Lang.Get("mmsb_sort_ping"))) {
-var mul = SORT_FLIPBOOL_ping ? -1 : 1;
-CurFilteredServerList.Sort((a, b) => ComparePing(a, b) * mul);
-SORT_FLIPBOOL_ping = !SORT_FLIPBOOL_ping;
-_manualSortActive = true;
-}
-if (GUILayout.Button(Lang.Get("mmsb_sort_plrcount"))) {
-var mul = SORT_FLIPBOOL_count ? 1 : -1;
-CurFilteredServerList.Sort((a, b) => {
-return a.plr_count.CompareTo(b.plr_count) * mul;
-});
-SORT_FLIPBOOL_count = !SORT_FLIPBOOL_count;
-_manualSortActive = true;
-}
-if (GUILayout.Button(Lang.Get("mmsb_sort_layer"))) {
-var mul = SORT_FLIPBOOL_layer ? -1 : 1;
-CurFilteredServerList.Sort((a, b) => {
-return a.cur_layer.CompareTo(b.cur_layer) * mul;
-});
-SORT_FLIPBOOL_layer = !SORT_FLIPBOOL_layer;
-_manualSortActive = true;
-}
-if (GUILayout.Button(Lang.Get("mmsb_sort_name"))) {
-var mul = SORT_FLIPBOOL_alpha ? -1 : 1;
-CurFilteredServerList.Sort((a, b) => {
-return a.name.CompareTo(b.name) * mul;
-});
-SORT_FLIPBOOL_alpha = !SORT_FLIPBOOL_alpha;
-_manualSortActive = true;
-}
-
-
-
-
-GUILayout.FlexibleSpace();
-
-GUILayout.Label(String.Format(Lang.Get("mmsb_lobbyfounds"), CurServerList.Count, CurFilteredServerList.Count, TotalPlayerCount));
-
-
-}
-GUILayout.EndHorizontal();
-}
-
-GUILayout.Space(10 * GetMenuUIScale());
+                    if (GUILayout.Button(Lang.Get("mmsb_sort_ping"))) {
+                        var mul = SORT_FLIPBOOL_ping ? -1 : 1;
+                        CurFilteredServerList.Sort((a, b) => ComparePing(a, b) * mul);
+                        SORT_FLIPBOOL_ping = !SORT_FLIPBOOL_ping;
+                        _manualSortActive = true;
+                    }
+                    if (GUILayout.Button(Lang.Get("mmsb_sort_plrcount"))) {
+                        var mul = SORT_FLIPBOOL_count ? 1 : -1;
+                        CurFilteredServerList.Sort((a, b) => {
+                            return a.plr_count.CompareTo(b.plr_count) * mul;
+                        });
+                        SORT_FLIPBOOL_count = !SORT_FLIPBOOL_count;
+                        _manualSortActive = true;
+                    }
+                    if (GUILayout.Button(Lang.Get("mmsb_sort_layer"))) {
+                        var mul = SORT_FLIPBOOL_layer ? -1 : 1;
+                        CurFilteredServerList.Sort((a, b) => {
+                            return a.cur_layer.CompareTo(b.cur_layer) * mul;
+                        });
+                        SORT_FLIPBOOL_layer = !SORT_FLIPBOOL_layer;
+                        _manualSortActive = true;
+                    }
+                    if (GUILayout.Button(Lang.Get("mmsb_sort_name"))) {
+                        var mul = SORT_FLIPBOOL_alpha ? -1 : 1;
+                        CurFilteredServerList.Sort((a, b) => {
+                            return a.name.CompareTo(b.name) * mul;
+                        });
+                        SORT_FLIPBOOL_alpha = !SORT_FLIPBOOL_alpha;
+                        _manualSortActive = true;
+                    }
 
 
 
-_SERVERBROWSERMENUSCROLL = GUILayout.BeginScrollView(_SERVERBROWSERMENUSCROLL, false, true);
+
+                    GUILayout.FlexibleSpace();
+
+                    GUILayout.Label(String.Format(Lang.Get("mmsb_lobbyfounds"), CurServerList.Count, CurFilteredServerList.Count, TotalPlayerCount));
 
 
-var ogfontsize = GUI.skin.label.fontSize;
+                }
+                GUILayout.EndHorizontal();
+            }
 
-GUI.skin.label.alignment = TextAnchor.UpperLeft;
-var ogalign = GUI.skin.label.alignment;
-GUI.skin.label.wordWrap = false;
+            GUILayout.Space(10 * GetMenuUIScale());
 
 
 
-var i_am_privileged_user_idc_bout_passwords =
+            _SERVERBROWSERMENUSCROLL = GUILayout.BeginScrollView(_SERVERBROWSERMENUSCROLL, false, true);
+
+
+            var ogfontsize = GUI.skin.label.fontSize;
+
+            GUI.skin.label.alignment = TextAnchor.UpperLeft;
+            var ogalign = GUI.skin.label.alignment;
+            GUI.skin.label.wordWrap = false;
+
+
+
+            var i_am_privileged_user_idc_bout_passwords =
 #if DEBUG
-true;
+            true;
 #else
-KSteam.Loaded && KnownPersons.IsSteamUserPrivileged(KSteam.GetLocalUserSteamID().m_SteamID);
+            KSteam.Loaded && KnownPersons.IsSteamUserPrivileged(KSteam.GetLocalUserSteamID().m_SteamID);
 #endif
 
-GUI.skin.label.alignment = TextAnchor.MiddleCenter;
+            GUI.skin.label.alignment = TextAnchor.MiddleCenter;
 
 
 
-if (CurServerList.Count == 0) {
-GUILayout.Label(Lang.Get("mmsb_empty"));
-} else if (CurFilteredServerList.Count == 0) {
-GUILayout.Label(Lang.Get("filter_found_nothing"));
-} else {
-try {
-var MY_VERSION = Multiplayer.FULL_VERSION_TAG;
-GUI.skin.label.fontSize = ogfontsize;
-var lobbyfontsize = (int)(ogfontsize);
-var plrtabheight = _LOBBY_ENTRY_HEIGHT * GetMenuUIScale();
-var og_enabled = GUI.enabled;
-foreach (var lobby in CurFilteredServerList) {
-GUI.skin.label.alignment = TextAnchor.UpperLeft;
-GUILayout.BeginVertical(GUI.skin.box);
-try {
-var is_a_steam_lobby = lobby.steam_lobby_info != null;
-// 同一版本号下的不同补丁包构建不同；房主开了文件校验就一定会被踢。
-var buildDiffers = lobby.BuildDiffersFromMine;
-var hashWillReject = lobby.JoinWillBeHashRejected;
+            if (_browserRows.Length == 0) {
+                GUILayout.Label(CurServerList.Count == 0 ? Lang.Get("mmsb_empty") : Lang.Get("filter_found_nothing"));
+            } else {
+                try {
+                    GUI.skin.label.fontSize = ogfontsize;
+                    var lobbyfontsize = (int)(ogfontsize);
+                    var plrtabheight = _LOBBY_ENTRY_HEIGHT * GetMenuUIScale();
+                    var og_enabled = GUI.enabled;
+                    for (int ri = 0; ri < _browserRows.Length; ri++) {
+                        var lobby = _browserRows[ri];
+                        var shape = _rowShapes[ri];
+                        GUI.skin.label.alignment = TextAnchor.UpperLeft;
+                        GUILayout.BeginVertical(GUI.skin.box);
+                        int rowH = 0;
+                        try {
+                            var is_a_steam_lobby = shape.steam;
 
-GUI.skin.label.fontSize = lobbyfontsize;
+                            GUI.skin.label.fontSize = lobbyfontsize;
 #if RELEASE
-if (lobby.version != MY_VERSION || hashWillReject) {
-GUI.enabled = false;
-GUILayout.BeginHorizontal();
-{
-GUILayout.Space(10 * GetMenuUIScale());
+                            if (shape.badVersion) {
+                                GUI.enabled = false;
+                                GUILayout.BeginHorizontal();
+                                rowH++;
+                                {
+                                    GUILayout.Space(10 * GetMenuUIScale());
 
-GUILayout.Label(lobby.name);
+                                    GUILayout.Label(lobby.name);
 
-GUI.skin.label.alignment = TextAnchor.UpperCenter;
-GUILayout.Label(lobby.plr_count + "/" + lobby.plr_max);
-}
-GUILayout.EndHorizontal();
+                                    GUI.skin.label.alignment = TextAnchor.UpperCenter;
+                                    GUILayout.Label(lobby.plr_count + "/" + lobby.plr_max);
+                                }
+                                GUILayout.EndHorizontal();
+                                rowH--;
 
-GUI.skin.label.alignment = TextAnchor.UpperLeft;
-GUI.skin.label.fontSize = (int)(GUI.skin.label.fontSize * 0.9f);
-if (lobby.version != MY_VERSION)
-GUILayout.Label(Lang.Get("mmsb_lobbybadver") + " - " + lobby.version);
-else
-GUILayout.Label("双方 mod 安装包不一致（构建 " + lobby.build + " ≠ " + KSteam.GetModBuildTag() + "）：对方开启了文件校验，加入会被踢。请统一使用同一个压缩包。");
-GUI.enabled = og_enabled;
-} else
+                                GUI.skin.label.alignment = TextAnchor.UpperLeft;
+                                GUI.skin.label.fontSize = (int)(GUI.skin.label.fontSize * 0.9f);
+                                GUILayout.Label(Lang.Get("mmsb_lobbybadver") + " - " + lobby.version);
+                                GUI.enabled = og_enabled;
+                            } else
 #endif
-{
-var clayer1 = lobby.cur_layer + 1;
-var spr = GetResourceSprite("BiomeIcon/" + clayer1);
-
-
-
-GUIContent gameStateContent;
-bool shouldDrawLayerIcon = false;
-bool isCustomGamemode = false;
-{
-if (
-!Locale.currentLang.other.TryGetValue("layertitle" + clayer1, out var lobby_layer_localed) //OG: WorldGeneration.Start V6.0DEMO
-|| lobby.cur_layer == -1
-) {
-gameStateContent = FixGuiContent.Content(Lang.Get("mmsb_lobby_inmenu"), 27);
-} else if (lobby.gamemode == "tutorial") {
-gameStateContent = FixGuiContent.Content(Lang.Get("mmsb_lobby_loading"), 28);
-} else {
-shouldDrawLayerIcon = true;
-if (lobby.gamemode == "debug_world") {
-gameStateContent = FixGuiContent.Content(Lang.Get("mmsb_lobby_debug_world"), 29);
-} else if (lobby.gamemode == "loading") {
-gameStateContent = FixGuiContent.Content(Lang.Get("mmsb_lobby_loading"), 30);
-} else if (lobby.gamemode == "vanilla") {
-gameStateContent = FixGuiContent.Content(lobby_layer_localed, 31);
-} else if (true) {
-gameStateContent = FixGuiContent.Content(lobby.gamemode, 32);
-isCustomGamemode = true;
-}
-}
-}
-
-
-
-GUILayout.BeginHorizontal();
-{
-var conttt = FixGuiContent.Content(lobby.name, 33);
-var sizzzz = GUI.skin.label.CalcSize(conttt);
-
-GUILayout.Space(10 * GetMenuUIScale());
-
-GUI.skin.label.richText = true;
-GUILayout.Label(conttt);
-GUI.skin.label.richText = false;
-GUILayout.Space(10 * GetMenuUIScale());
+                            {
+                                var clayer1 = lobby.cur_layer + 1;
+                                var spr = GetResourceSprite("BiomeIcon/" + clayer1);
+
+
+
+                                GUIContent gameStateContent;
+                                bool shouldDrawLayerIcon = false;
+                                {
+                                    if (
+                                        !Locale.currentLang.other.TryGetValue("layertitle" + clayer1, out var lobby_layer_localed) //OG: WorldGeneration.Start V6.0DEMO
+                                        || lobby.cur_layer == -1
+                                    ) {
+                                        gameStateContent = FixGuiContent.Content(Lang.Get("mmsb_lobby_inmenu"), 27);
+                                    } else if (lobby.gamemode == "tutorial") {
+                                        gameStateContent = FixGuiContent.Content(Lang.Get("mmsb_lobby_loading"), 28);
+                                    } else {
+                                        shouldDrawLayerIcon = true;
+                                        if (lobby.gamemode == "debug_world") {
+                                            gameStateContent = FixGuiContent.Content(Lang.Get("mmsb_lobby_debug_world"), 29);
+                                        } else if (lobby.gamemode == "loading") {
+                                            gameStateContent = FixGuiContent.Content(Lang.Get("mmsb_lobby_loading"), 30);
+                                        } else if (lobby.gamemode == "vanilla") {
+                                            gameStateContent = FixGuiContent.Content(lobby_layer_localed, 31);
+                                        } else if (true) {
+                                            gameStateContent = FixGuiContent.Content(lobby.gamemode, 32);
+                                        }
+                                    }
+                                }
+
+
+
+                                GUILayout.BeginHorizontal();
+                                rowH++;
+                                {
+                                    var conttt = FixGuiContent.Content(lobby.name, 33);
+                                    var sizzzz = GUI.skin.label.CalcSize(conttt);
+
+                                    GUILayout.Space(10 * GetMenuUIScale());
+
+                                    GUI.skin.label.richText = true;
+                                    GUILayout.Label(conttt);
+                                    GUI.skin.label.richText = false;
+                                    GUILayout.Space(10 * GetMenuUIScale());
 
-if (lobby.friends_tooltip != null) {
-GUILayout.Label(CoopModAssets.happy.texture, GUILayout.Width(sizzzz.y), GUILayout.Height(sizzzz.y));
+                                    if (shape.friendIcon) {
+                                        GUILayout.Label(CoopModAssets.happy.texture, GUILayout.Width(sizzzz.y), GUILayout.Height(sizzzz.y));
 
-if (UIBullshit.CheckCursorOverlap(GUIUtility.GUIToScreenRect(GUILayoutUtility.GetLastRect()))) {
-UIBullshit._GUI_SetTooltip(lobby.friends_tooltip, "");
-}
-}
-
-if (lobby.haspassword) {
-GUILayout.Label(CoopModAssets.@lock.texture, GUILayout.Width(sizzzz.y), GUILayout.Height(sizzzz.y));
-
-if (UIBullshit.CheckCursorOverlap(GUIUtility.GUIToScreenRect(GUILayoutUtility.GetLastRect()))) {
-UIBullshit._GUI_SetTooltip(Lang.Get("mmsb_lobby_islocked"), "");
-}
-}
-
-if (is_a_steam_lobby) {
-GUILayout.Label(CoopModAssets.icon_steam.texture, GUILayout.Width(sizzzz.y), GUILayout.Height(sizzzz.y));
-}
-
-
-
-GUI.skin.label.alignment = TextAnchor.UpperCenter;
-GUILayout.Label(lobby.plr_count + "/" + lobby.plr_max);
-GUILayout.Label(FormatPing(lobby), GUILayout.Width(70 * GetMenuUIScale()));
-
-GUILayout.FlexibleSpace();
-
-if (isCustomGamemode) {
-GUILayout.Label(lobby.gamemode);
-}
-
-GUILayout.FlexibleSpace();
-
-if (true) {
-if (GUILayout.Button(Lang.Get("mmsb_lobby_listrules"))) {
-
-}
-DoTooltipOnLastGUIRectNoLang(lobby.rules_as_string);
-}
-if (lobby.plr_count > 0 && lobby.steam_lobby_info != null) {
-if (GUILayout.Button(Lang.Get("mmsb_lobby_listplrs"))) {
-
-}
-DoTooltipOnLastGUIRectNoLang(String.Join("\n", lobby.steam_lobby_info.members.Select(x => KSteam.GetSteamUsername(x.Key.m_SteamID))));
-}
-if (lobby.modlist.Length > 0) {
-if (GUILayout.Button(Lang.Get("mmsb_lobby_listmod"))) {
-
-}
-#if FULLGAME
-                                        if (Util.GameIsFull()) DoTooltipOnLastGUIRectNoLang(ModListDiagnostics.LobbyDetails(lobby));
-                                        else
-#endif
-DoTooltipOnLastGUIRectNoLang(String.Join("\n", lobby.modlist));
-}
-
-}
-GUILayout.EndHorizontal();
-
-#if FULLGAME
-                                if (Util.GameIsFull() && lobby.enforcemodlist_locked)
-                                    GUILayout.Label(ModListDiagnostics.LobbySummary(lobby));
-#endif
-
-if (!HideDescriptions && !String.IsNullOrWhiteSpace(lobby.description)) {
-GUILayout.BeginHorizontal();
-{
-GUI.skin.label.richText = true;
-GUI.skin.label.wordWrap = true;
-GUI.skin.label.alignment = TextAnchor.UpperLeft;
-var gggogfontsize = GUI.skin.label.fontSize;
-var col = GUI.backgroundColor;
-GUI.color = Color.white * 0.9f;
-GUI.skin.label.fontSize = (int)(gggogfontsize * 0.8f);
-
-var content = FixGuiContent.Content(lobby.description, 34);
-
-var realwidth = 800 * GetMenuUIScale();
-var calculatedheight = GUI.skin.label.CalcHeight(content, realwidth);
-
-GUILayout.Label(content, GUILayout.Width(realwidth), GUILayout.Height(calculatedheight));
-
-GUI.skin.label.fontSize = gggogfontsize;
-GUI.color = col;
-
-GUILayout.Space(10 * GetMenuUIScale());
-
-GUI.skin.label.richText = false;
-GUI.skin.label.wordWrap = false;
-}
-GUILayout.EndHorizontal();
-}
-
-
-
-
-
-GUILayout.BeginHorizontal();
-{
-{
-GUI.enabled = og_enabled && (!Multiplayer.IsNetworkActiveOrIsInGame()) && (lobby.IsJoinable() || i_am_privileged_user_idc_bout_passwords) && !hashWillReject;
-if (
-GUILayout.Button(
-Lang.Get(lobby.latejoinspectate ? "mmsb_lobbyjoinspectate" : "mmsb_lobbyjoin")
-, GUILayout.Width(r.width * 0.2f))
-) {
-if (is_a_steam_lobby) {
-Multiplayer.DoMultiplayerStatusMessageLog($"STEAM: Join Lobby {lobby.steam_lobby_info.lobby_steamID}");
-TransportSteamworks.OnWantToJoinLobby(lobby.steam_lobby_info.lobby_steamID.m_SteamID);
-
-UIMainMenu.current_tab = UIMainMenu.menutab_directconnect;
-UIMainMenu._DO_SERVER_CONFIG = false;
-} else {
-log.error("TODO: JOIN TO IP");
-
-//tODO
-//tODO
-//tODO
-//tODO
-//tODO
-//tODO
-//tODO
-//tODO
-//tODO
-}
-}
-if (Net.IsRunning) {
-DoTooltipOnLastGUIRect("mmsb_lobbyjoin_alreadyjoined");
-} else if (lobby.midjoin_lock_active) {
-DoTooltipOnLastGUIRect("mmsb_lobbyjoin_nomidjoin");
-} else if (lobby.enforcemodlist_locked) {
-#if FULLGAME
-                                            if (Util.GameIsFull()) DoTooltipOnLastGUIRectNoLang(ModListDiagnostics.LobbyDetails(lobby));
-                                            else
-#endif
-DoTooltipOnLastGUIRect("mmsb_lobbyjoin_wrongmods");
-}
-GUI.enabled = og_enabled;
-}
-
-var uiscale = 10 * GetMenuUIScale();
-
-// draw cur layer info
-{
-GUI.skin.label.alignment = TextAnchor.UpperLeft;
-GUILayout.Space(uiscale);
-
-
-GUILayout.Label(gameStateContent);
-
-if (shouldDrawLayerIcon) {
-var rect = (GUILayoutUtility.GetLastRect());
-
-if (spr != null) {
-var size = GUI.skin.label.CalcSize(gameStateContent);
-
-GUI.DrawTexture(rect, spr.texture);
-}
-GUI.Label(rect, gameStateContent);
-}
-}
-GUI.skin.label.fontSize = (int)(GUI.skin.label.fontSize * 0.9f);
-
-if (lobby.cur_layer != -1) {
-GUI.skin.label.alignment = TextAnchor.MiddleCenter;
-
-{ // OG: PlayerCamera.HandleDeathScreen  V6.1demo
-int num = Mathf.RoundToInt(lobby.avg_happiness * 0.1f);
-if (Locale.currentLang.other.TryGetValue("moodrange" + num.ToString(), out var moodrange)) {
-GUILayout.Label(Lang.Get("mmsb_lobby_avgmood") + moodrange);
-}
-}
-
-GUILayout.Label(Lang.Get("mmsb_lobby_alivecount") + (lobby.plr_living_count + "/" + lobby.plr_count));
-}
-
-GUILayout.Space(uiscale);
-
-GUI.skin.label.alignment = TextAnchor.LowerRight;
-GUILayout.Label(lobby.version.StartsWith("V", StringComparison.OrdinalIgnoreCase) ? lobby.version : "V" + lobby.version);
-if (buildDiffers) {
-var ogcol = GUI.contentColor;
-GUI.contentColor = new Color(1f, 0.55f, 0.2f);
-GUILayout.Label("构建不同 (" + lobby.build + ") - 对方未开文件校验，可能可以进，但可能不同步");
-GUI.contentColor = ogcol;
-}
-
-GUILayout.Space(uiscale);
-
-}
-GUILayout.EndHorizontal();
-
-
-
-}
-
-} catch (Exception e) {
-log.error($"_GUI_RenderServerBrowser: {lobby}\n{e.ToString()}");
-}
-GUI.enabled = og_enabled;
-GUILayout.EndVertical();
-}
-} catch (Exception e) {
-log.error($"_GUI_RenderServerBrowser: RENDER: \n{e.ToString()}");
-}
-}
-UIBullshit._GUI_SetButtonSkinTexture(GUI.skin.button, true);
-
-GUI.skin.label.fontSize = ogfontsize;
-GUI.skin.label.alignment = ogalign;
-
-GUILayout.Label("");
-GUILayout.EndScrollView();
-}
-GUILayout.EndVertical();
-
-GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(190 * GetMenuUIScale()));
-{
-
-GUILayout.BeginHorizontal();
-{
-if (KSteam.Loaded) {
-GUILayout.Label(Lang.Get("mmsb_steam_distfilter"));
-UIBullshit._GUI_SetButtonSkinTexture(GUI.skin.button, false);
-KSteam.userselected_lobbyDistanceFilter = (ELobbyDistanceFilter)GUILayout_DropdownMenu.Dropdown((int)KSteam.userselected_lobbyDistanceFilter, new string[] {
-Lang.Get("mmsb_steam_dist0"),
-Lang.Get("mmsb_steam_dist1"),
-Lang.Get("mmsb_steam_dist2"),
-Lang.Get("mmsb_steam_dist3"),
-});
-UIBullshit._GUI_SetButtonSkinTexture(GUI.skin.button, true);
-}
-
-GUILayout.FlexibleSpace();
-}
-GUILayout.EndHorizontal();
-
-
-GUILayout.BeginHorizontal();
-{
-GUI.skin.label.alignment = TextAnchor.MiddleRight;
-GUILayout.Label(Lang.Get("mmct_search"));
-// max players
-{
-var newnamefilter = GUILayout.TextField(_LOBBY_SEARCH_FILTER, GUILayout.Width(fieldswidth));
-if (newnamefilter != _LOBBY_SEARCH_FILTER) {
-_LOBBY_SEARCH_FILTER = newnamefilter;
-RefilterList();
-}
-}
-}
-GUILayout.EndHorizontal();
-
-
-UIMainMenu._GUI___DirectConnect_DoPasswordField(r, fieldheight, fieldnameswidth * 0.9f, fieldswidth * 0.5f);
-
-
-{
-var oldPass = SortHidePasswordProtected;
-SortHidePasswordProtected = GUILayout.Toggle(SortHidePasswordProtected, Lang.Get("mmsb_lobbyhidepass"));
-if (oldPass != SortHidePasswordProtected) {
-RefilterList();
-}
-}
-
-{
-var oldImcomp = SortHideIncompatible;
-SortHideIncompatible = GUILayout.Toggle(SortHideIncompatible, Lang.Get("mmsb_lobbyhidever"));
-if (oldImcomp != SortHideIncompatible) {
-RefilterList();
-}
-}
-
-{
-var old = HideDescriptions;
-HideDescriptions = GUILayout.Toggle(HideDescriptions, Lang.Get("mmsb_lobbyhidedesc"));
-if (old != HideDescriptions) {
-
-}
-}
-
-
-GUILayout.Space(20);
-
-GUILayout.BeginHorizontal();
-{
-GUILayout.Space(20);
-{
-if (GUILayout.Button("  " + Lang.Get("mmsb_refresh") + "  ")) {
-Util.PlayUISound(PlayerCamera.UISoundType.Click);
-ReloadList();
-}
-}
-
-GUILayout.FlexibleSpace();
-}
-GUILayout.EndHorizontal();
-
-GUILayout.FlexibleSpace();
-}
-
-GUILayout.EndVertical();
-GUILayout.EndHorizontal();
-
-
-}
+                                        if (UIBullshit.CheckCursorOverlap(GUIUtility.GUIToScreenRect(GUILayoutUtility.GetLastRect()))) {
+                                            UIBullshit._GUI_SetTooltip(lobby.friends_tooltip, "");
+                                        }
+                                    }
+
+                                    if (shape.locked) {
+                                        GUILayout.Label(CoopModAssets.@lock.texture, GUILayout.Width(sizzzz.y), GUILayout.Height(sizzzz.y));
+
+                                        if (UIBullshit.CheckCursorOverlap(GUIUtility.GUIToScreenRect(GUILayoutUtility.GetLastRect()))) {
+                                            UIBullshit._GUI_SetTooltip(Lang.Get("mmsb_lobby_islocked"), "");
+                                        }
+                                    }
+
+                                    if (is_a_steam_lobby) {
+                                        GUILayout.Label(CoopModAssets.icon_steam.texture, GUILayout.Width(sizzzz.y), GUILayout.Height(sizzzz.y));
+                                    }
+
+
+
+                                    GUI.skin.label.alignment = TextAnchor.UpperCenter;
+                                    GUILayout.Label(lobby.plr_count + "/" + lobby.plr_max);
+                                    GUILayout.Label(FormatPing(lobby), GUILayout.Width(70 * GetMenuUIScale()));
+
+                                    GUILayout.FlexibleSpace();
+
+                                    if (shape.customMode) {
+                                        GUILayout.Label(lobby.gamemode);
+                                    }
+
+                                    GUILayout.FlexibleSpace();
+
+                                    if (true) {
+                                        if (GUILayout.Button(Lang.Get("mmsb_lobby_listrules"))) {
+
+                                        }
+                                        DoTooltipOnLastGUIRectNoLang(lobby.rules_as_string);
+                                    }
+                                    if (shape.listPlayers) {
+                                        if (GUILayout.Button(Lang.Get("mmsb_lobby_listplrs"))) {
+
+                                        }
+                                        if (lobby.steam_lobby_info != null) {
+                                            DoTooltipOnLastGUIRectNoLang(String.Join("\n", lobby.steam_lobby_info.members.Select(x => KSteam.GetSteamUsername(x.Key.m_SteamID))));
+                                        }
+                                    }
+                                    if (shape.listMods) {
+                                        if (GUILayout.Button(Lang.Get("mmsb_lobby_listmod"))) {
+
+                                        }
+                                        if (lobby.modlist != null) {
+                                            DoTooltipOnLastGUIRectNoLang(String.Join("\n", lobby.modlist));
+                                        }
+                                    }
+
+                                }
+                                GUILayout.EndHorizontal();
+                                rowH--;
+
+
+                                if (shape.showDesc) {
+                                    GUILayout.BeginHorizontal();
+                                    rowH++;
+                                    {
+                                        GUI.skin.label.richText = true;
+                                        GUI.skin.label.wordWrap = true;
+                                        GUI.skin.label.alignment = TextAnchor.UpperLeft;
+                                        var gggogfontsize = GUI.skin.label.fontSize;
+                                        var col = GUI.backgroundColor;
+                                        GUI.color = Color.white * 0.9f;
+                                        GUI.skin.label.fontSize = (int)(gggogfontsize * 0.8f);
+
+                                        var content = FixGuiContent.Content(lobby.description ?? "", 34);
+
+                                        var realwidth = 800 * GetMenuUIScale();
+                                        var calculatedheight = GUI.skin.label.CalcHeight(content, realwidth);
+
+                                        GUILayout.Label(content, GUILayout.Width(realwidth), GUILayout.Height(calculatedheight));
+
+                                        GUI.skin.label.fontSize = gggogfontsize;
+                                        GUI.color = col;
+
+                                        GUILayout.Space(10 * GetMenuUIScale());
+
+                                        GUI.skin.label.richText = false;
+                                        GUI.skin.label.wordWrap = false;
+                                    }
+                                    GUILayout.EndHorizontal();
+                                    rowH--;
+                                }
+
+
+
+
+
+                                GUILayout.BeginHorizontal();
+                                rowH++;
+                                {
+                                    {
+                                        GUI.enabled = og_enabled && (!Multiplayer.IsNetworkActiveOrIsInGame()) && (lobby.IsJoinable() || i_am_privileged_user_idc_bout_passwords);
+                                        if (
+                                            GUILayout.Button(
+                                                Lang.Get(lobby.latejoinspectate ? "mmsb_lobbyjoinspectate" : "mmsb_lobbyjoin")
+                                            , GUILayout.Width(r.width * 0.2f))
+                                        ) {
+                                            if (is_a_steam_lobby && lobby.steam_lobby_info != null) {
+                                                Multiplayer.DoMultiplayerStatusMessageLog($"STEAM: Join Lobby {lobby.steam_lobby_info.lobby_steamID}");
+                                                TransportSteamworks.OnWantToJoinLobby(lobby.steam_lobby_info.lobby_steamID.m_SteamID);
+
+                                                UIMainMenu.current_tab = UIMainMenu.menutab_directconnect;
+                                                UIMainMenu._DO_SERVER_CONFIG = false;
+                                            } else {
+                                                log.error("TODO: JOIN TO IP");
+
+                                                //tODO
+                                                //tODO
+                                                //tODO
+                                                //tODO
+                                                //tODO
+                                                //tODO
+                                                //tODO
+                                                //tODO
+                                                //tODO
+                                            }
+                                        }
+                                        if (Net.IsRunning) {
+                                            DoTooltipOnLastGUIRect("mmsb_lobbyjoin_alreadyjoined");
+                                        } else if (lobby.midjoin_lock_active) {
+                                            DoTooltipOnLastGUIRect("mmsb_lobbyjoin_nomidjoin");
+                                        } else if (lobby.enforcemodlist_locked) {
+                                            DoTooltipOnLastGUIRect("mmsb_lobbyjoin_wrongmods");
+                                        }
+                                        GUI.enabled = og_enabled;
+                                    }
+
+                                    var uiscale = 10 * GetMenuUIScale();
+
+                                    // draw cur layer info
+                                    {
+                                        GUI.skin.label.alignment = TextAnchor.UpperLeft;
+                                        GUILayout.Space(uiscale);
+
+
+                                        GUILayout.Label(gameStateContent);
+
+                                        if (shouldDrawLayerIcon) {
+                                            var rect = (GUILayoutUtility.GetLastRect());
+
+                                            if (spr != null) {
+                                                var size = GUI.skin.label.CalcSize(gameStateContent);
+
+                                                GUI.DrawTexture(rect, spr.texture);
+                                            }
+                                            GUI.Label(rect, gameStateContent);
+                                        }
+                                    }
+                                    GUI.skin.label.fontSize = (int)(GUI.skin.label.fontSize * 0.9f);
+
+                                    if (shape.showLayer) {
+                                        GUI.skin.label.alignment = TextAnchor.MiddleCenter;
+
+                                        if (shape.showMood) {
+                                            GUILayout.Label(Lang.Get("mmsb_lobby_avgmood") + shape.mood);
+                                        }
+
+                                        GUILayout.Label(Lang.Get("mmsb_lobby_alivecount") + (lobby.plr_living_count + "/" + lobby.plr_count));
+                                    }
+
+                                    GUILayout.Space(uiscale);
+
+                                    GUI.skin.label.alignment = TextAnchor.LowerRight;
+                                    GUILayout.Label(lobby.version);
+
+                                    GUILayout.Space(uiscale);
+
+                                }
+                                GUILayout.EndHorizontal();
+                                rowH--;
+
+
+
+                            }
+
+                        } catch (Exception e) {
+                            while (rowH > 0) {
+                                GUILayout.EndHorizontal();
+                                rowH--;
+                            }
+                            log.error($"_GUI_RenderServerBrowser: {lobby}\n{e.ToString()}");
+                        }
+                        GUI.enabled = og_enabled;
+                        GUILayout.EndVertical();
+                    }
+                } catch (Exception e) {
+                    log.error($"_GUI_RenderServerBrowser: RENDER: \n{e.ToString()}");
+                }
+            }
+            UIBullshit._GUI_SetButtonSkinTexture(GUI.skin.button, true);
+
+            GUI.skin.label.fontSize = ogfontsize;
+            GUI.skin.label.alignment = ogalign;
+
+            GUILayout.Label("");
+            GUILayout.EndScrollView();
+        }
+        GUILayout.EndVertical();
+
+        GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(190 * GetMenuUIScale()));
+        {
+
+            GUILayout.BeginHorizontal();
+            {
+                if (KSteam.Loaded) {
+                    GUILayout.Label(Lang.Get("mmsb_steam_distfilter"));
+                    UIBullshit._GUI_SetButtonSkinTexture(GUI.skin.button, false);
+                    KSteam.userselected_lobbyDistanceFilter = (ELobbyDistanceFilter)GUILayout_DropdownMenu.Dropdown((int)KSteam.userselected_lobbyDistanceFilter, new string[] {
+                        Lang.Get("mmsb_steam_dist0"),
+                        Lang.Get("mmsb_steam_dist1"),
+                        Lang.Get("mmsb_steam_dist2"),
+                        Lang.Get("mmsb_steam_dist3"),
+                    });
+                    UIBullshit._GUI_SetButtonSkinTexture(GUI.skin.button, true);
+                }
+
+                GUILayout.FlexibleSpace();
+            }
+            GUILayout.EndHorizontal();
+
+
+            GUILayout.BeginHorizontal();
+            {
+                GUI.skin.label.alignment = TextAnchor.MiddleRight;
+                GUILayout.Label(Lang.Get("mmct_search"));
+                // max players
+                {
+                    var newnamefilter = GUILayout.TextField(_LOBBY_SEARCH_FILTER, GUILayout.Width(fieldswidth));
+                    if (newnamefilter != _LOBBY_SEARCH_FILTER) {
+                        _LOBBY_SEARCH_FILTER = newnamefilter;
+                        RefilterList();
+                    }
+                }
+            }
+            GUILayout.EndHorizontal();
+
+
+            UIMainMenu._GUI___DirectConnect_DoPasswordField(r, fieldheight, fieldnameswidth * 0.9f, fieldswidth * 0.5f);
+
+
+            {
+                var oldPass = SortHidePasswordProtected;
+                SortHidePasswordProtected = GUILayout.Toggle(SortHidePasswordProtected, Lang.Get("mmsb_lobbyhidepass"));
+                if (oldPass != SortHidePasswordProtected) {
+                    RefilterList();
+                }
+            }
+
+            {
+                var oldImcomp = SortHideIncompatible;
+                SortHideIncompatible = GUILayout.Toggle(SortHideIncompatible, Lang.Get("mmsb_lobbyhidever"));
+                if (oldImcomp != SortHideIncompatible) {
+                    RefilterList();
+                }
+            }
+
+            {
+                var old = HideDescriptions;
+                HideDescriptions = GUILayout.Toggle(HideDescriptions, Lang.Get("mmsb_lobbyhidedesc"));
+                if (old != HideDescriptions) {
+
+                }
+            }
+
+
+            GUILayout.Space(20);
+
+            GUILayout.BeginHorizontal();
+            {
+                GUILayout.Space(20);
+                {
+                    if (GUILayout.Button("  " + Lang.Get("mmsb_refresh") + "  ")) {
+                        Util.PlayUISound(PlayerCamera.UISoundType.Click);
+                        ReloadList();
+                    }
+                }
+
+                GUILayout.FlexibleSpace();
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.FlexibleSpace();
+        }
+
+        GUILayout.EndVertical();
+        GUILayout.EndHorizontal();
+
+
+    }
 public static int _LOBBY_ENTRY_HEIGHT = 90;
 public static int _LOBBY_ERROR_HEIGHT = 30;
 

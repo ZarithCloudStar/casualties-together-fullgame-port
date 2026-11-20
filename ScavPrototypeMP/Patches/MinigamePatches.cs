@@ -1895,6 +1895,64 @@ plr.Server_DoAlertSingle(Lang.MarkMsgAsLocaleKey("serverdeny_lockpick"));
 
 
 
+    [HarmonyPatch(typeof(LockpingMinigame), nameof(LockpingMinigame.Start))]
+    internal static class LockpingMinigame_Start_MultiplayerPatch {
+        static void Postfix(LockpingMinigame __instance) {
+            if (!Net.IsRunning || __instance == null)
+                return;
+            ApplyKit(__instance);
+        }
+
+        internal static void ApplyKit(LockpingMinigame game) {
+            if (game == null || Minigame.game == null)
+                return;
+            Body body = Minigame.game.body;
+            if (body == null || body.skills == null || body.skills.INT < 10)
+                return;
+            Item kit = FindKit(body);
+            if (kit == null)
+                return;
+            int level = body.skills.INT - 10;
+            if (game.pickLevel < level)
+                game.pickLevel = level;
+            if (Minigame.game.currentItem == null)
+                Minigame.game.currentItem = kit;
+        }
+
+        internal static Item FindKit(Body body) {
+            if (body == null)
+                return null;
+            if (body.slots != null) {
+                for (int i = 0; i < body.slots.Length; i++) {
+                    Item found = Scan(body.GetItem(i));
+                    if (found != null)
+                        return found;
+                }
+            }
+            foreach (Item worn in body.GetAllWearables()) {
+                Item found = Scan(worn);
+                if (found != null)
+                    return found;
+            }
+            return null;
+        }
+
+        static Item Scan(Item item) {
+            if (item == null)
+                return null;
+            if (item.id == "lockpickingkit")
+                return item;
+            if (!item.TryGetComponent(out Container _))
+                return null;
+            Item[] kids = item.GetComponentsInChildren<Item>(true);
+            for (int i = 0; i < kids.Length; i++) {
+                if (kids[i] != null && kids[i].id == "lockpickingkit")
+                    return kids[i];
+            }
+            return null;
+        }
+    }
+
 [HarmonyPatch(typeof(LockpingMinigame), nameof(LockpingMinigame.Update))]
 public static class LockpingMinigame_Update_MultiplayerPatch {
 
@@ -1902,6 +1960,9 @@ static void Prefix(LockpingMinigame __instance) {
 if (!Net.IsRunning) {
 return;
 }
+
+if (__instance.pickLevel < 0)
+    LockpingMinigame_Start_MultiplayerPatch.ApplyKit(__instance);
 
 if (__instance.clickingInside) {
 
@@ -1945,10 +2006,9 @@ if (ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out ScavPlayer plr, out
 ServerMain.Server_AnnounceSound(lockpicker.slots[lockpicker.handSlot].limb.transform.position, $"gore2", ServerMain.GetListOfClientIdsExceptThis(clientId));
 
 //OG: Openable.OnUse V501
-lockpicker.FindByIdSurface("lockpickingkit", out Item it);
-if (lockpicker.skills.INT < 10) { // its kinda kinda ? kinda guranteed? that theyre lockpicking with a lockipck??
-it = null;
-}
+Item it = lockpicker.skills != null && lockpicker.skills.INT >= 10
+    ? LockpingMinigame_Start_MultiplayerPatch.FindKit(lockpicker)
+    : null;
 //OG: LockpingMinigame.Update V501  where it damages the claw
 if (it != null) { // this is pretty much reliant on Openable.OnUse
 it.SetCondition(it.condition - 0.03f);
@@ -2536,6 +2596,7 @@ log.l($"DoBandageAction called for: {l}  {l.body}  ");
 if (NetObjectRegistry.TryGetSyncInfo(Minigame.game.currentItem.gameObject, out SyncInfo si)) {
 Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_BandageMinigame_DoBandageAction, si.syncId, pb.netId, Util.GetLimbIndex(l), true);
 si.SetIgnoreTimeForRoundTrip();
+si.AwaitServerAck();
 }
 
 }
@@ -2559,6 +2620,8 @@ Plugin.log.LogInfo($"Server_BandageMinigame_DoBandageAction {DebugHelp.GetPlayer
 reader.Get(out knetid bandageid);
 reader.Get(out knetid targetplr);
 reader.Get(out byte limbid);
+
+using (UseAck.Scope ack = UseAck.After(clientId, bandageid)) {
 
 if (MedicalSync.Server_CheckCanHealerUseItemForLimb(clientId,targetplr,limbid,bandageid, out var healerPlr, out var targetnb, out var item_si)) {
 if (MinigameBase_StartMinigame_MultiplayerPatch.known_bandages_onuse_lambdas.TryGetValue((item_si.item, targetnb.body.limbs[limbid]), out var onuse_lambda)) {
@@ -2607,6 +2670,7 @@ MinigameMPManager.Server_ForceEndMinigameForPlayer(healerPlr);
 if (healerPlr != null) {
 //healersci.Server_DoAlertSingle(Lang.MarkMsgAsLocaleKey("serverdeny_bandage2"));
 MinigameMPManager.Server_ForceEndMinigameForPlayer(healerPlr);
+}
 }
 }
 }

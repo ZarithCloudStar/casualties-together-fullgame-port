@@ -776,7 +776,19 @@ public class SpriteReplacerPlugin : MonoBehaviour {
 
     internal static Sprite LoadEmbeddedSprite(string resourceName) {
         Assembly assembly = Assembly.GetExecutingAssembly();
-        using (Stream stream = assembly.GetManifestResourceStream(resourceName)) {
+        Stream stream = assembly.GetManifestResourceStream(resourceName);
+        if (stream == null) {
+            // Older offline builds ignored LogicalName and emitted the skin
+            // placeholder under a generated namespace. Keep those DLLs
+            // readable while the corrected compiler is rolled out.
+            foreach (string name in assembly.GetManifestResourceNames()) {
+                if (name.EndsWith(".spritereplacer1.png", StringComparison.OrdinalIgnoreCase)) {
+                    stream = assembly.GetManifestResourceStream(name);
+                    break;
+                }
+            }
+        }
+        using (stream) {
             if (stream == null) {
                 Log.LogWarning($"Embedded resource '{resourceName}' not found");
                 return null;

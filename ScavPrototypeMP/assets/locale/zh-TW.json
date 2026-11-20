@@ -1,4 +1,7 @@
 {
+  "casualtiestogether_character_stock_ready": "準備",
+  "casualtiestogether_character_stock_ready_done": "已準備",
+  "casualtiestogether_character_stock_start": "開始遊戲",
   "casualtiestogether_loaderror_possible_nonascii_path": "確保遊戲路徑僅包含英文字母：",
   "casualtiestogether_plr_finished_tutorial": "剛剛完成了教學。",
   "casualtiestogether_host_started_tutorial": "主持人正在開始教學。",

@@ -42,8 +42,7 @@ internal sealed class LobbyCharacterPanel : MonoBehaviour {
     // AdaptiveButton polls raw Input instead of the EventSystem. A Graphic
     // raycaster alone cannot prevent its Quit action while our modal is open.
     internal static bool BlocksVanillaMenuInput => Util.GameIsFull() &&
-        (clickGuard != null || CharacterLobby.ShouldShowPanel ||
-         (instance != null && (instance.shown || instance.closing)));
+        (clickGuard != null || (instance != null && (instance.shown || instance.closing)));
 
     internal static void Ensure() {
         if (!CharacterLobby.ShouldShowPanel) return;

@@ -211,6 +211,9 @@ static void Server_RequestUseItem(knetid clientId, LiteNetLib.Utils.NetDataReade
 reader.Get(out knetid item);
 reader.Get(out knetid target_person);
 
+bool waitForAnswer = false;
+try {
+
 if (
 ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out var giverPlr, out var giver) && giver.body.conscious
 && NetBody.TryGetNetBodyFromId(target_person, out var target_nb)
@@ -262,6 +265,7 @@ si.item.Stats.wearable ? "plrint_feed_receive_wearable" :
 if (answer == 0) {
 if (si.go == null) {
 giverPlr.Server_DoAlertSingle($"<bodyc:{target_nb.netId}> <key:giveitem_noitem>.");
+UseAck.Send(clientId, item);
 return;
 }
 if (ItemSync.ConfirmItemOffer(giver, target_nb, si.item)) {
@@ -272,12 +276,19 @@ giverPlr.Server_DoAlertSingle($"<bodyc:{target_nb.netId}> <key:accepted>.");
 } else {
 giverPlr.Server_DoAlertSingle($"<bodyc:{target_nb.netId}> <key:declined>.");
 }
+UseAck.Send(clientId, item);
 });
+waitForAnswer = true;
 } else {
 useItemFunc();
 }
 } else { // at this point, real player should get an alert that they refuse
 log.serverdeny($"RequestUseItem {giverPlr} -> {target_nb} - {si}", Vector2.Lerp(giverPlr.body.transform.position, target_nb.position, 0.5f));
+}
+}
+} finally {
+if (!waitForAnswer) {
+UseAck.Send(clientId, item);
 }
 }
 }
@@ -356,6 +367,8 @@ public static class Body_Attack_MultiplayerPatch {
     // fastest swing in the game is the little laser, cooldown 0.1. that one is not a physical swing, so stims do not shorten it. 0.08 is a bit quicker than that.
     const float AttackGapLimit = 0.08f;
     static readonly Dictionary<knetid, double> LastAttackAt = new Dictionary<knetid, double>();
+
+    internal static void Forget(knetid player) => LastAttackAt.Remove(player);
 
     public static void DoToolSpecificPVPDamage(Item used_tool, Limb target, float rule_mult, float multiplier_strength_vs_armor) {
         switch (used_tool.id) {

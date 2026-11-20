@@ -129,6 +129,14 @@ public class BattleRoyale : GamemodeBase {
         Chat.Server_ChatAnnouncement("Gamemode set to battle royale");
     }
 
+    void OnDestroy() {
+        WorldMP.OnWorldgenFinish -= OnWorldgenFinish;
+        NetBody.OnPlayerDeath -= OnPlayerDeath;
+        ScavPlayer.OnPlayerJoined -= OnPlayerJoined;
+        ScavPlayer.OnPlayerLeft -= OnPlayerLeft;
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+    }
+
     public static void DistributeEntities_But_for_items_and_load_ammo(GameObject basObj, float minPerChunk, float maxPerChunk, float spawnYOffset = 0f, float randomRotation = 0f, float spawnYOffsetDeviation = 0f, bool spawnInGround = false, PlaceCheckDelegate checkFunc = null,  Vector2 dir = default(Vector2)) {
         if (dir == Vector2.zero) {
             dir = Vector2.down;

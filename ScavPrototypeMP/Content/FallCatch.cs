@@ -31,6 +31,12 @@ namespace Together {
         static readonly Dictionary<ushort, float> armedUntil = new Dictionary<ushort, float>();
         static readonly HashSet<ushort> latched = new HashSet<ushort>();
         static readonly HashSet<ushort> slammed = new HashSet<ushort>();
+
+        internal static void Forget(ushort player) {
+            armedUntil.Remove(player);
+            latched.Remove(player);
+            slammed.Remove(player);
+        }
         static readonly List<ushort> drop = new List<ushort>();
         static float nextArmSend;
         static float nextLocalHit;

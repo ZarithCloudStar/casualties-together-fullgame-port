@@ -220,6 +220,50 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
 
     // https://docs.unity3d.com/6000.0/Documentation/Manual/execution-order.html
     // i need this execute before OnWillRenderObject, cuz i need to force call it when its outside of hosts view
+    internal int LastRenderedFrame { get; set; } = -1;
+    int hostilityFrame = -1;
+    float hostilityForFrame;
+    int lastPublishedStage = int.MinValue;
+    float nextRefresh;
+
+    internal void AdvanceHostility(Body nearby) {
+        if (nearby == null || build == null || build.GetHealth() <= 200f || (!og.hostile && og.reputation >= 30f) ||
+            Vector2.Distance(nearby.transform.position, transform.position) >= 12f || hostilityFrame == Time.frameCount) return;
+
+        hostilityFrame = Time.frameCount;
+        hostilityForFrame = Mathf.MoveTowards(og.hostility, 100f, Time.deltaTime * 5f);
+        og.hostility = hostilityForFrame;
+        if (og.hostility > 30f && og.hostileLineTime < 1) {
+            og.hostileLineTime = 1;
+            og.sitTime = Time.time;
+            og.standTarget = 1f;
+            if (og.talker != null) og.talker.Talk(Locale.GetCharacter("traderwarning", og.character));
+        }
+        if (og.hostility > 55f && og.hostileLineTime < 2) {
+            og.hostileLineTime = 2;
+            if (og.talker != null) og.talker.Talk(Locale.GetCharacter("traderwarning", og.character));
+        }
+        if (og.hostility >= 100f && og.hostileLineTime < 3) {
+            og.hostileLineTime = 3;
+            if (og.talker != null) og.talker.Talk(Locale.GetCharacter("tradercombat", og.character));
+        }
+    }
+
+    internal void AfterRender() {
+        LastRenderedFrame = Time.frameCount;
+        if (!Net.IsServer || !is_registered) return;
+        if (hostilityFrame == Time.frameCount) og.hostility = hostilityForFrame;
+        int stage = og.hostility >= 100f ? 3 : og.hostility > 55f ? 2 : og.hostility > 30f ? 1 : og.reputation < 30f ? 0 : -1;
+        if (stage == lastPublishedStage) return;
+        lastPublishedStage = stage;
+        PublishState();
+    }
+
+    void PublishState() {
+        nextRefresh = Time.unscaledTime + 1f;
+        TraderCommit.Publish(og);
+    }
+
     void LateUpdate() {
         if (!Net.IsRunning) return;
 
@@ -231,6 +275,7 @@ public class TrackerTrader : BaseComponentTracker<TraderScript> {
         ClaimDeathGuilt();
 
         if (Net.IsServer && is_registered) {
+            if (Time.unscaledTime >= nextRefresh) PublishState();
 #if !FULLGAME
             var field_didDeathMoodDebuff = Traverse.Create(og).Field("didDeathMoodDebuff");
 
@@ -362,6 +407,8 @@ static class TraderScript_OnWillRender_PinLog {
             __instance.reputation = __state.rep;
             __instance.hostility = __state.host;
         }
+        if (Net.IsRunning && __instance != null && __instance.TryGetComponent(out TrackerTrader tracker))
+            tracker.AfterRender();
         TraderPinLog.AfterWillRender(__instance);
         TraderPinLog.Hold(PlayerCamera.main);
         FindTheBugInator.TraderRamp(__instance);

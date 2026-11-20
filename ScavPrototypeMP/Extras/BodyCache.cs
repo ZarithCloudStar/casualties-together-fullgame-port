@@ -27,6 +27,7 @@ internal static class BodyCache
 	}
 
 	static readonly Dictionary<int, Slot> Slots = new Dictionary<int, Slot>(16);
+	static int _prunePendingAt = StaleIds.FirstThreshold;
 
 	internal static Painkillers Painkillers(Body body)
 	{
@@ -100,6 +101,7 @@ internal static class BodyCache
 		if (!Slots.TryGetValue(id, out Slot slot))
 		{
 			slot = new Slot();
+			StaleIds.Prune<Body, Slot>(Slots, ref _prunePendingAt);
 			Slots[id] = slot;
 		}
 		return slot;

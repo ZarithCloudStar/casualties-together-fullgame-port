@@ -108,17 +108,49 @@ internal static class SaveSlots {
         if (!Net.IsServer || !Net.IsRunning || Util.IsInWorld() || Busy || LoadPrepared) return;
         SaveSlotMenu.Open(true, (slot, name) => {
             try {
-                Store.PrepareLoad(slot, Validate);
-                ResetCaches();
-                loading = slot;
-                active = 0;
-                loadingSession = Net.ServerEntityManager;
-                enteredLoadingWorld = false;
-                SavesystemPatch.savedatapathreplacement = DirectoryPath;
+                PrepareLoadSlot(slot);
                 log.l($"SLOTS: loading slot={slot} source={Store.Data(slot)} working={DirectoryPath}");
                 PreRunScript.instance.LoadRun(); // character admission and existing world/WS1 path
             } catch (Exception ex) { loading = 0; Report("读档失败，原存档已保留。", ex); }
         });
+    }
+
+    internal static void ImportTransferredSlot(int slot, string source, string hostName) {
+        if (!Enabled || slot < 1 || slot > SaveSlotStore.Count) throw new InvalidOperationException("无效的存档槽位。");
+        if (string.IsNullOrWhiteSpace(source) || !Directory.Exists(source)) throw new InvalidDataException("迁移存档暂存目录不存在。");
+        Ensure();
+        Validate(source);
+        var root = ReadRoot(source);
+        var meta = new SaveSlotStore.Meta {
+            name = SaveSlotStore.CleanName("主机迁移存档"),
+            hostName = string.IsNullOrWhiteSpace(hostName) ? "新主机" : hostName,
+            modVersion = Plugin.MOD_VERSION,
+            buildTag = KSteam.GetModBuildTag(),
+            savedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            layer = root.Value<int>("biome"),
+            playerCount = Directory.GetDirectories(source).Count(path => Path.GetFileName(path).StartsWith("STEAM_", StringComparison.Ordinal))
+        };
+        Store.Publish(slot, meta, source, Validate);
+        RememberActive(slot);
+        log.l($"SLOTS: imported host transfer slot={slot} source={source}");
+    }
+
+    internal static void PrepareTransferredLoad(int slot) {
+        if (!Enabled || !Net.IsServer || !Net.IsRunning || slot < 1 || slot > SaveSlotStore.Count)
+            throw new InvalidOperationException("无法准备迁移存档。");
+        PrepareLoadSlot(slot);
+        log.l($"SLOTS: prepared transferred slot={slot} source={Store.Data(slot)} working={DirectoryPath}");
+    }
+
+    static void PrepareLoadSlot(int slot) {
+        if (Busy || LoadPrepared) throw new InvalidOperationException("存档加载正在进行。");
+        Store.PrepareLoad(slot, Validate);
+        ResetCaches();
+        loading = slot;
+        active = 0;
+        loadingSession = Net.ServerEntityManager;
+        enteredLoadingWorld = false;
+        SavesystemPatch.savedatapathreplacement = DirectoryPath;
     }
     internal static void ApplyPreparedSettings() {
         var settings = ReadRunSettings(ReadRoot(DirectoryPath));
@@ -129,11 +161,7 @@ internal static class SaveSlots {
     }
 
     internal static Dictionary<string, object> ReadRunSettings(JObject root) {
-        var settings = WorldMP.GetNormalRunSettings();
-        var saved = root["runSettings"]?.ToObject<List<(string, string)>>();
-        if (saved != null)
-            foreach (var entry in SaveSystem.TupleListToDic(saved)) settings[entry.Key] = entry.Value;
-        return settings;
+        return RunSettingsCodec.DecodeSaved(root["runSettings"]);
     }
 
     internal static void LoadCompleted(bool success) {

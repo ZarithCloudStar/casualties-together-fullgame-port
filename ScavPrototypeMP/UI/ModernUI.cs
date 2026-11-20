@@ -120,9 +120,8 @@ static void BuildMPSettingsUI() {
 
 contentHeight = 0;
 ref float num = ref contentHeight;
-#if FULLGAME
-if (Util.GameIsFull()) LobbyCharacterSelection.Build(ref num);
-#endif
+// Character and chip choices now live on the stock PreRunScript page. The host
+// uses the stock unchipped difficulty setting, so no custom settings rows here.
 {
 
 var handler = new GameObject("MpSetHandler", typeof(MultiplayerSettingsHandler));

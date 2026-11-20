@@ -498,6 +498,10 @@ public static class Net {
     internal static void QuiesceForApplicationQuit() { IsRunning = false; }
 
     public static void ShutdownReset() {
+        bool wasRunning = IsRunning;
+        bool wasClient = IsClient;
+        if (wasRunning && wasClient) WorldMP.RememberDepartedClientObjects();
+
         SessionJoinLog.Reset();
         SessionLog.Mark("network shutdown/reset");
         RecipeProgress.ResetNetwork();
@@ -516,7 +520,7 @@ public static class Net {
 
             RPCManager_Initialize_MultiplayerPatch.QuickReset();
 
-            if (IsClient) {
+            if (wasClient) {
                 MP3Menu.dropdownList = null;
                 if (!String.IsNullOrEmpty(_clientRunSettingsBeforeConnect)) {
                     WorldMP.ApplyRunSettings(_clientRunSettingsBeforeConnect); // Apply back
@@ -524,8 +528,6 @@ public static class Net {
             }
             _clientRunSettingsBeforeConnect = null;
 
-            IsRunningSteam = false;
-            Type = NetType.Host;
             ClientMain.LOCAL_PING = 0;
 
             ClientMain.SERVER_FPS = 60;
@@ -535,7 +537,7 @@ public static class Net {
 
             ClientMain.MY_CONNECTION_QUALITY = 100;
             ServerMain.AVG_CONNECTION_QUALITY = 100;
-            if (IsRunning) {
+            if (wasRunning) {
                 log.l("Network Shutdown Reset called.");
             }
 
@@ -569,6 +571,9 @@ public static class Net {
             }
         } catch (Exception e) {
             Multiplayer.DoMultiplayerStatusMessageError("Net.ShutdownReset: !!!! CRITICAL FAILURE !!!!: " + e.ToString());
+        } finally {
+            IsRunning = false;
+            IsRunningSteam = false;
         }
         try {
             SavesystemPatch.UpdatePersistentDataPathCuzMultiplayer();
@@ -581,7 +586,7 @@ public static class Net {
 #endif
         Plugin.SkipMainMenuIntro();
 
-        if (IsClient) {
+        if (ntype == NetType.Client) {
             MP3Menu.dropdownList = null;
             _clientRunSettingsBeforeConnect = WorldMP.CompileRunSettings();
         }

@@ -14,7 +14,7 @@ internal static class SaveSlotMenu {
         internal string error;
     }
     static Row[] rows;
-    static bool load, confirmed;
+    static bool load, confirmed, transferSource, transferReceive, requireExisting;
     static int selected;
     static string name = "", error = "";
     static Action<int, string> accept;
@@ -24,9 +24,24 @@ internal static class SaveSlotMenu {
     static Vector2 scroll;
     static Vector2 detailsScroll;
     internal static bool IsOpen => accept != null || !string.IsNullOrEmpty(error);
+    internal static bool IsTransferOpen => IsOpen && (transferSource || transferReceive);
 
     internal static void Open(bool loading, Action<int, string> onAccept) {
         if (!Net.IsServer || !Net.IsRunning || IsOpen) return;
+        OpenCore(loading, onAccept, false, false, false);
+    }
+
+    internal static void OpenTransferSource(Action<int, string> onAccept) {
+        if (!Net.IsServer || !Net.IsRunning || IsOpen) return;
+        OpenCore(false, onAccept, true, false, true);
+    }
+
+    internal static void OpenTransferReceive(Action<int, string> onAccept) {
+        if (!Net.IsClient || !Net.IsRunning || IsOpen) return;
+        OpenCore(false, onAccept, false, true, false);
+    }
+
+    static void OpenCore(bool loading, Action<int, string> onAccept, bool source, bool receive, bool existing) {
         SaveSlots.Ensure();
         rows = new Row[5];
         for (int i = 0; i < 5; i++) {
@@ -34,11 +49,12 @@ internal static class SaveSlotMenu {
             try { rows[i].head = SaveSlots.Store.Read(i + 1); }
             catch (Exception ex) { rows[i].error = "存档损坏或不可读取"; log.error($"SLOTS: inspect slot={i + 1}: {ex}"); }
         }
-        load = loading; selected = 0; confirmed = false; scroll = detailsScroll = Vector2.zero;
+        load = loading; transferSource = source; transferReceive = receive; requireExisting = existing;
+        selected = 0; confirmed = false; scroll = detailsScroll = Vector2.zero;
         name = ""; error = ""; accept = onAccept;
-        session = Net.ServerEntityManager; world = WorldGeneration.world;
+        session = Net.IsServer ? Net.ServerEntityManager : Net.ClientEntityManager; world = WorldGeneration.world;
         BlockCanvas();
-        log.l("SLOTS: opened " + (load ? "load" : "save") + " selector");
+        log.l("SLOTS: opened " + (transferSource ? "transfer source" : transferReceive ? "transfer receive" : load ? "load" : "save") + " selector");
     }
     static void BlockCanvas() {
         if (blocker != null) return;
@@ -51,14 +67,15 @@ internal static class SaveSlotMenu {
         panel.transform.SetParent(blocker.transform, false);
         var rect = panel.GetComponent<RectTransform>();
         rect.anchorMin = Vector2.zero; rect.anchorMax = Vector2.one; rect.offsetMin = rect.offsetMax = Vector2.zero;
-        panel.GetComponent<Image>().color = Color.clear;
+        panel.GetComponent<Image>().color = Color.black;
     }
     internal static void ShowError(string message) {
-        if (!SaveSlots.Enabled || !Net.IsServer) return;
-        error = message; session = Net.ServerEntityManager; world = WorldGeneration.world; BlockCanvas();
+        if (!SaveSlots.Enabled || (!Net.IsServer && !transferReceive)) return;
+        error = message; session = Net.IsServer ? Net.ServerEntityManager : Net.ClientEntityManager; world = WorldGeneration.world; BlockCanvas();
     }
     static void Close() {
         accept = null; error = ""; rows = null; selected = 0;
+        transferSource = transferReceive = requireExisting = false;
         if (blocker != null) UnityEngine.Object.Destroy(blocker);
         blocker = null;
         if (EventSystem.current != null && previousSelection != null && previousSelection.activeInHierarchy)
@@ -67,10 +84,11 @@ internal static class SaveSlotMenu {
     }
     internal static void Tick() {
         if (!IsOpen) return;
-        if (!Net.IsServer || !Net.IsRunning || !ReferenceEquals(session, Net.ServerEntityManager) || !ReferenceEquals(world, WorldGeneration.world)) Close();
+        object currentSession = Net.IsServer ? Net.ServerEntityManager : Net.ClientEntityManager;
+        if ((!Net.IsServer && !transferReceive) || !Net.IsRunning || !ReferenceEquals(session, currentSession) || !ReferenceEquals(world, WorldGeneration.world)) Close();
     }
     internal static void Draw() {
-        if (!IsOpen || !Net.IsServer || !Net.IsRunning) return;
+        if (!IsOpen || (!Net.IsServer && !transferReceive) || !Net.IsRunning) return;
         bool enabled = GUI.enabled;
         try {
             GUI.enabled = true;
@@ -86,8 +104,10 @@ internal static class SaveSlotMenu {
                 if (MenuDialogUI.Button(new Rect(area.xMax - 140 * scale, area.yMax - 42 * scale, 140 * scale, 42 * scale), "关闭", scale)) Close();
                 return;
             }
-            float y = MenuDialogUI.Label(area, area.y, load ? "继续探险" : "保存并退出", title);
-            y = MenuDialogUI.Label(area, y + gap * .4f, load ? "选择存档槽位，确认后继续旅程" : "选择存档槽位，为这段旅程命名", muted);
+            string heading = transferSource ? "发送多人存档" : transferReceive ? "保存接收的多人存档" : load ? "继续探险" : "保存并退出";
+            string hint = transferSource ? "选择要发送给新主机的存档槽位" : transferReceive ? "选择一个槽位保存对方发送的存档" : load ? "选择存档槽位，确认后继续旅程" : "选择存档槽位，为这段旅程命名";
+            float y = MenuDialogUI.Label(area, area.y, heading, title);
+            y = MenuDialogUI.Label(area, y + gap * .4f, hint, muted);
             float buttonHeight = Mathf.Max(34, body.fontSize * 1.9f);
             Rect footer = new Rect(area.x, area.yMax - buttonHeight, area.width, buttonHeight);
             Rect content = new Rect(area.x, y + gap, area.width, Mathf.Max(40, footer.y - gap - y - gap));
@@ -100,7 +120,7 @@ internal static class SaveSlotMenu {
             DrawDetails(detail, scale, body, muted, gap);
             float cancelWidth = Mathf.Min(180 * scale, footer.width * .3f);
             bool cancel = MenuDialogUI.Button(new Rect(footer.x, footer.y, cancelWidth, footer.height), "取消", scale);
-            string action = load ? "确认加载" : confirmed ? "确认覆盖并退出" :
+            string action = transferSource ? "选择此存档" : transferReceive ? (confirmed ? "确认覆盖并保存" : "保存到此槽位") : load ? "确认加载" : confirmed ? "确认覆盖并退出" :
                 selected > 0 && (rows[selected - 1].head != null || rows[selected - 1].error != null) ? "覆盖此槽位…" : "新建并退出";
             bool submit = MenuDialogUI.Button(new Rect(footer.x + cancelWidth + gap, footer.y, footer.width - cancelWidth - gap, footer.height), action, scale, selected != 0, selected != 0);
             if (cancel) { Close(); return; }
@@ -132,7 +152,7 @@ internal static class SaveSlotMenu {
             for (int i = 0; i < 5; i++) {
                 var row = rows[i]; var meta = row.head?.meta;
                 var card = new Rect(0, y, width, heights[i]);
-                bool usable = !load || meta != null;
+                bool usable = transferSource ? meta != null : !load || meta != null;
                 if (selected == i + 1) {
                     MenuDialogUI.Box(card, new Color(.13f, .12f, .09f), MenuDialogUI.Accent);
                     MenuDialogUI.Fill(new Rect(card.x, card.y, 3, card.height), MenuDialogUI.Accent);
@@ -162,7 +182,7 @@ internal static class SaveSlotMenu {
                 GUILayout.Label(selected == 0 ? "存档信息" : $"槽位 {selected:00}", MenuDialogUI.Text(scale, 1.1f));
                 GUILayout.Space(gap);
                 if (selected == 0) {
-                    GUILayout.Label(load ? "选择一个已有存档，查看详情。\n空槽位无法加载。" : "选择一个槽位保存当前旅程。\n已有存档需再次确认后才会覆盖。", body);
+                    GUILayout.Label(transferSource ? "选择一个已有存档发送给对方。" : transferReceive ? "选择一个槽位保存对方发送的存档。\n已有存档需要确认后才会覆盖。" : load ? "选择一个已有存档，查看详情。\n空槽位无法加载。" : "选择一个槽位保存当前旅程。\n已有存档需再次确认后才会覆盖。", body);
                 } else {
                     var row = rows[selected - 1]; var meta = row.head?.meta;
                     GUILayout.Label(meta?.name ?? row.error ?? "空槽位", body);
@@ -172,7 +192,7 @@ internal static class SaveSlotMenu {
                         GUILayout.Label($"模组版本：{meta.modVersion}\n构建：{meta.buildTag}", muted);
                     }
                     GUILayout.Space(gap);
-                    if (!load) {
+                    if (!load && !transferSource && !transferReceive) {
                         GUILayout.Label("存档名称", body);
                         var field = MenuDialogUI.Text(scale, 1, Color.white, false);
                         field.normal.background = GUI.skin.textField.normal.background;
@@ -181,11 +201,12 @@ internal static class SaveSlotMenu {
                         string edited = GUILayout.TextField(name, 64, field, GUILayout.Height(Mathf.Max(32, body.fontSize * 1.9f)));
                         if (edited != name) { name = edited; confirmed = false; }
                         GUILayout.Label("最多 24 字；非法字符会自动去除。", muted);
-                    } else if (meta != null && (meta.modVersion != Plugin.MOD_VERSION || meta.buildTag != KSteam.GetModBuildTag()))
+                    } else if ((load || transferReceive) && meta != null && (meta.modVersion != Plugin.MOD_VERSION || meta.buildTag != KSteam.GetModBuildTag()))
                         GUILayout.Label("版本或构建与本机不同，可能导致不同步。确认后仍可加载。", MenuDialogUI.Text(scale, .9f, MenuDialogUI.Accent));
                     if (confirmed) {
                         GUILayout.Space(gap);
-                        GUILayout.Label($"确认覆盖「{meta?.name ?? row.error}」？\n点击下方“确认覆盖并退出”后提交。", MenuDialogUI.Text(scale, 1, MenuDialogUI.Accent));
+                        string confirmText = transferReceive ? $"确认覆盖「{meta?.name ?? row.error}」？\n点击下方“确认覆盖并保存”后提交。" : $"确认覆盖「{meta?.name ?? row.error}」？\n点击下方“确认覆盖并退出”后提交。";
+                        GUILayout.Label(confirmText, MenuDialogUI.Text(scale, 1, MenuDialogUI.Accent));
                     }
                 }
                 if (!string.IsNullOrEmpty(error)) { GUILayout.Space(gap); GUILayout.Label(error, MenuDialogUI.Text(scale, 1, MenuDialogUI.Accent)); }
@@ -194,13 +215,19 @@ internal static class SaveSlotMenu {
     }
     static void Submit() {
         try {
-            if (!load) name = SaveSlotStore.CleanName(name);
-            if (!load && !confirmed && (rows[selected - 1].head != null || rows[selected - 1].error != null)) { confirmed = true; return; }
-            var action = accept; int slot = selected; string chosenName = name;
+            if (selected <= 0 || (transferSource && rows[selected - 1].head == null)) {
+                error = transferSource ? "请选择一个已有存档。" : "请选择存档槽位。";
+                return;
+            }
+            if (!load && !transferSource && !transferReceive) name = SaveSlotStore.CleanName(name);
+            bool overwrite = (transferReceive || (!load && !transferSource)) && (rows[selected - 1].head != null || rows[selected - 1].error != null);
+            if (overwrite && !confirmed) { confirmed = true; return; }
+            var action = accept; int slot = selected; string chosenName = name; bool allowClientTransfer = transferReceive;
             object oldSession = session; var oldWorld = world;
             Close();
             CharacterSelection.DeferUiAction("存档槽位确认", () => {
-                if (!Net.IsServer || !Net.IsRunning || !ReferenceEquals(oldSession, Net.ServerEntityManager) || !ReferenceEquals(oldWorld, WorldGeneration.world)) return;
+                object currentSession = Net.IsServer ? Net.ServerEntityManager : Net.ClientEntityManager;
+                if ((!Net.IsServer && !allowClientTransfer) || !Net.IsRunning || !ReferenceEquals(oldSession, currentSession) || !ReferenceEquals(oldWorld, WorldGeneration.world)) return;
                 try { action(slot, chosenName); }
                 catch (Exception ex) { SaveSlots.Report("存档操作失败，原存档已保留，请重试。", ex); }
             });

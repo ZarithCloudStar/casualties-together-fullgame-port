@@ -61,11 +61,11 @@ public static class XalorisScript_OnWillRenderObject_MultiplayerPatch {
     public class Krokosha_XalorisScript_OverrideComponent : UnityEngine.MonoBehaviour {
         float lastTime = 0f;
         void Update() {
-            //OG: XalorisScript.OnWillRenderObject V4
+            if (!Net.IsRunning || !Net.IsServer) return;
             if (Time.time - lastTime > 0.5f) {
                 lastTime = Time.time;
                 foreach (var obj in ScavPlayer.GetPlayerBodiesInRadius(transform.position, 5.5f)) {
-                    obj.body.septicShock += 0.074f;
+                    if (obj != null && obj.body != null) obj.body.septicShock += 0.074f;
                 }
             }
         }
@@ -73,7 +73,7 @@ public static class XalorisScript_OnWillRenderObject_MultiplayerPatch {
 
     static bool Prefix(XalorisScript __instance) {
         if (Net.IsRunning) {
-            var tr = __instance.GetOrAddComponent<Krokosha_XalorisScript_OverrideComponent>();
+            if (Net.IsServer) __instance.GetOrAddComponent<Krokosha_XalorisScript_OverrideComponent>();
             return false;
         }
         return true;
@@ -85,6 +85,15 @@ public static class XalorisScript_OnWillRenderObject_MultiplayerPatch {
 
 
 
+
+[HarmonyPatch(typeof(XalorisScript), nameof(XalorisScript.Start))]
+static class XalorisScript_Start_MultiplayerPatch {
+    static void Postfix(XalorisScript __instance) {
+        // The host camera may never render a plant next to a remote player.
+        if (Net.IsRunning && Net.IsServer)
+            __instance.GetOrAddComponent<XalorisScript_OnWillRenderObject_MultiplayerPatch.Krokosha_XalorisScript_OverrideComponent>();
+    }
+}
 
 [HarmonyPatch(typeof(SpikeStabberScript), nameof(SpikeStabberScript.Stab))]
 static class SpikeStabberScript_Stab_MultiplayerPatch {
@@ -512,6 +521,9 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
     public float checkTime = 1f;
     public float maxDistance = 50f;
     public float chargeTime = 0f;
+    bool warnedLocal = false;
+    const float CannonChargeTime = 5f;
+    const float CannonMaxBlockedRange = 150f;
 
 
     // host spent state. barrel z is the angle it froze on.
@@ -672,6 +684,15 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
         }
         chargeTime += Time.deltaTime;
 
+        // The vanilla Update is replaced by this tracker, so its local HUD
+        // warning is not called automatically. Re-create the same visual
+        // warning for the local camera while the cannon is winding up.
+        if (!warnedLocal && chargeTime < CannonChargeTime * 0.8f) {
+            if (PlayerCamera.main != null && CanSeePos(transform, PlayerCamera.main.transform.position)) {
+                PlayerCamera.main.WarnSoundCannon(transform.position);
+                warnedLocal = true;
+            }
+        }
 
         var closestplayerbody = GetClosestVisibleBody(this.transform);
         var closestbody = closestplayerbody.body;
@@ -689,7 +710,7 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
         var current_lookdir = base.transform.GetChild(0).up;
 
 
-        if ((chargeTime < 5f)) {
+        if ((chargeTime < CannonChargeTime)) {
             return;
         }
         spent = true;
@@ -770,6 +791,9 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
                 }
 
             } else {
+                if (distance_to_this_plr > CannonMaxBlockedRange)
+                    continue;
+
                 //OG: SoundCannon.Update
                 body.consciousness -= 30f;
                 body.eyeScareTime = 4f;

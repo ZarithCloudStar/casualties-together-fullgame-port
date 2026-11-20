@@ -19,6 +19,8 @@ internal static class ReleaseUpdate {
         internal string version = "", build = "", url = ReleasePage, notes = "", title = "";
         internal long publishedAt;
         internal bool fromGitHub;
+        internal string assetUrl = "", assetName = "", assetDigest = "";
+        internal long assetSize;
     }
     static readonly Regex VersionPattern = new(@"^[vV]?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-cu-port)?(?:-bugfix(\d+))?(?:-(alpha|beta|rc|preview|dev|test)(?:[.-]?(\d+))?)?(?:\+[0-9A-Za-z.-]+)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
@@ -66,6 +68,19 @@ internal static class ReleaseUpdate {
         }
         if (link.Length != 0 && !IsWebUrl(link)) throw new FormatException("发布信息中的下载地址无效。");
         info.url = link.Length == 0 ? ReleasePage : link;
+        if (root["assets"] is JArray releaseAssets) {
+            foreach (var asset in releaseAssets) {
+                string name = ((string)asset["name"] ?? "").Trim();
+                string candidate = ((string)asset["browser_download_url"] ?? "").Trim();
+                if (!name.StartsWith("CasualtiesTogether-Fullgame-", StringComparison.OrdinalIgnoreCase)
+                    || !name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) || !IsWebUrl(candidate)) continue;
+                info.assetUrl = candidate;
+                info.assetName = name;
+                long.TryParse(Convert.ToString(asset["size"], CultureInfo.InvariantCulture), out info.assetSize);
+                info.assetDigest = ((string)asset["digest"] ?? "").Trim();
+                break;
+            }
+        }
         var published = root["published_at"] ?? root["publishedAt"];
         if (published?.Type == JTokenType.Integer) {
             info.publishedAt = (long)published;

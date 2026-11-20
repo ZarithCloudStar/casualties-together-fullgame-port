@@ -132,6 +132,8 @@ public static class CraftCommit {
     static readonly Dictionary<ushort, float> Tombstones = new Dictionary<ushort, float>();
     static readonly List<Saved> SavedItems = new List<Saved>();
     static readonly Dictionary<knetid, PlayerCrafts> ServerCrafts = new Dictionary<knetid, PlayerCrafts>();
+
+    internal static void Forget(knetid player) => ServerCrafts.Remove(player);
     static readonly Dictionary<ushort, Gate> Gates = new Dictionary<ushort, Gate>();
     // ingredient id plus the generation we lifted. a recycled id is the result, and that one still writes.
     static readonly Dictionary<ushort, byte> Silent = new Dictionary<ushort, byte>();

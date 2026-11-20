@@ -959,8 +959,21 @@ public static bool DidHeFinishTheLayer(Body body) {
 #if FULLGAME
 if (EndingFlow.Active && WorldGeneration.world.biomeDepth >= 9 && WorldGeneration.world.biomeDepth <= 11) return false;
 #endif
+bool raw = false;
+bool left = false;
+#if FULLGAME
+raw = FullgameWorldCompat.IsAtLayerExit(body);
+left = FullgameWorldCompat.HasLeftLayerExit(body);
+#else
+raw = IsLayerFinishPosition(body.transform.position.y);
+#endif
+if (body != null && body.TryGetNetBody(out var bodyNet) && bodyNet.plr != null) {
+    if (raw) bodyNet.plr.layerExitLatched = true;
+    else if (left) bodyNet.plr.layerExitLatched = false;
+    return bodyNet.plr.layerExitLatched;
+}
 // OG: WorldGeneration.ContinueRun
-if (IsLayerFinishPosition(body.transform.position.y)) {
+if (raw) {
 return true;
 }
 
@@ -985,6 +998,7 @@ public static void ResetPlayersFinishedStatus() {
 foreach (var item in ScavPlayer.AllPlayers) {
 item._tutorial_finished = false;
 item.finishedLayer = false;
+item.layerExitLatched = false;
 }
 }
 
@@ -1062,7 +1076,7 @@ ServerMain._ded_server_switch_counter = -100;
 
 var prs = PreRunScript.instance;
 if (prs) {
-if (!CharacterReadyGate.Blocked) {
+if (!CharacterReadyGate.Blocked && !LobbyHostTransfer.PauseAutoContinue && !LobbyHostTransfer.HasRequest && !LobbyHostTransfer.Busy && !LobbyHostTransfer.AwaitingTransferredLoad) {
 Multiplayer.DoMultiplayerStatusMessageLog(Lang.GetEN("autostarting_run"));
 prs.StartRun();
 }
@@ -1584,15 +1598,19 @@ if (_lastSentRunSettings != curRunSettings || _lastSentRules != curRules) {
 _lastSentRunSettings = curRunSettings;
 _lastSentRules = curRules;
 
-var writer = Net.CreateWriter(NetmsgId.CLIENT_RunSettings);
-writer.Put(curRunSettings, true);
-writer.Put(Multiplayer.rules);
-writer.CompressWriter();
-Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, ServerMain.AllClientIdsExceptHost);
+SendRunSettingsTo(ServerMain.AllClientIdsExceptHost, curRunSettings);
 }
 }
 
 }
+internal static void SendRunSettingsTo(IEnumerable<knetid> clients, string runSettings = null) {
+    var writer = Net.CreateWriter(NetmsgId.CLIENT_RunSettings);
+    writer.Put(runSettings ?? WorldMP.CompileRunSettings(), true);
+    writer.Put(Multiplayer.rules);
+    writer.CompressWriter();
+    Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, clients);
+}
+
 internal static string _lastSentRunSettings = "";
 internal static string _lastSentRules = "";
 

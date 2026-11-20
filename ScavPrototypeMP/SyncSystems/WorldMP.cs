@@ -132,11 +132,7 @@ public class WorldMP : CasualtiesTogetherSingleton {
         Dictionary<string, object> dict = GetNormalRunSettings();
         try {
             base64 = Encoding.UTF8.GetString(Util.Decompress(Convert.FromBase64String(base64)));
-            JArray jArray = JArray.Parse(base64);
-
-            foreach (KeyValuePair<string, object> item2 in SaveSystem.TupleListToDic(jArray.ToObject<List<(string, string)>>())) {
-                dict[item2.Key] = item2.Value;
-            }
+            return RunSettingsCodec.Decode(JArray.Parse(base64), dict, key => log.warn($"ReadRunSettings: ignored invalid setting {key}"));
         } catch (Exception e) {
             log.error($"ReadRunSettings: {e.Message}\n{new StackTrace()}");
         }
@@ -672,8 +668,15 @@ public class WorldMP : CasualtiesTogetherSingleton {
     }
 
     static float WORLDCLEAR_MAX_HALT_TIME = 0.04f;
+    static Dictionary<GameObject, SyncInfo> departedClientObjects;
+
+    internal static void RememberDepartedClientObjects() {
+        departedClientObjects = new Dictionary<GameObject, SyncInfo>(NetObjectRegistry.SyncRegistry);
+    }
 
     static IEnumerator FinishWorldGen_ClientClearWorldObjects() {
+        var departed = departedClientObjects;
+        departedClientObjects = null;
         var items = FindObjectsOfType<Item>(true).Select(x => x.gameObject);
         var builds = FindObjectsOfType<BuildingEntity>(true).Select(x => x.gameObject);
 
@@ -686,15 +689,21 @@ public class WorldMP : CasualtiesTogetherSingleton {
 #if FULLGAME
             if (EndingLabObjects.Keep(x) || (x != null && x.GetComponent<WorldSnapshotRestored>() != null)) continue;
 #endif
-            if (x == null || NetObjectRegistry.ObjectShouldNotBeSynced(x) || NetObjectRegistry.IsRegistered(x)) {
-                // dont destroy it
-            } else { 
-                GameObject.Destroy(x);
+            if (x == null || NetObjectRegistry.ObjectShouldNotBeSynced(x) || x.GetComponentInParent<Body>() != null) continue;
+            if (NetObjectRegistry.SyncRegistry.TryGetValue(x, out var registered)) {
+                // Keep registrations received for this join, even when a network id was reused.
+                if (departed == null || !departed.TryGetValue(x, out var old) || !ReferenceEquals(old, registered)) continue;
+                NetObjectRegistry.SyncRegistry.Remove(x);
+                if (NetObjectRegistry.NetIdToSyncInfoDict.TryGetValue(registered.syncId, out var byId) && ReferenceEquals(byId, registered))
+                    NetObjectRegistry.NetIdToSyncInfoDict.Remove(registered.syncId);
+                if (x.TryGetComponent(out SyncInfoGameObjectTracker tracker) && ReferenceEquals(tracker.syncInfo, registered))
+                    tracker.syncInfo = null;
+            }
 
-                if (Time.realtimeSinceStartupAsDouble - time > WORLDCLEAR_MAX_HALT_TIME) {
-                    yield return null;
-                    time = Time.realtimeSinceStartupAsDouble;
-                }
+            GameObject.Destroy(x);
+            if (Time.realtimeSinceStartupAsDouble - time > WORLDCLEAR_MAX_HALT_TIME) {
+                yield return null;
+                time = Time.realtimeSinceStartupAsDouble;
             }
 
         }
@@ -786,6 +795,9 @@ public class WorldMP : CasualtiesTogetherSingleton {
         if (Net.IsRunning) {
 
             if (Net.IsServer) {
+#if FULLGAME
+                if (Util.GameIsFull()) LayerBuildingStream.RegisterNearby();
+#endif
                 foreach (var plr in ScavPlayer.ClientIdToPlayerDict.Values) {
                     plr.ServerPlayerState.OnWorldGenerate();
                 }
@@ -1057,6 +1069,9 @@ public class WorldMP : CasualtiesTogetherSingleton {
                     }
                 }
 
+#if FULLGAME
+                if (plr.LateJoin && Util.GameIsFull()) LayerBuildingStream.RegisterNearby();
+#endif
                 // and sync nearest items right now
                 foreach (var item in NetObjectRegistry.GatherClosestObjectsToSync(plr.pos,plr.body,64)) {
                     NetObjectRegistry.SafeNewGO(item);
@@ -1065,8 +1080,15 @@ public class WorldMP : CasualtiesTogetherSingleton {
                     PlayerCheckpoint.SendCrafted(crafted);
                 // the client builds each trader with a fresh roll. this is the host list, reputation, and allotment.
                 TraderSync.SendTraderState(clientId);
-            } else if (ScavPlayer.TryGetPlayerFromClientId(clientId, out plr)) {
+            } else if (plr != null) {
                 TraderSync.SendTraderState(clientId);
+            }
+
+            if (plr != null && !plr.IsLocal) {
+                ServerMain.SendRunSettingsTo(new[] { clientId });
+#if FULLGAME
+                if (EndingFlow.Active) EndingFlow.SendTo(clientId);
+#endif
             }
         } finally {
             KrokV5Optimization.FixRejoinBaseline.After(clientId, queueBaseline);

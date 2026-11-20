@@ -14,7 +14,7 @@ namespace Together;
 internal static class SessionLogGame {
     internal static void Start() {
         try {
-            string protocol = "V" + Application.version + "_MPv" + BuildInfo.NETWORK_VERSION;
+            string protocol = "V" + Application.version.TrimStart('v', 'V') + "_MPv" + BuildInfo.NETWORK_VERSION;
             string fallbackFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + "Low",
                 "Orsoniks", "CasualtiesUnknown", "mp_save", "logs");
             string folder = null;

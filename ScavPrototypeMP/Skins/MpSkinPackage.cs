@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using Together;
 using UnityEngine;
 
 // textures from a received zip stay alive until the session ends.
@@ -26,6 +27,10 @@ internal sealed class MpSkinPackage {
         using MemoryStream memory = new MemoryStream();
         using (ZipArchive zip = new ZipArchive(memory, ZipArchiveMode.Create, true)) {
             using SHA256 content = SHA256.Create();
+            ZipArchiveEntry marker = zip.CreateEntry(MpSkinProtocol.MarkerEntry);
+            using (StreamWriter writer = new StreamWriter(marker.Open(), Encoding.UTF8)) {
+                writer.Write(MpSkinProtocol.MarkerJson);
+            }
             // head files win when the same name sits in both folders, matching the local loader.
             AddFolder(zip, Path.Combine(root, "Head"), "Head", content);
             AddFolder(zip, Path.Combine(root, "Body"), "Body", content);
@@ -65,6 +70,11 @@ internal sealed class MpSkinPackage {
         using SHA256 content = SHA256.Create();
         try {
             using ZipArchive zip = new ZipArchive(new MemoryStream(zipBytes), ZipArchiveMode.Read);
+            if (!MpSkinProtocol.TryReadMarker(zip, out string protocol, out bool supportsLeft)) {
+                SkinTrace.Problem("protocol-rejected", "hash=" + expectedHash);
+                return Reject(package);
+            }
+            LightDiagnostics.Skin("protocol=" + protocol + " left=" + (supportsLeft ? 1 : 0));
             int entries = 0;
             int total = 0;
             long pixels = 0;

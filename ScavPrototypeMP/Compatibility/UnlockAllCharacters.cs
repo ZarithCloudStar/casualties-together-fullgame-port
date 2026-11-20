@@ -2,6 +2,7 @@
 using BepInEx.Configuration;
 using CasualtiesTogetherUtils;
 using HarmonyLib;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -25,6 +26,8 @@ internal static class UnlockAllCharacters {
     }
 
     static bool Active => Util.GameIsFull() && Enabled != null && Enabled.Value;
+
+    internal static int PortraitUnlock(string key) => Active ? 1 : PlayerPrefs.GetInt(key);
 
     internal static void Apply() {
         if (!Active) return;
@@ -71,5 +74,13 @@ internal static class UnlockAllCharacters {
 [HarmonyPatch(typeof(PreRunScript), "Awake")]
 internal static class PreRunScript_Awake_UnlockAllCharacters {
     static void Postfix(PreRunScript __instance) => UnlockAllCharacters.ForceButtons(__instance);
+}
+
+[HarmonyPatch(typeof(PreRunScript), "HandleCharacterSelect")]
+internal static class PreRunScript_HandleCharacterSelect_UnlockAllCharacters {
+    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> code) =>
+        code.MethodReplacer(
+            AccessTools.Method(typeof(PlayerPrefs), nameof(PlayerPrefs.GetInt), new[] { typeof(string) }),
+            AccessTools.Method(typeof(UnlockAllCharacters), nameof(UnlockAllCharacters.PortraitUnlock)));
 }
 #endif

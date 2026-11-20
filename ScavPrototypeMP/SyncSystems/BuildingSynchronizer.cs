@@ -132,15 +132,19 @@ public class CorpseScriptMultiplayerRewrite : MonoBehaviour {
                         npc != null // but always do this for player corpses
                     ) { 
 
-                        plr.body.happiness -= 3.5f * plr.body.desensitizedMult;
-                        plr.body.sicknessAmount += 6f * plr.body.desensitizedMult;
+                        if (plr.body.charType != 2) {
+                            plr.body.happiness -= 3.5f * plr.body.desensitizedMult;
+                            plr.body.sicknessAmount += 6f * plr.body.desensitizedMult;
+                        }
                         plr.body.desensitizedMult *= 0.9f;
                         plr.body.corpsesSeen++;
                         if (plr.body.totalHappiness < -55f) {
                             plr.body.talker.Talk(Locale.GetCharacter("seecorpsesuicidal"), null, force: true);
                         } else if (plr.body.corpsesSeen < 9) {
                             plr.body.talker.Talk(Locale.GetCharacter("seecorpse"));
-                            plr.body.eyeScareTime = 4f;
+                            if (plr.body.charType != 2) {
+                                plr.body.eyeScareTime = 4f;
+                            }
                         } else {
                             plr.body.talker.Talk(Locale.GetCharacter("seecorpsedesensitized"));
                         }
@@ -160,7 +164,7 @@ public class CorpseScriptMultiplayerRewrite : MonoBehaviour {
 
             plr.body.overrideLookTime = 0.5f;
             plr.body.overrideLookPos = transform.position;
-            if (plr.body.corpsesSeen < 9) {
+            if (plr.body.charType != 2 && plr.body.corpsesSeen < 9) {
                 plr.body.eyeScareTime = 0.5f;
             }
             
@@ -200,11 +204,13 @@ public class CorpseScriptMultiplayerRewrite : MonoBehaviour {
                         total_damage *= 0.5f; 
                     }
 
-                    witness.body.happiness -= total_damage * witness.body.desensitizedMult;
-                    witness.body.eyeScareTime = 5f;
+                    if (witness.body.charType != 2) {
+                        witness.body.happiness -= total_damage * witness.body.desensitizedMult;
+                        witness.body.eyeScareTime = 5f;
 
-                    if (is_attacker) {
-                        witness.body.talker.Talk(Locale.GetCharacter("breakcorpse"));
+                        if (is_attacker) {
+                            witness.body.talker.Talk(Locale.GetCharacter("breakcorpse"));
+                        }
                     }
                 }
             }
@@ -259,7 +265,35 @@ public class OnWillRenderObject_ForceForMPComponent : MonoBehaviour {
     }
 #endif
 
+    bool simulateTrader;
+    MethodInfo traderRender;
+
+    void OnEnable() => Camera.onPostRender += RenderTraderIfNeeded;
+    void OnDisable() => Camera.onPostRender -= RenderTraderIfNeeded;
+
+    void RenderTraderIfNeeded(Camera camera) {
+        if (!Net.IsRunning || !simulateTrader || camera != Camera.main ||
+            !(target is TraderScript trader) || trader == null) return;
+
+        var traderTracker = trader.GetOrAddComponent<TrackerTrader>();
+        if (traderTracker.LastRenderedFrame == Time.frameCount) return;
+        traderRender ??= AccessTools.Method(typeof(TraderScript), "OnWillRenderObject");
+        traderRender?.Invoke(trader, null);
+    }
+
     void Update() {
+        if (!Net.IsRunning) return;
+        if (target is TraderScript trader && trader != null) {
+            Body nearby = Net.IsServer ? TrackerTrader.ClosestLiving(trader.transform.position) : Util.GetLocalBodyNullable();
+            bool close = nearby != null && Vector2.Distance(trader.transform.position, nearby.transform.position) < 12f;
+            simulateTrader = trader.hostile || close;
+            if (Net.IsServer && simulateTrader) {
+                ChunkSleep.Ignore(gameObject);
+                trader.GetOrAddComponent<TrackerTrader>().AdvanceHostility(nearby);
+            }
+            if (Camera.main == null) RenderTraderIfNeeded(null);
+            return;
+        }
         if (Net.IsClient) {
             if (target is GunmineScript gun)
                 TrapClaim.TickClientGun(gun);

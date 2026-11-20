@@ -100,7 +100,7 @@ internal static class ChipState {
             }
             return CharacterSelection.Choose(CharacterSelection.Local);
         }
-        if (CharacterLobby.LockedBySave || player?.body != null) return false;
+        if (player?.body != null) return false;
         AdoptLocal(unchipped);
         return CharacterSelection.Choose(CharacterSelection.Local);
     }

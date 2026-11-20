@@ -751,8 +751,13 @@ public class SyncBody : PredictableEntityLogic {
     }
 
     internal bool readingRagdollData = false;
+    private ushort? lastRagdollPoseTick;
 
-
+    internal bool AcceptRagdollPose(ushort tick) {
+        if (lastRagdollPoseTick is ushort last && LiteEntitySystem.Utils.SequenceDiff(tick, last) <= 0) return false;
+        lastRagdollPoseTick = tick;
+        return true;
+    }
 }
 
 
@@ -2527,9 +2532,6 @@ public class SyncInfo : PredictableEntityLogic {
             if (specialdata1 == 1 && !drel.working) {
                 DrillPod_OnUse_MultiplayerPatch.ForceRepairDrill(drel.drill);
             }
-        } else if (go.TryGetComponent(out GrabberPlant grabber)) {
-            if (GrabberPlant_Update_MultiplayerPatch.Live(go.transform.position))
-                GrabberPlant_Update_MultiplayerPatch.Follow(grabber, this);
         } else if (go.TryGetComponent(out TraderScript trader)) {
             trader.desiredPos = trader_desiredpos.Value;
         } else if (b.TryGetComponent(out SoundCannon _)) {
@@ -2679,11 +2681,63 @@ public class SyncInfo : PredictableEntityLogic {
 
     // one predicted use. the postfix also runs when stamina no-ops, so a repeat must not slide the deadline.
     public void ArmPredictedUse() {
+        // Every predicted use needs a matching host acknowledgement. The
+        // round-trip tick remains as a fallback for old or lost packets.
+        AwaitServerAck();
         if (useIgnoreArmed) {
             return;
         }
         useIgnoreArmed = true;
         SetIgnoreTimeForRoundTrip();
+    }
+
+    // Client-only guard for a use request. A bounded deadline prevents a lost
+    // acknowledgement from freezing the item forever.
+    private int pendingAcks;
+    private double pendingAckDeadline;
+
+    public void AwaitServerAck() {
+        if (!Net.IsClient) {
+            return;
+        }
+
+        float rtt = ClientMain.RTT_IN_SECONDS_with_margin;
+        if (rtt < 0f) {
+            rtt = 0f;
+        }
+
+        double wait = 1.5 + Math.Min(rtt * 2f, 6f);
+        pendingAcks++;
+        double deadline = Time.realtimeSinceStartupAsDouble + wait;
+        if (deadline > pendingAckDeadline) {
+            pendingAckDeadline = deadline;
+        }
+    }
+
+    internal void OnServerAck() {
+        if (pendingAcks <= 0) {
+            return;
+        }
+
+        pendingAcks--;
+        if (pendingAcks > 0) {
+            return;
+        }
+
+        // The state snapshot can trail the reliable ack by one send and a
+        // short interpolation window.
+        int span = (int)(0.25f * Net.ServerEntitySendRate);
+        if (span < 2) {
+            span = 2;
+        }
+        if (span > MaxIgnoreLead) {
+            span = MaxIgnoreLead;
+        }
+
+        ushort newTick = (ushort)(Net.ServerTick + span);
+        if (LiteEntitySystem.Utils.SequenceDiff(newTick, lastUpdateTick) > 0) {
+            lastUpdateTick = newTick;
+        }
     }
 
     /// <summary>
@@ -2716,6 +2770,13 @@ public class SyncInfo : PredictableEntityLogic {
         }
     }
     public bool IsIgnored() {
+        if (pendingAcks > 0) {
+            if (Time.realtimeSinceStartupAsDouble < pendingAckDeadline) {
+                return true;
+            }
+            pendingAcks = 0;
+        }
+
         // positive lead means the deadline is still ahead of the server, wrap included.
         // equal is still this tick, so it stays stale until the server moves past it.
         int lead = LiteEntitySystem.Utils.SequenceDiff(lastUpdateTick, Net.ServerTick);

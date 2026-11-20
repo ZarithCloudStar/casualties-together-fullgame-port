@@ -12,8 +12,8 @@ internal static class CharacterLobby {
     internal static bool ClientSession { get; private set; }
     internal static bool PanelRequested { get; private set; }
     internal static bool LocalChosen { get; private set; }
-    // The server admitted us from its per-save memory, so this save already owns
-    // our character: the panel must stay closed and the pick must not change.
+    // Kept for old call sites/tests; a save binding no longer hides the panel.
+    // The server still reapplies the save binding before world start.
     internal static bool LockedBySave { get; private set; }
     internal static byte DraftChoice { get; private set; }
     internal static bool DraftUnchipped { get; private set; }
@@ -21,9 +21,10 @@ internal static class CharacterLobby {
     static bool playerReady;
     static bool replayWhenReady;
     static bool finishing;
+    static bool worldStarting;
     static readonly Dictionary<knetid, string> rosterLog = new();
 
-    internal static bool ShouldShowPanel => Util.GameIsFull() && ClientSession && Net.IsClient && Net.IsConnected && PanelRequested;
+    internal static bool ShouldShowPanel => Util.GameIsFull() && ClientSession && Net.IsClient && Net.IsConnected && PanelRequested && !worldStarting;
 
     internal static void OnTransportConnected() {
         if (!Util.GameIsFull()) return;
@@ -36,36 +37,26 @@ internal static class CharacterLobby {
         DraftUnchipped = ChipState.LocalUnchipped;
         replayWhenReady = true;
         // The server may already know this player's pick for the current save and
-        // admit without asking. Hold the panel briefly so that admission can win.
+        // admit before the page is ready. That must not hide the page: the save
+        // binding is authoritative on the server, but the client may still look
+        // at/choose a different preview until the host starts the world.
         PanelRequested = false;
+        LockedBySave = false;
         CharacterSelection.SendRememberedChoice(false);
-        Util.StartCoroutine(ShowPanelUnlessAdmitted());
+        Util.StartCoroutine(ShowPanelAfterConnect());
     }
 
-    // Per-save memory lives on the server, so the client cannot know in advance.
-    // If an admission lands inside the grace window the panel never appears.
-    static IEnumerator ShowPanelUnlessAdmitted() {
+    static IEnumerator ShowPanelAfterConnect() {
+        int session = SessionVersion;
         float started = Time.unscaledTime;
         while (Time.unscaledTime - started < 1.2f) {
-            if (!ClientSession || !Net.IsClient || !Net.IsConnected) yield break;
-            if (ScavPlayer.LocalPlayer != null) {
-                PanelRequested = false;
-                LockedBySave = true;
-                log.l("CHARACTER: panel skipped (server admitted with a stored choice)");
-                yield break;
-            }
+            if (session != SessionVersion || !ClientSession || !Net.IsClient || !Net.IsConnected || worldStarting) yield break;
             yield return null;
         }
-        if (!ClientSession) yield break;
-        if (ScavPlayer.LocalPlayer != null) {
-            PanelRequested = false;
-            LockedBySave = true;
-            log.l("CHARACTER: panel skipped (server admitted with a stored choice)");
-            yield break;
-        }
+        if (session != SessionVersion || !ClientSession || !Net.IsClient || !Net.IsConnected || worldStarting) yield break;
         PanelRequested = true;
-        log.l("CHARACTER: panel opened (no stored choice for this save)");
-        LobbyCharacterPanel.Ensure();
+        log.l("CHARACTER: stock character page opened");
+        StockCharacterSelectUI.Show();
     }
 
     internal static void OnPlayerReady(ScavPlayer player) {
@@ -86,7 +77,7 @@ internal static class CharacterLobby {
     internal static void OnLocalChoiceSent(bool chosen) {
         LocalChosen = chosen;
         replayWhenReady = ClientSession && !playerReady;
-        if (chosen) PanelRequested = false; // command/settings remain usable too
+        if (!chosen) PanelRequested = false;
     }
 
     internal static bool Preview(int chr) {
@@ -117,27 +108,33 @@ internal static class CharacterLobby {
             Multiplayer.DoMultiplayerStatusMessageLog(CharacterSelection.Text("character_need_connection", "Connect to a server first."));
             return false;
         }
-        if (finishing) return false;
-        if (LockedBySave) {
-            log.warn("CHARACTER: panel reopen refused; this save already binds the player's character.");
-            Multiplayer.DoMultiplayerStatusMessageLog(CharacterSelection.Text("character_locked_saved", "This save already has your character; it cannot be changed."));
-            return false;
-        }
+        if (finishing || worldStarting) return false;
         var localPlayer = ScavPlayer.LocalPlayer;
         if (localPlayer != null && localPlayer.body != null) {
             log.warn("CHARACTER: panel reopen refused; the local player already has a body in this world.");
             Multiplayer.DoMultiplayerStatusMessageLog(CharacterSelection.Text("character_locked_in_game", "You cannot change your character after entering the world."));
             return false;
         }
-        DraftChoice = CharacterSelection.Local;
-        DraftUnchipped = ChipState.LocalUnchipped;
         PanelRequested = true;
-        log.l($"CHARACTER: panel reopened from mod menu player={LobbyCharacterPanel.LocalName()}");
-        LobbyCharacterPanel.Ensure();
+        log.l("CHARACTER: stock character page reopened from mod menu");
+        StockCharacterSelectUI.Show();
         return true;
     }
 
     internal static bool ConfirmPanel() {
+        if (!CommitDraft()) return false;
+        PanelRequested = false;
+        int session = SessionVersion;
+        CharacterSelection.DeferUiAction("return to room after ready", () => {
+            if (session != SessionVersion || !Net.IsConnected || !Net.IsClient ||
+                worldStarting || PanelRequested || !Util.IsInMainMenu()) return;
+            StockCharacterSelectUI.Hide();
+            UIMainMenu.OpenConnectedRoom();
+        });
+        return true;
+    }
+
+    internal static bool CommitDraft() {
         if (!ShouldShowPanel || finishing) return false;
         finishing = true;
         try {
@@ -145,8 +142,7 @@ internal static class CharacterLobby {
             log.l($"CHARACTER: lobby panel confirm begin chr={chr}");
             ChipState.AdoptLocal(DraftUnchipped);
             if (!CharacterSelection.Choose(chr)) return false;
-            PanelRequested = false;
-            log.l($"CHARACTER: lobby panel confirmed chr={CharacterSelection.Local}");
+            log.l($"CHARACTER: stock page confirmed chr={CharacterSelection.Local}");
             return true;
         } finally { finishing = false; }
     }
@@ -156,9 +152,14 @@ internal static class CharacterLobby {
         finishing = true;
         try {
             PanelRequested = false;
-            CharacterSelection.SendRememberedChoice(false);
-            log.l($"CHARACTER: lobby panel dismissed chr={CharacterSelection.Local} chosen=false");
+            log.l($"CHARACTER: lobby panel dismissed chosen={LocalChosen}");
         } finally { finishing = false; }
+    }
+
+    internal static void CloseForWorldStart() {
+        worldStarting = true;
+        PanelRequested = false;
+        StockCharacterSelectUI.HideForReset();
     }
 
     internal static void Publish(ScavPlayer player) {
@@ -173,7 +174,7 @@ internal static class CharacterLobby {
         // A second player object (re-creation/sync) starts with empty fields. The
         // entity already carries the granted character, so never let that copy
         // wipe the roster back to "unset".
-        if (!player.characterChosen && entity.characterChosen.Value && entity.lobbyCharacterSelected.Value <= 2) {
+        if (!player.characterChosen && entity != null && entity.characterChosen.Value && entity.lobbyCharacterSelected.Value <= 2) {
             player.characterSelected = entity.lobbyCharacterSelected.Value;
             player.characterChosen = true;
         }
@@ -224,11 +225,11 @@ internal static class CharacterLobby {
         SessionVersion++;
         ClientSession = PanelRequested = LocalChosen = playerReady = replayWhenReady = false;
         LockedBySave = false;
-        finishing = false;
+        finishing = worldStarting = false;
         DraftChoice = 0;
         DraftUnchipped = false;
         rosterLog.Clear();
-        LobbyCharacterPanel.HideForReset();
+        StockCharacterSelectUI.HideForReset();
     }
 }
 #endif

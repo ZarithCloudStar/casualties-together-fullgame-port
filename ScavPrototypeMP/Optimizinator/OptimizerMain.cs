@@ -35,7 +35,7 @@ var Config = Plugin.main.Config;
 
 CompressPooling = Plugin.main.Config.Bind("Memory", "CompressPooling", true, "Reuse one gzip/deflate codec instead of a new stream per packet.");
 CacheImguiStyles = Plugin.main.Config.Bind("Memory", "CacheImguiStyles", true, "Skip idle skin rebuilds and reuse GUIContent, GUIStyle, and RectOffset.");
-BugLogEnabled = Plugin.main.Config.Bind("Probe", "BugLog", true, "Log shower, pickup, craft, give, carry, revive, and sim-range lines.");
+BugLogEnabled = Plugin.main.Config.Bind("Probe", "BugLog", false, "Enable low-volume diagnostic event lines. Detailed probes stay off unless explicitly enabled.");
 InvTrace = Plugin.main.Config.Bind("Probe", "InvTrace", false, "Per-item inventory trace. Off by default.");
 ReportSeconds = Plugin.main.Config.Bind("Probe", "ReportSeconds", 160f, "How often to print the memory counters. 0 hides the line.");
 

@@ -467,9 +467,12 @@ _GUI_DoTheFullGUI();
 
 void __GUI__AllTheMenus() {
 try {
+#if FULLGAME
+if (StockCharacterSelectUI.IsVisible) return;
+#endif
 
 if (
-!Con.IsConsoleOpen()
+!Con.IsConsoleOpen() && !HostTransferUI.IsModalOpen
 ) {
 try {
 UIMainMenu._GUI_DrawSideMenuWithPlayerList();
@@ -481,14 +484,14 @@ log.error("MAIN MENU UI: " + e.ToString());
 }
 }
 
-Chat._GUI_DrawChat();
+if (!HostTransferUI.IsModalOpen) Chat._GUI_DrawChat();
 
 } catch (Exception e) {
 log.error("CHAT UI: " + e.ToString());
 }
 
 
-if (UIInGame.main != null) {
+if (UIInGame.main != null && !HostTransferUI.IsModalOpen) {
 UIInGame.main._GUI_DoInGameUI();
 }
 }
@@ -512,7 +515,7 @@ GUI.enabled = !GUILayout_DropdownMenu.isOpen;
 __GUI__AllTheMenus();
 GUI.enabled = true;
 
-if (UIInGame.main != null) {
+if (UIInGame.main != null && !HostTransferUI.IsModalOpen) {
 UIInGame.main._GUI_DoInGameUI();
 }
 

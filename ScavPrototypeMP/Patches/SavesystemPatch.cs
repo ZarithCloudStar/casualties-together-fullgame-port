@@ -53,6 +53,10 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
 
     static bool force = false;
     static bool wrote;
+    // Host transfer snapshots the live _session, not the active slot. The slot
+    // save path (SaveSlots.SaveVanilla) commits a slot generation instead of
+    // refreshing _session/STEAM_*/save.sv, so the fresh-save check fails.
+    internal static bool CapturingCheckpoint;
 
     // checkpoint writes one body into a folder that is already selected. the wipe prefix must not run.
     internal static void WriteForced(Body body) {
@@ -73,7 +77,7 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
     static bool Prefix() {
         wrote = false;
 #if FULLGAME
-        if (!force && SaveSlots.Enabled && Net.IsRunning && Net.IsServer && !SavesystemPatch.PreserveSave) {
+        if (!force && !CapturingCheckpoint && SaveSlots.Enabled && Net.IsRunning && Net.IsServer && !SavesystemPatch.PreserveSave) {
             try { SaveSlots.SaveVanilla(); } finally { wrote = false; }
             return false;
         }
@@ -237,7 +241,26 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
 [HarmonyPatch(typeof(SaveSystem), nameof(SaveSystem.TryLoadGame))]
 public static class SaveSystem_LoadGame_MultiplayerPatch {
     public static WorldGeneration world => WorldGeneration.world;
-    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) => SavesystemPatch.StripSaveDelete(SavesystemPatch.TranspilerToReplaceTheApplicationPath(instructions));
+    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
+        var code = SavesystemPatch.StripSaveDelete(SavesystemPatch.TranspilerToReplaceTheApplicationPath(instructions)).ToList();
+        var deserialize = AccessTools.Method(typeof(JToken), nameof(JToken.ToObject), Type.EmptyTypes, new[] { typeof(List<(string, string)>) });
+        var decode = AccessTools.Method(typeof(SaveSystem), nameof(SaveSystem.TupleListToDic));
+        for (int i = 1; i < code.Count; i++) {
+            if (!code[i - 1].Calls(deserialize) || !code[i].Calls(decode)) continue;
+            code[i - 1].opcode = OpCodes.Nop;
+            code[i - 1].operand = null;
+            code[i].opcode = OpCodes.Call;
+            code[i].operand = AccessTools.Method(typeof(SaveSystem_LoadGame_MultiplayerPatch), nameof(DecodeRunSettings));
+            return code;
+        }
+        log.warn("SaveSystem.TryLoadGame: run settings decoder call not found.");
+        return code;
+    }
+
+    private static Dictionary<string, object> DecodeRunSettings(JToken saved) {
+        if (Net.IsRunning) return RunSettingsCodec.DecodeSaved(saved);
+        return SaveSystem.TupleListToDic(saved.ToObject<List<(string, string)>>());
+    }
 
 
     static bool force = false;
@@ -274,6 +297,11 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
         }
 
         if (!SaveSystem.loadedRun) { // og wouldnt trigger
+            return false;
+        }
+
+        if (!force && TransferTransport.SkipTransferredRootBody()) {
+            log.l("Host transfer: new host has no saved character; keeping their fresh character.");
             return false;
         }
 

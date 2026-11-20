@@ -279,11 +279,22 @@ internal static class UpdateChecker {
                         (UsingCachedResult ? "上次获取的发布说明：\n" : "发布说明：\n") +
                         (string.IsNullOrWhiteSpace(info.notes) ? "发布方未填写说明。" : info.notes), body);
                     GUILayout.Space(gap);
+                    if (UpdateInstaller.Current != UpdateInstaller.State.Idle)
+                        GUILayout.Label(UpdateInstaller.Status, body);
                     GUILayout.Label("下载后先关闭游戏，再覆盖安装。联机双方请使用相同安装包。", muted);
                 } finally { GUILayout.EndScrollView(); }
             } finally { GUILayout.EndArea(); }
             float column = (area.width - gap * 2) / 3;
-            if (MenuDialogUI.Button(new Rect(area.x, footerY, column, buttonHeight), "GitHub 发布页", scale, true, CurrentState == State.HasUpdate))
+            bool canInstall = CurrentState == State.HasUpdate && UpdateInstaller.CanInstall(info);
+            if (canInstall) {
+                bool ready = UpdateInstaller.Current == UpdateInstaller.State.Ready;
+                if (MenuDialogUI.Button(new Rect(area.x, footerY, column, buttonHeight),
+                        ready ? "重启并应用" : "下载并安装",
+                        scale, !UpdateInstaller.Busy, true)) {
+                    if (ready) UpdateInstaller.Restart();
+                    else UpdateInstaller.Begin(info);
+                }
+            } else if (MenuDialogUI.Button(new Rect(area.x, footerY, column, buttonHeight), "GitHub 发布页", scale, true, CurrentState == State.HasUpdate))
                 OpenLink(ReleaseUpdate.ReleasePage);
             if (MenuDialogUI.Button(new Rect(area.x + column + gap, footerY, column, buttonHeight), "百度网盘下载", scale)) OpenLink(ReleaseUpdate.DownloadPage);
             if (MenuDialogUI.Button(new Rect(area.x + (column + gap) * 2, footerY, column, buttonHeight), "复制网盘链接", scale)) Copy(ReleaseUpdate.DownloadPage);

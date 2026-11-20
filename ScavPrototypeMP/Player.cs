@@ -464,6 +464,7 @@ Chat.Server_ChatAnnouncement($"<plr:{playerId}> <key:plr_finished_tutorial>");
 }
 
 public bool finishedLayer = false;
+public bool layerExitLatched = false;
 
 public double ping = -0.01;
 public double rtt_in_seconds_with_margin => ping * 4.1; // should be 2.01,  but more is better placebo
@@ -858,7 +859,9 @@ if (this != null && !IsLocal && Util.IsInWorld()) { // and tell him to generate 
 
 
 NetDataWriter writer = Net.CreateWriter(NetmsgId.StartGameAnnouncement);
-writer.Put(ServerMain.LastStartGameAnnouncementPacket);
+var announcement = ServerMain.LastStartGameAnnouncementPacket;
+announcement.rules = Multiplayer.rules;
+writer.Put(announcement);
 writer.Put(WorldMP.CompileRunSettings(), true);
 #if FULLGAME
 AchievementBreakSync.WriteAnnouncementFlag(writer);
@@ -905,27 +908,33 @@ ServerPlayerState.did_give_spawn_location = true;
 public List<NetBody> visiblebodies = new();
 static NetDataWriter ragdollpacketwriter = Net.CreateWriter(NetmsgId.CLIENT_ragdollpack);
 void SlowButFastUpdate() {
-visiblebodies.Clear();
-if (Net.IsServer) {
-if (Util.IsWorldGenerated()) {
+    visiblebodies.Clear();
+    if (!Net.IsRunning || !Net.IsServer || !Util.IsWorldGenerated()) return;
 
-NetBody.GetBodiesInRadius(pos, 40, visiblebodies);
+    NetBody.GetBodiesInRadius(pos, 40, visiblebodies);
+    if (!IsLocal && ServerPlayerState != null && ServerPlayerState.is_loaded_in)
+        Server_SendRagdollPackets();
 
-//if (ServerPlayerState.is_loaded_in)
-{
-//server_SendRagdollPackets();
+    foreach (SyncBody otherBody in Net.ServerEntityManager.GetEntities<SyncBody>())
+        Net.ServerEntityManager.ToggleSyncGroup((byte)playerId, otherBody, SyncGroup.SyncGroup3, false);
+}
 
-foreach (SyncBody otherBody in Net.ServerEntityManager.GetEntities<SyncBody>()) {
-Net.ServerEntityManager.ToggleSyncGroup(
-(byte)playerId,
-otherBody,
-SyncGroup.SyncGroup3,
-ServerPlayerState.is_loaded_in && !otherBody._standing.Value && !otherBody._isPiggyback.Value && otherBody.nb.plr != this && visiblebodies.Contains(otherBody.nb)
-);
-}
-}
-}
-}
+void Server_SendRagdollPackets() {
+    NetDataWriter writer = ragdollpacketwriter;
+    foreach (var visible in visiblebodies) {
+        if (visible == null || visible.body == null || visible.syncBody == null ||
+            visible.body.standing || visible.IsPiggybacking() ||
+            (visible.plr == this && !Server_HasForcedServerOwnershipOfBody())) continue;
+
+        writer.ResetKeepMsgId();
+        writer.Put((ushort)visible.netId);
+        writer.Put(visible.syncBody.Version);
+        writer.Put(Net.ServerTick);
+        int payloadStart = writer.Length;
+        ClientMain.WriteRagdollPacket(ref writer, visible.body);
+        writer.CompressWriter(payloadStart);
+        Net.Server_SendToClients(DeliveryMethod.Unreliable, writer, playerId);
+    }
 }
 
 
@@ -1345,7 +1354,11 @@ log.l($"Saved player state of {this}");
 #endif
 // the suitcase is taken apart on the next descent. the file is what a later layer can load.
 PlayerCheckpoint.WriteOne(this, false);
-ServerMain.Server_LastPlayerStates[id] = new PlayerSavedState(body);
+var saved = new PlayerSavedState(body);
+bool hadPrevious = ServerMain.Server_LastPlayerStates.TryGetValue(id, out var previous);
+ServerMain.Server_LastPlayerStates[id] = saved;
+if (hadPrevious && previous.invholder != null && previous.invholder != saved.invholder)
+    previous.Discard();
 }
 } catch (Exception e) {
 log.error($"{nameof(ScavPlayer)}.{nameof(OnDestroy)}: saving plr state: " + e.ToString());
@@ -1355,6 +1368,10 @@ log.error($"{nameof(ScavPlayer)}.{nameof(OnDestroy)}: saving plr state: " + e.To
 if (ScavPlayer.ClientIdToPlayerDict.TryGetValue(this.playerId, out ScavPlayer currentPlayer) &&
 ReferenceEquals(currentPlayer, this)) {
 ScavPlayer.ClientIdToPlayerDict.Remove(this.playerId);
+CraftCommit.Forget(this.playerId);
+MoveCommit.Forget(this.playerId);
+FallCatch.Forget(this.playerId.id);
+Body_Attack_MultiplayerPatch.Forget(this.playerId);
 }
 ServerMain._UpdateSpecialPlayerLists();
 SharedMain.ForceUpdatePlayerLists();

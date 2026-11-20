@@ -439,6 +439,10 @@ namespace Together {
         }
 
         private void Start() {
+#if FULLGAME
+            if (Util.GameIsFull() && SupportsGameVersion(Application.version))
+                StartCoroutine(CuCacheWarm.BeforeWorldGeneration());
+#endif
             Invoke(nameof(DelayedCoroutineToSkipScavIntro), 0.5f);
             log.LogInfo($"Invoked main {MyPluginInfo.PLUGIN_GUID} function, 1s...");
         }
@@ -1205,6 +1209,7 @@ namespace Together {
 #if FULLGAME
             if (SUCCESFULLY_INITIALIZED) AmmoActor102.TickAttachmentPatches();
             CharacterReadyGate.Tick();
+            StockCharacterSelectUI.Tick();
             WorldSnapshotTransfer.TickClientLoad();
             EndingFlow.Tick();
 #if TESTING

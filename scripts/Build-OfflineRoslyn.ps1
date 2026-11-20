@@ -40,8 +40,16 @@ foreach ($file in $sourceFiles) {
 }
 # Unity's framework facade set is used, never PowerShell's .NET runtime refs.
 $managed = 'F:\cu-port\CU_Fullgame\CasualtiesUnknown_Data\Managed'
-foreach ($file in Get-ChildItem $managed -Recurse -Filter '*.dll' | Where-Object Name -NE 'com.rlabrecque.steamworks.net.dll') { $paths[$file.Name] = $file.FullName }
-foreach ($file in Get-ChildItem (Join-Path $repo 'libs\dlls') -Filter '*.dll' | Where-Object Name -NotIn @('opus.dll','steam_api64.dll')) { $paths[$file.Name] = $file.FullName }
+# Fullgame must share the game's own Steamworks dispatcher. The standalone
+# Steamworks.NET assembly has a second CallbackDispatcher over the same native
+# event queue, so whichever dispatcher runs first can consume an incoming
+# SteamNetConnectionStatusChanged callback before the mod sees it.
+$isFullgame = $Configuration -in @('ShipFullgame','PlaytestFullgame')
+$managedSkip = if ($isFullgame) { @() } else { @('com.rlabrecque.steamworks.net.dll') }
+foreach ($file in Get-ChildItem $managed -Recurse -Filter '*.dll' | Where-Object Name -NotIn $managedSkip) { $paths[$file.Name] = $file.FullName }
+$libsSkip = @('opus.dll','steam_api64.dll')
+if ($isFullgame) { $libsSkip += 'Steamworks.NET.dll' }
+foreach ($file in Get-ChildItem (Join-Path $repo 'libs\dlls') -Filter '*.dll' | Where-Object Name -NotIn $libsSkip) { $paths[$file.Name] = $file.FullName }
 foreach ($file in Get-ChildItem 'F:\cu-port\CU_Fullgame\BepInEx\core' -Filter '*.dll' | Where-Object Name -NE '0Harmony20.dll') {
     $paths[$file.Name] = $file.FullName
 }
@@ -55,7 +63,14 @@ $resources = [Collections.Generic.List[Microsoft.CodeAnalysis.ResourceDescriptio
 foreach ($resource in $xml.Project.ItemGroup.EmbeddedResource) {
     if (!$resource.Include) { continue }
     $resourcePath = Join-Path $project $resource.Include
-    $name = 'Together.' + $resource.Include.Replace('\','.').Replace('/','.')
+    # Match MSBuild LogicalName metadata. The skin menu depends on the
+    # explicit body_sprite_replacer.resources.spritereplacer1.png name.
+    $logicalName = [string]$resource.LogicalName
+    if ([string]::IsNullOrWhiteSpace($logicalName)) {
+        $name = 'Together.' + $resource.Include.Replace('\','.').Replace('/','.')
+    } else {
+        $name = $logicalName
+    }
     $factory = [Func[IO.Stream]]{ [IO.File]::OpenRead($resourcePath) }.GetNewClosure()
     $resources.Add([Microsoft.CodeAnalysis.ResourceDescription]::new($name, $factory, $true))
 }
@@ -65,4 +80,20 @@ finally { $stream.Dispose() }
 $diagnostics = @($result.Diagnostics | Where-Object Severity -eq 'Error' | ForEach-Object ToString)
 [IO.File]::WriteAllLines((Join-Path $output 'errors.log'), [string[]]$diagnostics)
 if (!$result.Success) { $diagnostics | Select-Object -First 12; throw "Offline compile failed: $Configuration; see errors.log" }
+
+# Hard guard: fullgame must bind to the game's own Steamworks wrapper. Shipping
+# the standalone Steamworks.NET alongside it creates a second callback dispatcher
+# and randomly steals SteamNetConnectionStatusChanged from the mod.
+if ($isFullgame) {
+    Add-Type -Path 'F:\cu-port\CU_Fullgame\BepInEx\core\Mono.Cecil.dll'
+    $built = Join-Path $output 'CasualtiesMP.dll'
+    $asm = [Mono.Cecil.AssemblyDefinition]::ReadAssembly($built)
+    try { $refNames = @($asm.MainModule.AssemblyReferences | ForEach-Object Name) } finally { $asm.Dispose() }
+    if ($refNames -contains 'Steamworks.NET') {
+        throw "Fullgame build referenced standalone Steamworks.NET; use com.rlabrecque.steamworks.net. See bugfix6/bugfix8 callback-dispatcher fix."
+    }
+    if ($refNames -notcontains 'com.rlabrecque.steamworks.net') {
+        throw "Fullgame build did not reference the game's com.rlabrecque.steamworks.net assembly."
+    }
+}
 "$Configuration Roslyn compile: 0 errors; $output (SDK/MSBuild unavailable)"

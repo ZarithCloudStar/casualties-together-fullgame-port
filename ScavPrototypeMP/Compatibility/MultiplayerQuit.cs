@@ -14,6 +14,17 @@ internal static class MultiplayerQuit {
     static bool transportStopped;
 
     internal static bool Request() {
+        // The host-transfer dialog and the receive-slot selector are modal. The
+        // native save/exit controls live behind them, so a single click can
+        // otherwise reach PreRunScript.Quit and close the game mid-transfer.
+        if (HostTransferUI.IsModalOpen
+#if FULLGAME
+            || SaveSlotMenu.IsTransferOpen
+#endif
+            ) {
+            Multiplayer.DoMultiplayerStatusMessageLog("请先完成主机移交，再退出游戏。");
+            return false;
+        }
         if (!Net.IsRunning && !Quitting) return true;
         if (!Quitting) {
             Quitting = true;

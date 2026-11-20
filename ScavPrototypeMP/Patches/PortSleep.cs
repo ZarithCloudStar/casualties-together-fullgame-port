@@ -9,10 +9,6 @@ static class Body_HandleBody_MpSleepSpeed {
                 return;
             }
 
-            if (nb.piggybacking_on != null && __instance.sleeping) {
-                __instance.curSleep = Body.SleepQuality.Okay;
-            }
-
             float mult = 1f;
             if (__instance.charType != 1 && ServerMain.TryGetLivingEnergyMedian(out float median)) {
                 float offset = (__instance.energy - median) * 0.01f;
@@ -41,3 +37,11 @@ static class Body_HandleBody_MpSleepSpeed {
             }
         }
     }
+
+[HarmonyPatch(typeof(Body), "HandleGroundedState")]
+static class Body_HandleGroundedState_PiggySleep {
+    static void Postfix(Body __instance) {
+        if (Net.IsRunning && __instance.alive && __instance.TryGetNetBody(out var body) && body.piggybacking_on != null)
+            __instance.curSleep = Body.SleepQuality.Okay;
+    }
+}

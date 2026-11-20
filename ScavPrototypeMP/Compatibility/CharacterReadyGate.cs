@@ -44,12 +44,13 @@ internal static class CharacterReadyGate {
     internal static void Remind(int waiting) {
         try {
             log.l($"CHARACTER: waiting for {waiting} player(s) to choose a character");
-            Multiplayer.DoMultiplayerStatusMessageLog(
-                CharacterSelection.Text("character_waiting_start", "Waiting for {0} player(s) to choose a character.").Replace("{0}", waiting.ToString()));
+            Multiplayer.DoMultiplayerStatusMessageLog(WaitingText(waiting));
         } catch (Exception ex) {
             log.error("CHARACTER: could not show the waiting message: " + ex.Message);
         }
     }
+    internal static string WaitingText(int waiting) =>
+        CharacterSelection.Text("character_waiting_start", "Waiting for {0} player(s) to choose a character.").Replace("{0}", waiting.ToString());
 
     // Called from Plugin.Update. Shows a reminder every few seconds rather than
     // spamming the chat every frame.
@@ -73,6 +74,8 @@ internal static class PreRunScript_StartRun_CharacterReadyPatch {
     // Run first so the gate still sees the click.
     [HarmonyPriority(Priority.First)]
     static bool Prefix() {
+        if (Net.IsClient) return true;
+        if (!LobbyHostTransfer.AllowRun(false)) return false;
         if (SaveSlots.Enabled && (SaveSlotMenu.IsOpen || SaveSlots.LoadPrepared || SaveSlots.Busy)) return false;
         if (WorldMP.IsMenuLoadPending || CharacterReadyGate.LoadQueued || !CharacterReadyGate.Allow("StartRun")) return false;
         EndingFlow.ResetRun();
@@ -83,13 +86,14 @@ internal static class PreRunScript_StartRun_CharacterReadyPatch {
 [HarmonyPatch(typeof(PreRunScript), nameof(PreRunScript.LoadRun))]
 internal static class PreRunScript_LoadRun_CharacterReadyPatch {
     [HarmonyPriority(Priority.First)]
-    static bool Prefix() => CharacterReadyGate.RequestLoad();
+    static bool Prefix() => LobbyHostTransfer.AllowRun(true) && CharacterReadyGate.RequestLoad();
 }
 
 [HarmonyPatch(typeof(PreRunScript), nameof(PreRunScript.StartTutorial))]
 internal static class PreRunScript_StartTutorial_CharacterReadyPatch {
     [HarmonyPriority(Priority.First)]
     static bool Prefix() => !(SaveSlots.Enabled && (SaveSlotMenu.IsOpen || SaveSlots.LoadPrepared || SaveSlots.Busy)) &&
+        LobbyHostTransfer.AllowRun(false) &&
         !WorldMP.IsMenuLoadPending && !CharacterReadyGate.LoadQueued && CharacterReadyGate.Allow("StartTutorial");
 }
 
@@ -100,6 +104,7 @@ internal static class PreRunScript_StartTutorial_CharacterReadyPatch {
 internal static class PreRunScript_WaitLoad_CharacterReadyPatch {
     [HarmonyPriority(Priority.First)]
     static bool Prefix(PreRunScript __instance, ref System.Collections.IEnumerator __result) {
+        if (!LobbyHostTransfer.AllowRun(SaveSystem.loadedRun)) return false;
         if (CharacterReadyGate.Allow("WaitLoad")) return true;
         // Keep the latch and the original load/new/tutorial intent throughout
         // a connection arriving between the menu click and this coroutine.
@@ -119,6 +124,6 @@ internal static class PreRunScript_WaitLoad_CharacterReadyPatch {
 [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.ContinueRun))]
 internal static class WorldGeneration_ContinueRun_CharacterReadyPatch {
     [HarmonyPriority(Priority.First)]
-    static bool Prefix() => CharacterReadyGate.Allow("ContinueRun");
+    static bool Prefix() => LobbyHostTransfer.AllowRun(false) && CharacterReadyGate.Allow("ContinueRun");
 }
 #endif
