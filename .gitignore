@@ -37,6 +37,7 @@ scripts/clumsy-0.3-win64-a/
 scripts/USSR/
 *.rar
 ScavPrototypeMP/Fullgame/*
+!ScavPrototypeMP/Fullgame/*.cs
 ScavPrototypeMP/Proprietary*
 scripts/proprietary*
 scripts/__pycache__/
