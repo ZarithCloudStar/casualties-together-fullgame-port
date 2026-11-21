@@ -193,6 +193,15 @@ internal static class EndingRouteRegression {
         var spawn = GameObject.Find("ENDLABSPAWN");
         Check(spawn != null && Vector2.Distance(ScavPlayer.LocalPlayer.pos, spawn.transform.position) < 3f, "client authoritative lab spawn");
         Mark("lab.client");
+        yield return Wait(() => EndingFlow.State.phase == EndingPhase.Narrative || EndingFlow.IsFinished, "client narrative", 230f);
+        if (EndingFlow.State.phase == EndingPhase.Narrative &&
+            Environment.GetEnvironmentVariable("CT_ENDING_TEST_CLIENT_READY") == "1") {
+            yield return new WaitForSecondsRealtime(1.5f);
+            EndingFlow.Request(EndingRequest.NarrativeComplete, Vector2.zero, EndingFlow.State.ending);
+            EndingFlow.TestMarkAwaiting();
+            log.l("[route-test] client narrative marked ready for wait-overlay observation");
+            yield return new WaitForSecondsRealtime(3f);
+        }
         yield return Wait(() => EndingFlow.IsFinished, "client result after natural dialogue", 230f);
         Check(EndingFlow.State.labDialogueComplete && EndingFlow.State.ending == 1, "client receives gated biopod result");
         Mark("client.done");

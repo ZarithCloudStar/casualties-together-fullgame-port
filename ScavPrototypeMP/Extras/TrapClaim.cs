@@ -8,6 +8,8 @@ using Random = UnityEngine.Random;
 
 namespace Together;
 
+internal sealed class SpikeConsumed : MonoBehaviour { }
+
 // owning client rolls the trap. host applies that claim and publishes health.
 // contact traps still have to be within 32. turrets and explosions do not.
 internal static class TrapClaim {
@@ -250,6 +252,13 @@ RollSpike(spike, cam.body, null);
 }
 
 static void RollSpike(SpikeStabberScript spike, Body body, Component touch) {
+if (spike == null) return;
+// Vanilla Stab() sets activated before the SpikeStab anim event reaches
+// CheckStab. That used to let the same already-spent trap roll local
+// knockback again every time the anim/event repeated. The marker is on the
+// trap object itself, so a newly spawned trap is independent.
+if (spike.GetComponent<SpikeConsumed>() != null) return;
+spike.gameObject.AddComponent<SpikeConsumed>();
 ushort mask = 0;
 var hits = Physics2D.RaycastAll(spike.transform.position, spike.transform.up, 6f);
 for (int i = 0; i < hits.Length; i++) {

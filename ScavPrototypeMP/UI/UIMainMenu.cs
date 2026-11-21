@@ -240,6 +240,7 @@ if (open_or_nah != mainmenu_open) {
 if (open_or_nah) {
 Application.runInBackground = true;
 RestoreLastRulePreset();
+UpdateChecker.EnsureChecked(true);
 if (UIManager.runSettingsMenu != null) {
 UIManager.runSettingsMenu.SetActive(false);
 if (Con.IsConsoleOpen()) { Con.con.ToggleActiveState(); }

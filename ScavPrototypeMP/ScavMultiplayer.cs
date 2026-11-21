@@ -2044,7 +2044,8 @@ log.error($"FirstInit -> class scanning loop: TYPE:{type} \n{e.ToString()}");
 
 
 Util.DelayCallLambda(0.1f, () => {
-if (!win32windowtitlechanger.changed_the_title) win32windowtitlechanger.SetTitle(_PickGameWindowTitle());
+if (!win32windowtitlechanger.changed_the_title)
+    win32windowtitlechanger.SetTitle(string.IsNullOrEmpty(Application.productName) ? "CasualtiesUnknown" : Application.productName);
 });
 
 Singletons.Reverse();

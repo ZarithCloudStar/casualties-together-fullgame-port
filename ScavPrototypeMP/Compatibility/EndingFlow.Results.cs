@@ -41,7 +41,7 @@ internal static partial class EndingFlow {
                 Changed($"[ending] laboratory entered by carrier={Key(key)}; scientist dialogue unlocked");
             }
             if (State.labDialogueComplete && key.IsAlive() && Vector2.Distance(key.pos, lab.exitPoint) < 4f)
-                Finish(1, "cargo carrier reached laboratory exit");
+                BeginNarrative(1, "cargo carrier reached laboratory exit", "biopodnote");
         }
         TickEscape();
         if (WorldGeneration.world.biomeDepth == 11 && !IsFinished) EndingGuardSync.Tick();

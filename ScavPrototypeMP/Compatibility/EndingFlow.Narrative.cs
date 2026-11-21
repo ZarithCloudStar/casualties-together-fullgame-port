@@ -101,6 +101,24 @@ internal static partial class EndingFlow {
     // Presentation finishes locally, settlement commits once every connected
     // participant (including dead players) has read the story. No host timer
     // may force-close a client's text. Disconnected players do not hold the gate.
+    static bool localNarrativeAwaiting;
+    static float narrativeWaitNoticeAt;
+    internal static bool WaitingForOthers => localNarrativeAwaiting && !IsFinished && Net.IsRunning &&
+        State.phase == EndingPhase.Narrative && NarrativeStep == "await-party" &&
+        !ScrollableText.textExists && GlobalDark.main != null && GlobalDark.main.image != null &&
+        GlobalDark.main.image.color.a > .95f;
+#if TESTING
+    internal static void TestMarkAwaiting() {
+        localNarrativeAwaiting = true;
+        NarrativeStep = "await-party";
+        ScrollableText.ForceClose();
+        GlobalDark.main.SetDarkAmount(1f);
+        GlobalDark.main.SetStayDark(true);
+        GlobalDark.main.Darken();
+        narrativeWaitNoticeAt = Time.unscaledTime + .5f;
+    }
+#endif
+
     static void BeginNarrative(byte type, string reason, string key = "") {
         if (!Net.IsServer || SettlementLocked || State.phase == EndingPhase.Failed) return;
         State.phase = EndingPhase.Narrative; State.ending = type;
@@ -123,11 +141,18 @@ internal static partial class EndingFlow {
     static void ApplyNarrative() {
         var world = WorldGeneration.world;
         if (State.phase != EndingPhase.Narrative) {
+            localNarrativeAwaiting = false;
             if (!IsFinished) {
                 if (narrativeWorld != null && narrative != null) narrativeWorld.StopCoroutine(narrative);
                 narrativeWorld = null; narrative = null; narrativeText = null; NarrativeStep = "";
             }
             return;
+        }
+        if (localNarrativeAwaiting && !IsFinished) {
+            if (Time.unscaledTime >= narrativeWaitNoticeAt) {
+                narrativeWaitNoticeAt = Time.unscaledTime + 4f;
+                log.l("[ending] waiting for other players to finish the ending narrative");
+            }
         }
         if (PlayerCamera.main?.body == null || world == null) return;
         world.cutsceneActive = true;
@@ -220,6 +245,8 @@ internal static partial class EndingFlow {
         }
         GlobalDark.main.SetDarkAmount(1f); GlobalDark.main.SetStayDark(true); GlobalDark.main.Darken();
         Stage("await-party");
+        localNarrativeAwaiting = true;
+        narrativeWaitNoticeAt = Time.unscaledTime + 1f;
         Request(EndingRequest.NarrativeComplete, Vector2.zero, type);
     }
 }
