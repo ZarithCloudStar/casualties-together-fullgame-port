@@ -472,6 +472,8 @@
 
 	<ItemGroup>
 		<Compile Remove="Optimizinator\Evidence\archived\EvidenceBag.cs" />
+		<!-- Stale 2026-11-10 sync copy; Compatibility\Crystals.cs is the maintained version. -->
+		<Compile Remove="Fullgame\Crystals.cs" />
 	</ItemGroup>
 
 	<Target Name="GenerateBuildInfo" BeforeTargets="CoreCompile">

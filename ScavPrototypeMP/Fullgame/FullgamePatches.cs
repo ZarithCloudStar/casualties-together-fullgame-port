@@ -97,15 +97,8 @@ static class PreRunScript_SelectCharacter_MultiplayerPatch {
 
 
 
-[HarmonyPatch(typeof(ConsoleScript), nameof(ConsoleScript.CheckForCheats))]
-static class ConsoleScript_CheckForCheats_MultiplayerPatch {
-    static bool Prefix() {
-        if (!Net.IsRunning) return true;
-
-        return false;
-    }
-}
-
+// ConsoleScript_CheckForCheats is patched in Patches/PortCheatCommands.cs; the
+// older copy here duplicated the type and broke clean builds.
 
 
 

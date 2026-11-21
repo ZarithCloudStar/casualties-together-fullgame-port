@@ -14,12 +14,23 @@
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
 		<AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
 		<Version>1.0.3</Version>
-		<AssemblyName>autoupdater_patcher</AssemblyName>
+		<AssemblyName>TogetherAutoUpdaterPatcher</AssemblyName>
 		<Product>autoupdater_patcher</Product>
 		<Authors>autoupdater_patcher</Authors>
 		<PackageId>autoupdater_patcher</PackageId>
 		<Configurations>Debug;Release;Playtest;DebugFullgame;ReleaseFullgame;PlaytestFullgame</Configurations>
+		<LangVersion>latest</LangVersion>
 	</PropertyGroup>
+
+	<ItemGroup>
+		<!-- BepInEx preloader API; supplied by the game install at runtime. -->
+		<Reference Include="BepInEx">
+			<HintPath>$(BepInExCoreDir)\BepInEx.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+		<!-- Legacy dannad patcher; the shipped patcher only compiles TogetherAutoUpdaterPatcher.cs. -->
+		<Compile Remove="AutoUpdaterPatcher.cs" />
+	</ItemGroup>
 
 	<PropertyGroup Condition="'$(Configuration)'=='Release'">
 		<DebugType>none</DebugType>
