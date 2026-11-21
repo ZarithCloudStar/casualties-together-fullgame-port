@@ -297,10 +297,15 @@ log.error("UIBULLSHIT 1 " + e.ToString());
 }
 
 if (Input.GetKeyDown(KeyBinds.GetBind("pause"))) {
+// In a lobby the room menu is the room. ESC must not close it (which would
+// look like leaving the room); character-page ESC is handled separately.
+bool keepLobbyRoomOpen = UIMainMenu.IsOpen() && Net.IsRunning && !Util.IsInWorld();
+if (!keepLobbyRoomOpen) {
 if (PauseHandler.main != null && PauseHandler.main.disallowPause && !UIMainMenu.IsOpen()) {
 UIMainMenu.SetOpen(true);
 } else {
 UIMainMenu.SetOpen(false);
+}
 }
 }
 

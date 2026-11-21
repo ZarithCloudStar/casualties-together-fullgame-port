@@ -9,6 +9,11 @@ internal static class MenuGate {
     private static FieldInfo _textObjField;
 
     internal static bool ShouldShowButton() {
+        // The fullscreen MP menu hides its launcher button but its skin settings
+        // page still needs this canvas alive for the skin popup.
+        if (Together.UIMainMenu.IsOpen()) {
+            return true;
+        }
         if (MpMenuButtonVisible()) {
             return true;
         }

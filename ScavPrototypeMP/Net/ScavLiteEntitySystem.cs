@@ -2995,6 +2995,7 @@ public class BasePlayer : PawnLogic {
 #if FULLGAME
     public SyncVar<byte> lobbyCharacterSelected;
     public SyncVar<bool> characterChosen;
+    public SyncVar<bool> lobbyReady;
 #endif
 
     public SyncVar<ulong> playerSteamId;
@@ -3065,6 +3066,7 @@ public class BasePlayer : PawnLogic {
         if (Util.GameIsFull()) {
             r.BindOnChange(this, ref lobbyCharacterSelected, e => CharacterLobby.ApplySynced(this), BindOnChangeFlags.ExecuteOnSync);
             r.BindOnChange(this, ref characterChosen, e => CharacterLobby.ApplySynced(this), BindOnChangeFlags.ExecuteOnSync);
+            r.BindOnChange(this, ref lobbyReady, e => CharacterLobby.ApplySynced(this), BindOnChangeFlags.ExecuteOnSync);
             r.BindOnChange(this, ref modUnchipped, e => CharacterLobby.ApplySynced(this), BindOnChangeFlags.ExecuteOnSync);
         }
 #endif
@@ -3138,6 +3140,7 @@ public class BasePlayer : PawnLogic {
         if (Util.GameIsFull()) {
             player.characterSelected = playerEntity.lobbyCharacterSelected.Value;
             player.characterChosen = playerEntity.characterChosen.Value;
+            player.lobbyReady = playerEntity.lobbyReady.Value;
             player.modUnchipped = playerEntity.modUnchipped.Value;
         }
 #endif

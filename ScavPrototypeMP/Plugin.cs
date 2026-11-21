@@ -1210,6 +1210,8 @@ namespace Together {
             if (SUCCESFULLY_INITIALIZED) AmmoActor102.TickAttachmentPatches();
             CharacterReadyGate.Tick();
             StockCharacterSelectUI.Tick();
+            LobbyVanillaMenu.Tick();
+            LobbyNavigation.Tick();
             WorldSnapshotTransfer.TickClientLoad();
             EndingFlow.Tick();
 #if TESTING

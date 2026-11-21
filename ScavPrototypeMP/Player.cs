@@ -339,6 +339,7 @@ public bool LateJoin = false;
 public byte characterSelected;
 #if FULLGAME
 public bool characterChosen;
+public bool lobbyReady; // client ready-up state; host never readies
 public bool modUnchipped; // server-owned per-save choice, applied through SetUnchipped
 internal bool modChipChosenExplicit; // host's personal chip button beats a run-setting default
 #endif

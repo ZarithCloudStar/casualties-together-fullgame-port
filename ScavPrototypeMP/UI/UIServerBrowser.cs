@@ -39,7 +39,8 @@ public static string _LOBBY_SEARCH_FILTER = "";
 static Vector2 _SERVERBROWSERMENUSCROLL = Vector2.zero;
 
 public static bool SortHideIncompatible = false;
-public static bool SortHidePasswordProtected = true; // hide locked by default
+// Password rooms are visible now; the join button asks for the password.
+public static bool SortHidePasswordProtected = false;
 public static bool HideDescriptions = false;
 static bool SORT_FLIPBOOL_alpha = false;
 static bool SORT_FLIPBOOL_count = false;
@@ -185,7 +186,102 @@ return;
 }
 }
 
+// Centered password prompt shown only after Join on a locked room. The room
+// list is hidden while it is open, so a stray click cannot start another join.
+static NetPublicServerInfo _passwordJoinLobby;
+static string _passwordInput = "";
+static string _passwordError = "";
+static bool _passwordDialogOpen;
+static bool _passwordFocus;
+
+internal static void CancelPasswordPrompt() {
+    _passwordDialogOpen = false;
+    _passwordJoinLobby = null;
+    _passwordInput = "";
+    _passwordError = "";
+    _passwordFocus = false;
+}
+
+static void BeginPasswordPrompt(NetPublicServerInfo lobby) {
+    _passwordJoinLobby = lobby;
+    _passwordInput = "";
+    _passwordError = "";
+    _passwordDialogOpen = true;
+    _passwordFocus = true;
+}
+
+static void JoinSteamLobby(NetPublicServerInfo lobby) {
+    if (lobby == null || lobby.steam_lobby_info == null) return;
+    ulong id = lobby.steam_lobby_info.lobby_steamID.m_SteamID;
+    Multiplayer.DoMultiplayerStatusMessageLog($"STEAM: Join Lobby {id}");
+    TransportSteamworks.OnWantToJoinLobby(id);
+    UIMainMenu.current_tab = UIMainMenu.menutab_directconnect;
+    UIMainMenu._DO_SERVER_CONFIG = false;
+}
+
+static void DrawPasswordDialog() {
+    var panel = MenuDialogUI.Panel(560, 290, out float scale);
+    var title = MenuDialogUI.Text(scale, 1.3f);
+    var muted = MenuDialogUI.Text(scale, .9f, MenuDialogUI.Muted);
+    float pad = Mathf.Max(12, 24 * scale);
+    var area = new Rect(panel.x + pad, panel.y + pad, panel.width - pad * 2, panel.height - pad * 2);
+
+    float y = MenuDialogUI.Label(area, area.y, Lang.Get("password_title", true) ?? "Enter password", title);
+    y = MenuDialogUI.Label(area, y + 6 * scale, Lang.Get("password_hint", true) ?? "This room is password protected.", muted);
+
+    var fieldRect = new Rect(area.x, y + 10 * scale, area.width, 42 * scale);
+    GUI.SetNextControlName("CT_PasswordInput");
+    var fieldStyle = MenuDialogUI.Text(scale, 1.1f, Color.white, false);
+    fieldStyle.alignment = TextAnchor.MiddleLeft;
+    fieldStyle.padding = new RectOffset(Mathf.RoundToInt(10 * scale), 8, 4, 4);
+    _passwordInput = GUI.PasswordField(fieldRect, _passwordInput ?? "", '*', fieldStyle);
+
+    if (!string.IsNullOrEmpty(_passwordError)) {
+        MenuDialogUI.Label(area, fieldRect.yMax + 4 * scale, _passwordError, MenuDialogUI.Text(scale, .85f, MenuDialogUI.Accent));
+    }
+
+    float buttonW = Mathf.Min(150 * scale, (area.width - 12 * scale) * .5f);
+    float buttonH = 44 * scale;
+    float gap2 = 12 * scale;
+    var okRect = new Rect(area.center.x - buttonW - gap2 * .5f, area.yMax - buttonH, buttonW, buttonH);
+    var cancelRect = new Rect(area.center.x + gap2 * .5f, area.yMax - buttonH, buttonW, buttonH);
+    bool ok = MenuDialogUI.Button(okRect, Lang.Get("password_ok", true) ?? "OK", scale, true, true);
+    bool cancel = MenuDialogUI.Button(cancelRect, Lang.Get("password_cancel", true) ?? "Cancel", scale);
+
+    var key = Event.current;
+    if (key != null && key.type == EventType.KeyDown) {
+        if (key.keyCode == KeyCode.Return || key.keyCode == KeyCode.KeypadEnter) { ok = true; key.Use(); }
+        else if (key.keyCode == KeyCode.Escape) { cancel = true; key.Use(); }
+    }
+
+    if (_passwordFocus) {
+        GUI.FocusControl("CT_PasswordInput");
+        _passwordFocus = false;
+    }
+
+    if (cancel) {
+        CancelPasswordPrompt();
+        return;
+    }
+    if (!ok) return;
+
+    if (string.IsNullOrEmpty(_passwordInput)) {
+        _passwordError = Lang.Get("password_empty", true) ?? "Enter a password.";
+        _passwordFocus = true;
+        return;
+    }
+
+    var lobby = _passwordJoinLobby;
+    Multiplayer.INPUT_PASSWORD = _passwordInput;
+    CancelPasswordPrompt();
+    JoinSteamLobby(lobby);
+}
+
 static void _GUI_RenderServerBrowser(Rect r) {
+        if (_passwordDialogOpen) {
+            DrawPasswordDialog();
+            return;
+        }
         // ping sort and steam updates change the list between layout and repaint.
         // imgui then asks for a control the group never recorded.
         if (Event.current == null || Event.current.type == EventType.Layout) {
@@ -484,23 +580,13 @@ static void _GUI_RenderServerBrowser(Rect r) {
                                             , GUILayout.Width(r.width * 0.2f))
                                         ) {
                                             if (is_a_steam_lobby && lobby.steam_lobby_info != null) {
-                                                Multiplayer.DoMultiplayerStatusMessageLog($"STEAM: Join Lobby {lobby.steam_lobby_info.lobby_steamID}");
-                                                TransportSteamworks.OnWantToJoinLobby(lobby.steam_lobby_info.lobby_steamID.m_SteamID);
-
-                                                UIMainMenu.current_tab = UIMainMenu.menutab_directconnect;
-                                                UIMainMenu._DO_SERVER_CONFIG = false;
+                                                if (lobby.haspassword) {
+                                                    BeginPasswordPrompt(lobby);
+                                                } else {
+                                                    JoinSteamLobby(lobby);
+                                                }
                                             } else {
                                                 log.error("TODO: JOIN TO IP");
-
-                                                //tODO
-                                                //tODO
-                                                //tODO
-                                                //tODO
-                                                //tODO
-                                                //tODO
-                                                //tODO
-                                                //tODO
-                                                //tODO
                                             }
                                         }
                                         if (Net.IsRunning) {
@@ -623,16 +709,7 @@ static void _GUI_RenderServerBrowser(Rect r) {
             GUILayout.EndHorizontal();
 
 
-            UIMainMenu._GUI___DirectConnect_DoPasswordField(r, fieldheight, fieldnameswidth * 0.9f, fieldswidth * 0.5f);
-
-
-            {
-                var oldPass = SortHidePasswordProtected;
-                SortHidePasswordProtected = GUILayout.Toggle(SortHidePasswordProtected, Lang.Get("mmsb_lobbyhidepass"));
-                if (oldPass != SortHidePasswordProtected) {
-                    RefilterList();
-                }
-            }
+            // Password entry lives in the centered Join dialog, not here.
 
             {
                 var oldImcomp = SortHideIncompatible;

@@ -376,6 +376,17 @@ GameObject.DontDestroyOnLoad(modCanvasObj);
 }
 }
 
+// The fullscreen MP menu owns the screen: hide its launcher button and the
+// skin button parked next to it. Restored when the menu closes.
+internal static void SetMpChromeVisible(bool visible) {
+if (MP_MENU_BUTTON != null) MP_MENU_BUTTON.SetActive(visible);
+try {
+SkinMenuUI.SetTopButtonHidden(!visible);
+} catch (Exception e) {
+log.error("SetMpChromeVisible: " + e);
+}
+}
+
 static bool CreateLinkButton = false;
 
 public static void OnMainMenuLoad() {

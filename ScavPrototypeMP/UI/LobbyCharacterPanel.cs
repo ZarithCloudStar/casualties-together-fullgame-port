@@ -62,7 +62,7 @@ internal sealed class LobbyCharacterPanel : MonoBehaviour {
     internal static void DrawModMenuButton(float height) {
         if (!Util.GameIsFull()) return;
         bool previousEnabled = GUI.enabled;
-        bool canChoose = Net.IsClient && Net.IsConnected && CharacterLobby.ClientSession;
+        bool canChoose = CharacterLobby.InLobby && Net.IsConnected && (Net.IsClient || Net.IsServer);
         GUI.enabled = previousEnabled && canChoose;
         try {
             string text = CharacterSelection.Text("character_open_button", "Choose character");

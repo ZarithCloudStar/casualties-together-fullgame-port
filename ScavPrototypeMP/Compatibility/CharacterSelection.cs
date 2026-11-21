@@ -192,7 +192,7 @@ internal static class CharacterSelection {
                 writer.Put(PendingCharacterAdmission.RequestedTimeoutSeconds.Value);
             Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
             log.l($"CHARACTER: sent choice chr={chr}");
-            CharacterLobby.OnLocalChoiceSent(chosen);
+            CharacterLobby.OnLocalChoiceSent(chosen, persist);
             var local = ScavPlayer.LocalPlayer;
             bool hasBody = local != null && local.body != null;
             if (persist) RunUiAction("choice status", () => Multiplayer.DoMultiplayerStatusMessageLog(hasBody
@@ -261,6 +261,21 @@ internal static class CharacterSelection {
             else ServerMain.Server_SendMPLogMessage(DeferredMessage, false, new[] { playerId });
         }
         return true;
+    }
+
+    [ServerReceiver((byte)NetmsgId.SERVER_SetLobbyReady)]
+    static void ReceiveSetLobbyReady(knetid caller, NetDataReader reader) {
+        if (!Util.GameIsFull() || !Net.IsServer) return;
+        if (reader.AvailableBytes != 1) {
+            log.warn($"CHARACTER: rejected malformed SetLobbyReady from player={caller}; bytes={reader.AvailableBytes}");
+            return;
+        }
+        byte value = reader.GetByte();
+        if (value > 1) {
+            log.warn($"CHARACTER: rejected invalid lobby ready byte from player={caller}: {value}");
+            return;
+        }
+        CharacterLobby.ServerSetReady(caller, value == 1);
     }
 
     [ServerReceiver((byte)NetmsgId.SERVER_SetCharacter)]
@@ -339,9 +354,11 @@ internal static class PreRunScript_SelectCharacter_RememberPatch {
         if (CharacterSelection.CommandLineOverride.HasValue) chr = CharacterSelection.Local;
     }
     static void Postfix(int chr) {
-        if (Net.IsClient && CharacterLobby.ShouldShowPanel) {
+        if (CharacterLobby.ShouldShowPanel) {
             CharacterLobby.Preview(chr);
-            if (CharacterLobby.LocalChosen) CharacterLobby.CommitDraft();
+            // A client that already confirmed keeps later changes in sync; the
+            // host waits for the page's Confirm/Start button.
+            if (Net.IsClient && CharacterLobby.LocalChosen) CharacterLobby.CommitDraft();
             return;
         }
         CharacterSelection.Choose(chr);

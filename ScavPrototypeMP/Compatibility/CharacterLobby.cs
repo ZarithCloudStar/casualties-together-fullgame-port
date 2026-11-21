@@ -22,41 +22,42 @@ internal static class CharacterLobby {
     static bool replayWhenReady;
     static bool finishing;
     static bool worldStarting;
+    static int startClickFrame = -1;
     static readonly Dictionary<knetid, string> rosterLog = new();
 
-    internal static bool ShouldShowPanel => Util.GameIsFull() && ClientSession && Net.IsClient && Net.IsConnected && PanelRequested && !worldStarting;
+    // In a lobby there is no body, so the stock character page is only opened
+    // from the "Choose character" button (host and client alike).
+    internal static bool InLobby => Util.GameIsFull() && Net.IsRunning && !Util.IsInWorld();
+    internal static bool ShouldShowPanel => InLobby && (Net.IsClient ? ClientSession : Net.IsServer) && PanelRequested && !worldStarting;
 
     internal static void OnTransportConnected() {
         if (!Util.GameIsFull()) return;
         Reset();
-        if (!Net.IsClient || !Net.IsRunning) return;
+        if (!Net.IsRunning) return;
         CharacterSelection.RestoreRememberedChoice();
         ChipState.BeginSession();
-        ClientSession = true;
+        ClientSession = Net.IsClient;
         DraftChoice = CharacterSelection.Local;
         DraftUnchipped = ChipState.LocalUnchipped;
-        replayWhenReady = true;
-        // The server may already know this player's pick for the current save and
-        // admit before the page is ready. That must not hide the page: the save
-        // binding is authoritative on the server, but the client may still look
-        // at/choose a different preview until the host starts the world.
+        replayWhenReady = Net.IsClient;
         PanelRequested = false;
         LockedBySave = false;
-        CharacterSelection.SendRememberedChoice(false);
-        Util.StartCoroutine(ShowPanelAfterConnect());
+        // Clients are admitted immediately; the character page is opened by
+        // the post-connect coroutine for both host and guest.
+        if (Net.IsClient) CharacterSelection.SendRememberedChoice(false);
+        Util.StartCoroutine(OpenCharacterPageAfterConnect(SessionVersion));
+        log.l($"CHARACTER: lobby session started host={Net.IsServer} client={Net.IsClient}");
     }
 
-    static IEnumerator ShowPanelAfterConnect() {
-        int session = SessionVersion;
-        float started = Time.unscaledTime;
-        while (Time.unscaledTime - started < 1.2f) {
-            if (session != SessionVersion || !ClientSession || !Net.IsClient || !Net.IsConnected || worldStarting) yield break;
+    static IEnumerator OpenCharacterPageAfterConnect(int session) {
+        if (Net.IsDedicatedServer) yield break;
+        // Let the host player / client admission settle before showing the page.
+        for (int i = 0; i < 20; i++) {
+            if (session != SessionVersion || !InLobby) yield break;
             yield return null;
         }
-        if (session != SessionVersion || !ClientSession || !Net.IsClient || !Net.IsConnected || worldStarting) yield break;
-        PanelRequested = true;
-        log.l("CHARACTER: stock character page opened");
-        StockCharacterSelectUI.Show();
+        if (session != SessionVersion || !InLobby || !Net.IsRunning) yield break;
+        ReopenPanel();
     }
 
     internal static void OnPlayerReady(ScavPlayer player) {
@@ -74,10 +75,12 @@ internal static class CharacterLobby {
         }
     }
 
-    internal static void OnLocalChoiceSent(bool chosen) {
+    internal static void OnLocalChoiceSent(bool chosen, bool userAction) {
         LocalChosen = chosen;
         replayWhenReady = ClientSession && !playerReady;
-        if (!chosen) PanelRequested = false;
+        // The automatic post-connect replay must not close a page the player
+        // already opened; only an explicit choice/dismiss clears it.
+        if (!chosen && userAction) PanelRequested = false;
     }
 
     internal static bool Preview(int chr) {
@@ -103,8 +106,8 @@ internal static class CharacterLobby {
 
     internal static bool ReopenPanel() {
         if (!Util.GameIsFull()) return false;
-        if (!Net.IsClient || !Net.IsConnected || !ClientSession) {
-            log.warn("CHARACTER: panel reopen requires a connected client.");
+        if (!InLobby || !Net.IsConnected) {
+            log.warn("CHARACTER: panel reopen requires an active lobby session.");
             Multiplayer.DoMultiplayerStatusMessageLog(CharacterSelection.Text("character_need_connection", "Connect to a server first."));
             return false;
         }
@@ -115,18 +118,25 @@ internal static class CharacterLobby {
             Multiplayer.DoMultiplayerStatusMessageLog(CharacterSelection.Text("character_locked_in_game", "You cannot change your character after entering the world."));
             return false;
         }
+        DraftChoice = CharacterSelection.Local;
+        DraftUnchipped = localPlayer != null ? localPlayer.modUnchipped : ChipState.LocalUnchipped;
         PanelRequested = true;
-        log.l("CHARACTER: stock character page reopened from mod menu");
+        log.l($"CHARACTER: stock character page reopened from mod menu host={Net.IsServer}");
         StockCharacterSelectUI.Show();
         return true;
     }
+
+    // The stock page's Start is a Confirm. Mark the frame so the start gate
+    // recognizes this click and does not report a blocked run start.
+    internal static void NoteStartClick() => startClickFrame = Time.frameCount;
+    internal static bool StartClickInProgress => startClickFrame == Time.frameCount;
 
     internal static bool ConfirmPanel() {
         if (!CommitDraft()) return false;
         PanelRequested = false;
         int session = SessionVersion;
         CharacterSelection.DeferUiAction("return to room after ready", () => {
-            if (session != SessionVersion || !Net.IsConnected || !Net.IsClient ||
+            if (session != SessionVersion || !Net.IsConnected || !Net.IsRunning ||
                 worldStarting || PanelRequested || !Util.IsInMainMenu()) return;
             StockCharacterSelectUI.Hide();
             UIMainMenu.OpenConnectedRoom();
@@ -159,17 +169,12 @@ internal static class CharacterLobby {
     internal static void CloseForWorldStart() {
         worldStarting = true;
         PanelRequested = false;
+        ServerResetReady();
         StockCharacterSelectUI.HideForReset();
     }
 
     internal static void Publish(ScavPlayer player) {
         if (!Util.GameIsFull() || !Net.IsServer || player == null) return;
-        // The host picks through the vanilla pre-run screen, which never calls the
-        // mod's Choose(), so its player would stay "unset" in the roster forever.
-        if (player.IsLocal && !player.characterChosen) {
-            player.characterSelected = CharacterSelection.Local;
-            player.characterChosen = true;
-        }
         var entity = player.BasePlayer;
         // A second player object (re-creation/sync) starts with empty fields. The
         // entity already carries the granted character, so never let that copy
@@ -181,6 +186,7 @@ internal static class CharacterLobby {
         if (entity != null) {
             entity.lobbyCharacterSelected.Value = player.characterSelected;
             entity.characterChosen.Value = player.characterChosen;
+            entity.lobbyReady.Value = player.lobbyReady;
             entity.modUnchipped.Value = player.modUnchipped;
         }
         LogRoster(player);
@@ -192,6 +198,7 @@ internal static class CharacterLobby {
         if (player == null) return;
         player.characterSelected = entity.lobbyCharacterSelected.Value;
         player.characterChosen = entity.characterChosen.Value;
+        player.lobbyReady = entity.lobbyReady.Value;
         player.modUnchipped = entity.modUnchipped.Value;
         ChipState.ApplyGameplay(player);
         // The server may override a lobby pick with the save's binding. Follow it
@@ -208,13 +215,109 @@ internal static class CharacterLobby {
         return string.Format(CharacterSelection.Text("character_roster", "Character: {0}"), value);
     }
 
+    internal static string ReadyLabel(ScavPlayer player) {
+        if (player == null) return "";
+        if (player.IsHost) return CharacterSelection.Text("character_host_label", "Host");
+        if (!player.characterChosen) return CharacterSelection.Text("character_unset", "Not selected");
+        return player.lobbyReady
+            ? CharacterSelection.Text("character_ready", "Ready")
+            : CharacterSelection.Text("character_not_ready", "Not ready");
+    }
+
     internal static void LogRoster(ScavPlayer player) {
         if (!Util.GameIsFull() || player == null) return;
         string value = player.characterChosen ? player.characterSelected.ToString() : "unset";
-        string state = $"{player.playerName}={value} chosen={(player.characterChosen ? "true" : "false")} unchipped={player.modUnchipped}";
+        string state = $"{player.playerName}={value} chosen={(player.characterChosen ? "true" : "false")} ready={player.lobbyReady} unchipped={player.modUnchipped}";
         if (rosterLog.TryGetValue(player.playerId, out var previous) && previous == state) return;
         rosterLog[player.playerId] = state;
         log.l("CHARACTER: roster " + state);
+    }
+
+    internal static bool LocalPlayerChosen {
+        get {
+            var player = ScavPlayer.LocalPlayer;
+            return player != null && player.characterChosen;
+        }
+    }
+
+    internal static bool LocalPlayerReady {
+        get {
+            var player = ScavPlayer.LocalPlayer;
+            return player != null && player.lobbyReady;
+        }
+    }
+
+    internal static bool HostChosen {
+        get {
+            var player = ScavPlayer.LocalPlayer;
+            return player != null && player.characterChosen;
+        }
+    }
+
+    // Players who still have to pick or ready up. The host never readies.
+    internal static int MissingReadyCount {
+        get {
+            if (!Util.GameIsFull() || !Net.IsServer || Net.IsDedicatedServer || Util.IsInWorld()) return 0;
+            int missing = 0;
+            foreach (var player in ScavPlayer.ClientIdToPlayerDict.Values) {
+                if (player == null || player.IsHost) continue;
+                if (!player.characterChosen || !player.lobbyReady) missing++;
+            }
+            return missing;
+        }
+    }
+
+    internal static int ReadySummary(out int totalGuests) {
+        totalGuests = 0;
+        int ready = 0;
+        if (!Util.GameIsFull() || !Net.IsServer || Util.IsInWorld()) return 0;
+        foreach (var player in ScavPlayer.ClientIdToPlayerDict.Values) {
+            if (player == null || player.IsHost) continue;
+            totalGuests++;
+            if (player.characterChosen && player.lobbyReady) ready++;
+        }
+        return ready;
+    }
+
+    internal static void ToggleReady() {
+        if (!Util.GameIsFull() || !Net.IsClient || Util.IsInWorld() || !Net.IsConnected) return;
+        if (!LocalPlayerChosen) {
+            Multiplayer.DoMultiplayerStatusMessageLog(CharacterSelection.Text("character_ready_need_character", "Choose a character first."));
+            return;
+        }
+        bool next = !LocalPlayerReady;
+        // Flip immediately for the button label; the server's SyncVar confirms.
+        var local = ScavPlayer.LocalPlayer;
+        if (local != null) local.lobbyReady = next;
+        var writer = Net.CreateWriter(NetmsgId.SERVER_SetLobbyReady);
+        writer.Put(next);
+        Net.Client_Send(LiteNetLib.DeliveryMethod.ReliableOrdered, writer);
+        log.l($"CHARACTER: sent lobby ready={next}");
+    }
+
+    internal static void ServerSetReady(knetid id, bool ready) {
+        if (!Util.GameIsFull() || !Net.IsServer) return;
+        if (!ScavPlayer.ClientIdToPlayerDict.TryGetValue(id, out var player) || player == null) return;
+        if (player.IsHost) return;
+        if (ready && !player.characterChosen) {
+            log.warn($"CHARACTER: player={player.playerName} tried to ready without a character");
+            return;
+        }
+        player.lobbyReady = ready;
+        var entity = player.BasePlayer;
+        if (entity != null) entity.lobbyReady.Value = ready;
+        LogRoster(player);
+        log.l($"CHARACTER: player={player.playerName} lobbyReady={ready}");
+    }
+
+    internal static void ServerResetReady() {
+        if (!Util.GameIsFull() || !Net.IsServer) return;
+        foreach (var player in ScavPlayer.ClientIdToPlayerDict.Values) {
+            if (player == null) continue;
+            player.lobbyReady = false;
+            var entity = player.BasePlayer;
+            if (entity != null) entity.lobbyReady.Value = false;
+        }
     }
 
     internal static void Forget(ScavPlayer player) {
@@ -230,6 +333,7 @@ internal static class CharacterLobby {
         DraftUnchipped = false;
         rosterLog.Clear();
         StockCharacterSelectUI.HideForReset();
+        LobbyVanillaMenu.Restore();
     }
 }
 #endif

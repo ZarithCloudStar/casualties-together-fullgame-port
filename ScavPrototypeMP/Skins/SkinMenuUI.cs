@@ -49,6 +49,7 @@ internal static class SkinMenuUI {
     private static bool _cooldownShown;
     private static RectTransform _menuButtonRt;
     private static Transform _menuButtonHome;
+    private static bool _topButtonHidden;
 
     internal static bool IsFolderBrowserOpen => _browserWindow != null;
 
@@ -118,10 +119,28 @@ internal static class SkinMenuUI {
         }
     }
 
+    // The fullscreen MP menu hides the launcher icons but keeps this canvas
+    // alive so the skin popup can still be opened from its settings page.
+    internal static void SetTopButtonHidden(bool hidden) {
+        _topButtonHidden = hidden;
+        if (_menuButtonRt != null) {
+            _menuButtonRt.gameObject.SetActive(!hidden);
+        }
+        if (_rateLimitLabel != null) {
+            _rateLimitLabel.gameObject.SetActive(!hidden && MpSkinSync.IsCoolingDown);
+        }
+    }
+
     // park the square skin icon flush left of the mp menu button
     internal static void AlignMenuButtonBesideMp() {
         if (_menuButtonRt == null) {
             return;
+        }
+
+        if (_topButtonHidden) {
+            _menuButtonRt.gameObject.SetActive(false);
+        } else if (!_menuButtonRt.gameObject.activeSelf) {
+            _menuButtonRt.gameObject.SetActive(true);
         }
 
         GameObject mpObj = UIManager.MP_MENU_BUTTON;
@@ -373,6 +392,10 @@ internal static class SkinMenuUI {
     internal static void OpenPopup() {
         if (_canvas == null) {
             return;
+        }
+
+        if (!_canvas.activeSelf) {
+            SetVisible(true);
         }
 
         try {

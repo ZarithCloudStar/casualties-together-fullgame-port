@@ -252,12 +252,32 @@ UpdateChecker.ClosePopup();
 Util.PlayUISound(PlayerCamera.UISoundType.Close);
 }
 ApplyMpMenuButton(open_or_nah);
+UIManager.SetMpChromeVisible(!open_or_nah);
+if (!open_or_nah) {
+UIServerBrowser.CancelPasswordPrompt();
+#if FULLGAME
+_playerContextTarget = null;
+#endif
+}
 OnMenuTabChange();
 }
 if (open_or_nah) {
 Util.OpenBrightnessPanel(false);
 }
 mainmenu_open = open_or_nah;
+}
+
+// The top-right X defaults to leaving the room while in a lobby: the host
+// closes it and returns to single-player, a guest disconnects. In-game it only
+// closes the menu so a misclick cannot end the run.
+static void CloseMenuOrLeaveLobby() {
+if (Net.IsRunning && !Util.IsInWorld()) {
+Multiplayer.ShutdownNetwork();
+Chat.LogMessage(Chat.NAMELABEL_LOCALSYSTEM, "Disconnected by the user.");
+Multiplayer.DoMultiplayerStatusMessageLog("Disconnected by the user.");
+Util.PlayUISound(PlayerCamera.UISoundType.Close);
+}
+SetOpen(false);
 }
 
 static void _GUI__PanelInfo() {
@@ -353,6 +373,9 @@ GUILayout.EndHorizontal();
 static Vector2 scrollbullshit = Vector2.zero;
 public static void _GUI_DrawSideMenuWithPlayerList() {
 if (!Net.IsRunning) return;
+// Lobby UI carries its own player/ready list; the floating side panel is
+// in-world only.
+if (!Util.IsInWorld()) return;
 if (!UIBullshit.IsAnyMenuOpen()) return;
 var ingame = Util.IsInWorld();
 
@@ -565,16 +588,13 @@ PlayerCamera.main.craftingPanel.SetActive(false);
 }
 }
 
-// x 1148.91   y 611.41
+// Fullscreen menu. The top bar sits above the panel; reserve its height so the
+// panel fills everything below it.
 Rect mainpanelcontentrect;
 Rect mainpanelrect;
+var topbarsizey = GetMenuUIScale() * 56f;
 {
-var scaled = new Vector2(MENU_SIZE_X, MENU_SIZE_Y) * GetMenuUIScale();
-if (scaled.x > Screen.width) {
-scaled = scaled * (Screen.width / scaled.x);
-}
-mainpanelrect = new Rect(0, 0, scaled.x, scaled.y);
-mainpanelrect.center = UIBullshit.GetHalfScreenSize();
+mainpanelrect = new Rect(0, topbarsizey, Screen.width, Mathf.Max(200, Screen.height - topbarsizey));
 
 UIBullshit._GUI_9SlicePanel(mainpanelrect, 1, 0.6980392f, true, UIBullshit.unscaled_uiBlockNano);
 
@@ -582,7 +602,6 @@ mainpanelcontentrect = mainpanelrect.ShrinkBorder(UIBullshit.uiBlockSmallBorderS
 
 }
 {
-var topbarsizey = GetMenuUIScale() * 56f;
 var topbar = new Rect(mainpanelrect);
 topbar.yMin -= topbarsizey;
 topbar.yMax = mainpanelrect.yMin;// + 3f * GetMenuUIScale();
@@ -613,7 +632,7 @@ var exitbuttonrect = (topbar).ShrinkBorder(UIBullshit.uiBlockSmallBorderSize);
 exitbuttonrect.xMin = exitbuttonrect.xMax - exitbuttonrect.height;
 UIBullshit._GUI_SetButtonSkinTexture(temp_button_style, false);
 if (GUI.Button(exitbuttonrect, "X", temp_button_style)) {
-SetOpen(false);
+CloseMenuOrLeaveLobby();
 }
 
 }
@@ -776,6 +795,14 @@ GUILayout.EndArea();
 
 
 GUILayout.BeginArea(mainpanelcontentrect);
+#if FULLGAME
+// While the player right-click menu is open, disable the menu content so a
+// click on the popup cannot also press a button underneath it (IMGUI has no
+// z-order for control input).
+bool playerContextOpen = _playerContextTarget != null;
+bool playerContextWasEnabled = GUI.enabled;
+if (playerContextOpen) GUI.enabled = false;
+#endif
 
 if (current_tab != null && current_tab.gui_func != null) {
 try {
@@ -791,6 +818,10 @@ GUI.skin.label.fontSize = ogfontsize;
 }
 
 GUILayout.EndArea();
+#if FULLGAME
+if (playerContextOpen) GUI.enabled = playerContextWasEnabled;
+DrawPlayerContextMenu();
+#endif
 
 
 {
@@ -1293,8 +1324,12 @@ GUILayout.FlexibleSpace();
 
 if (Net.IsServer && Net.IsConnected && Util.IsInMainMenu() && PreRunScript.instance != null) {
 if (GUILayout.Button(Lang.Get("mmct_gotorunsettings"))) {
+#if FULLGAME
+LobbyNavigation.OpenRunSettingsFromRoom();
+#else
 SetOpen(false);
 PreRunScript.instance.runSettingsScreen.SetActive(value: true);
+#endif
 }
 }
 }
@@ -1308,6 +1343,8 @@ GUILayout.Space(15 * GetMenuUIScale());
 #if FULLGAME
 if (Util.GameIsFull()) {
 LobbyCharacterPanel.DrawModMenuButton(bigheight);
+LobbyReadyUI.DrawHostStartButtons(bigheight);
+LobbyReadyUI.DrawClientReadyButton(bigheight);
 SaveCurrentLayerExit.DrawButton(bigheight);
 SandboxMode.DrawButton(bigheight);
 GUILayout.Space(8 * GetMenuUIScale());
@@ -1554,6 +1591,57 @@ GUILayout.EndHorizontal();
 }
 #endif
 
+#if FULLGAME
+static ScavPlayer _playerContextTarget;
+static Vector2 _playerContextPos;
+
+static void NotePlayerContextClick(ScavPlayer plr) {
+var e = Event.current;
+if (e == null || e.type != EventType.MouseDown || e.button != 1) return;
+if (!Util.GameIsFull() || !Net.IsHost || Util.IsInWorld()) return;
+if (plr == null || plr.IsLocal) return;
+var row = GUILayoutUtility.GetLastRect();
+// Convert both sides to screen space: the list lives inside a scroll view.
+var rowScreen = GUIUtility.GUIToScreenRect(row);
+if (!rowScreen.Contains(GUIUtility.GUIToScreenPoint(e.mousePosition))) return;
+_playerContextTarget = plr;
+_playerContextPos = new Vector2(rowScreen.x + 24, rowScreen.y + 8);
+e.Use();
+}
+
+static void DrawPlayerContextMenu() {
+if (_playerContextTarget == null) return;
+if (_CONNECTIONSECONDPANEL_TOOLBAR != 0 || current_tab != menutab_directconnect || !Net.IsRunning || !Net.IsHost) { _playerContextTarget = null; return; }
+var e = Event.current;
+if (e == null) { _playerContextTarget = null; return; }
+float scale = Mathf.Max(0.75f, GetMenuUIScale());
+Rect rect = new Rect(_playerContextPos.x, _playerContextPos.y, 190 * scale, 46 * scale);
+if (rect.xMax > Screen.width) rect.x = Screen.width - rect.width;
+if (rect.yMax > Screen.height) rect.y = Screen.height - rect.height;
+GUI.Box(rect, GUIContent.none, GUI.skin.box);
+var area = new Rect(rect.x + 4 * scale, rect.y + 4 * scale, rect.width - 8 * scale, rect.height - 8 * scale);
+GUILayout.BeginArea(area);
+{
+bool previous = GUI.enabled;
+GUI.enabled = previous && Net.IsRunningSteam && !LobbyHostTransfer.Busy && !LobbyHostTransfer.HasRequest;
+if (GUILayout.Button(Lang.Get("host_transfer_context", true) ?? "移交房主")) {
+var target = _playerContextTarget;
+_playerContextTarget = null;
+try {
+LobbyHostTransfer.Request(target, LobbyHostTransfer.TransferMode.LobbyOnly, 0);
+HostTransferUI.Open(false);
+} catch (Exception ex) {
+Multiplayer.DoMultiplayerStatusMessageLog("Host transfer failed: " + ex.Message);
+}
+}
+GUI.enabled = previous;
+}
+GUILayout.EndArea();
+if (e.type == EventType.MouseDown && !rect.Contains(e.mousePosition)) _playerContextTarget = null;
+else if (e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape) { _playerContextTarget = null; e.Use(); }
+}
+#endif
+
 static void _GUI___ConnectionSecondPanel_ContentRender_RenderDetailedPlayerList(Rect r) {
 if (!Net.IsRunning) {
 GUI.skin.label.alignment = TextAnchor.MiddleCenter;
@@ -1572,6 +1660,9 @@ log.error($"_GUI___ConnectionSecondPanel_ContentRender_RenderDetailedPlayerList 
 }
 GUI.enabled = og_enabled;
 GUILayout.EndVertical();
+#if FULLGAME
+NotePlayerContextClick(plr);
+#endif
 
 }
 } else {
@@ -1958,7 +2049,10 @@ var og_enabled = GUI.enabled;
 
 var displayName = plr.playerName;
 #if FULLGAME
-if (Util.GameIsFull()) displayName += "  " + CharacterLobby.RosterLabel(plr);
+if (Util.GameIsFull()) {
+displayName += "  " + CharacterLobby.RosterLabel(plr);
+if (!Util.IsInWorld()) displayName += "  " + CharacterLobby.ReadyLabel(plr);
+}
 #endif
 var textsize = GUI.skin.label.CalcSize(FixGuiContent.Content(displayName, 19));
 
@@ -2404,6 +2498,7 @@ settings_origin = typeof(DebugMenuSettings)
 internal static SettingsTab _skins_setting_tab = new SettingsTab {
 name = "mmst_skins",
 settings_origin = typeof(SkinSettings),
+gui_func = _GUI___SettingsSkins,
 on_reset = () => {
 SettingsJsonThing.json.Save();
 SpriteReplacerPlugin.SyncSpeciesCache();
@@ -2637,6 +2732,16 @@ DrawUpdateButton();
 
 GUILayout.Space(20 * GetMenuUIScale());
 
+if (GUILayout.Button(Lang.Get("mmst_game_settings", true) ?? "游戏设置", GUILayout.Height(42 * GetMenuUIScale()))) {
+#if FULLGAME
+LobbyNavigation.OpenGameSettingsFromRoom();
+#else
+SetOpen(false);
+Util.OpenSettingsPanel(true);
+#endif
+}
+GUILayout.Space(10 * GetMenuUIScale());
+
 GUILayout.BeginHorizontal();
 {
 var activatethisbutton = !Net.IsRunning && !Util.IsInWorld();
@@ -2657,6 +2762,16 @@ GUILayout.EndHorizontal();
 }
 
 
+
+static void _GUI___SettingsSkins(Rect r) {
+GUILayout.Space(20 * GetMenuUIScale());
+if (GUILayout.Button(Lang.Get("mmst_open_skin_editor", true) ?? "Switch skin…", GUILayout.Height(42 * GetMenuUIScale()))) {
+// The skin selector is a uGUI popup; close the IMGUI menu so it can render
+// on top and keep its own modal input handling.
+SetOpen(false);
+SkinMenuUI.OpenPopup();
+}
+}
 
 static void __GUI____RenderFieldsWithThatAttribute(List<FieldInfo> flds, in Rect r) {
 var halfwidth = r.width * ASJOUFMIGHDSYDSGFMKFSDKYGJUFSYGJFSDGKVYJSFDKJGYFSDGKVJHBFJKVFDJVMBYFJDYG;
