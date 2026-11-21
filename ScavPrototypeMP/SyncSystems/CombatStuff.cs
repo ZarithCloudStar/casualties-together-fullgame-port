@@ -676,7 +676,7 @@ return building_dmg;
         }
         if (atk.physicalSwing) {
             attacker.dirtyness += atk.cooldown * 1f;
-            //attacker.skills.AddExp(0, atk.damage / 300f);
+            attacker.skills.AddExp(0, atk.damage / 300f);
         }
 
     }
