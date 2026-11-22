@@ -13,6 +13,7 @@ namespace Together;
 // INT unlocks belong to the team. hasMadeBefore is only a local UI projection.
 internal static class RecipeProgress {
     static int[] baseIntel;
+    static int[] pendingSavedIntel;
     static int revision = 1;
     static readonly Dictionary<knetid, int> sent = new();
     static bool sharedReceived, openPending;
@@ -24,22 +25,73 @@ internal static class RecipeProgress {
         PlayerCheckpoint.ResetCraftState();
     }
 
+    internal static int[] CaptureForSave() {
+        if (Recipes.recipes == null) return null;
+        return Recipes.recipes.Select(r => r != null ? r.INT : 0).ToArray();
+    }
+
     internal static void RecipesCreated() {
+        int[] pending = pendingSavedIntel;
         ResetNetwork();
         baseIntel = Recipes.recipes.Select(r => r?.INT ?? 0).ToArray();
+        pendingSavedIntel = pending;
+        ApplyPendingShared();
     }
 
     static bool Valid(int index) => Recipes.recipes != null && index >= 0 && index < Recipes.recipes.Count && Recipes.recipes[index] != null;
 
     internal static void RestoreShared(JObject data) {
-        if (!Net.IsServer || data["savedRecipeData"] == null || Recipes.recipes == null) return;
-        var saved = data["savedRecipeData"].ToObject<SavedRecipeData>()?.saved;
+        if (!Net.IsServer || data == null) return;
+        int[] saved = ReadSavedIntel(data);
         if (saved == null) return;
-        for (int i = 0; i < Math.Min(saved.Length, Recipes.recipes.Count); i++)
-            if (Recipes.recipes[i] != null) Recipes.recipes[i].INT = saved[i].Item2;
+        pendingSavedIntel = saved;
+        ApplyPendingShared();
+    }
+
+    static int[] ReadSavedIntel(JObject data) {
+        try {
+            var explicitTable = data["sharedRecipeINT"] as JArray;
+            if (explicitTable != null)
+                return explicitTable.ToObject<int[]>();
+        } catch (Exception e) {
+            log.warn("[recipes] sharedRecipeINT could not be read: " + e.Message);
+        }
+        if (data["savedRecipeData"] == null) return null;
+        try {
+            var saved = data["savedRecipeData"].ToObject<SavedRecipeData>()?.saved;
+            if (saved == null) return null;
+            return saved.Select(x => x.Item2).ToArray();
+        } catch (Exception e) {
+            log.warn("[recipes] savedRecipeData could not be read: " + e.Message);
+            return null;
+        }
+    }
+
+    // Apply only after recipes exist. The host writes this table into the save
+    // itself, and restores it again after every deferred player load, because a
+    // per-player save can apply an older savedRecipeData table afterwards.
+    internal static void ApplyPendingShared() {
+        if (!Net.IsServer || pendingSavedIntel == null || Recipes.recipes == null) return;
+        int count = Math.Min(pendingSavedIntel.Length, Recipes.recipes.Count);
+        for (int i = 0; i < count; i++) {
+            Recipe recipe = Recipes.recipes[i];
+            if (recipe == null) continue;
+            recipe.INT = pendingSavedIntel[i];
+            if (recipe.INT == 0) recipe.specialKnown = true;
+        }
         revision++;
         PlayerCheckpoint.ApplyLocalCraftMarkers();
-        log.l("[recipes] restored shared blueprint state unlocked=" + Recipes.recipes.Count(r => r != null && r.INT == 0));
+        log.l("[recipes] restored shared blueprint state unlocked=" +
+            Recipes.recipes.Count(r => r != null && r.INT == 0));
+    }
+
+    internal static void FinishRestore() {
+        if (!Net.IsServer || pendingSavedIntel == null) return;
+        ApplyPendingShared();
+        foreach (var player in ScavPlayer.ClientIdToPlayerDict.Values) {
+            if (player != null) SendShared(player.playerId, true);
+        }
+        pendingSavedIntel = null;
     }
 
     internal static void Learn(Body body, Item item, int index) {

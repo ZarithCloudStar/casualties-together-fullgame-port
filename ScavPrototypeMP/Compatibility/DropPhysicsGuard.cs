@@ -1,16 +1,15 @@
 using System;
+using System.Collections.Generic;
 using HarmonyLib;
 using UnityEngine;
 
 namespace Together;
 
-// When a player drops an item, vanilla can leave its Collider2D disabled. The
-// item then falls through the floor while the network tries to replicate it.
-// Re-enable only a free item's own disabled colliders, and only when it is not
-// already embedded in a wall/floor. Never move it or change its Rigidbody2D.
+// When an item is freed from a container or a hand, vanilla can leave its
+// Collider2D disabled. The item then falls through the floor while the network
+// tries to replicate it. A free item must get its own colliders back; other
+// loose items in the same pile are not solid geometry.
 internal static class DropPhysicsGuard {
-    static readonly Collider2D[] Buffer = new Collider2D[32];
-
     [HarmonyPatch(typeof(Body), "DropItem", new[] { typeof(int) })]
     internal static class Body_DropItem_GuardPatch {
         static void Prefix(Body __instance, int slot, out Item __state) {
@@ -31,6 +30,37 @@ internal static class DropPhysicsGuard {
         static void Postfix(Item item) => Guard(item, "DropWearable");
     }
 
+    // Bag/container unload does not go through Body.DropItem. It leaked the
+    // exact same disabled-collider state until this was hooked here.
+    [HarmonyPatch(typeof(Container), nameof(Container.UnloadItem))]
+    internal static class Container_UnloadItem_GuardPatch {
+        static void Postfix(Item item) => Guard(item, "Container.UnloadItem", true);
+    }
+
+    // ContainerBroke and RecipeItem.UseItem both end up in UnloadAllItems.
+    [HarmonyPatch(typeof(Container), nameof(Container.UnloadAllItems))]
+    internal static class Container_UnloadAllItems_GuardPatch {
+        static void Prefix(Container __instance, out List<Item> __state) {
+            __state = new List<Item>();
+            if (__instance == null) return;
+            foreach (Transform child in __instance.transform) {
+                Item item = child.GetComponent<Item>();
+                if (item != null) __state.Add(item);
+            }
+        }
+        static void Postfix(List<Item> __state) {
+            if (__state == null) return;
+            for (int i = 0; i < __state.Count; i++) {
+                Item item = __state[i];
+                // UnloadAllItems does not call HeldSeat.Release. Without this the
+                // HeldQuiet component remains and its later OnDestroy restores the
+                // colliders to the saved off state.
+                HeldSeat.Release(item);
+                Guard(item, "Container.UnloadAllItems", true);
+            }
+        }
+    }
+
     static bool IsFree(Item item) {
         try {
             if (item == null || item.transform == null || item.transform.parent != null) return false;
@@ -42,26 +72,28 @@ internal static class DropPhysicsGuard {
     static bool OverlappingSolid(Item item) {
         try {
             Vector2 pos = item.transform.position;
-            int count = Physics2D.OverlapCircleNonAlloc(pos, 0.12f, Buffer);
-            if (count >= Buffer.Length) return true;
+            Collider2D[] hits = Physics2D.OverlapCircleAll(pos, 0.12f);
             int ground = LayerMask.NameToLayer("Ground");
-            for (int i = 0; i < count; i++) {
-                Collider2D hit = Buffer[i];
-                Buffer[i] = null;
+            for (int i = 0; i < hits.Length; i++) {
+                Collider2D hit = hits[i];
                 if (hit == null || hit.isTrigger || hit.transform == null) continue;
+                // Ground itself is where a loose item is supposed to rest.
                 if (hit.gameObject.layer == ground) continue;
                 if (hit.transform == item.transform || hit.transform.IsChildOf(item.transform)) continue;
+                // Another loose item is not a wall. This used to make the second
+                // item in a pile skip the repair and fall through the floor.
+                if (hit.GetComponentInParent<Item>() != null) continue;
                 return true;
             }
             return false;
         } catch { return true; }
-        finally { Array.Clear(Buffer, 0, Buffer.Length); }
     }
 
-    internal static void Guard(Item item, string reason) {
+    internal static void Guard(Item item, string reason, bool force = false) {
         if (!Net.IsRunning || item == null) return;
         try {
-            if (!IsFree(item) || OverlappingSolid(item)) return;
+            if (!IsFree(item)) return;
+            if (!force && OverlappingSolid(item)) return;
             var colliders = item.GetComponentsInChildren<Collider2D>(true);
             bool fixedAny = false;
             foreach (var collider in colliders) {

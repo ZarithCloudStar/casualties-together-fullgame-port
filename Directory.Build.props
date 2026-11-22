@@ -4,12 +4,12 @@
 	<PropertyGroup>
 
 		<!-- Use a distinct identity while the 5.5.4 protocol sync is being validated. -->
-		<ModVersion>5.5.4-cu-port-bugfix1</ModVersion>
+		<ModVersion>5.5.4-cu-port-bugfix2</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Wire/protocol identity; intentionally separate from the package version. -->
-		<NetworkVersion>5.5.4-cu-port-fix1</NetworkVersion>
+		<NetworkVersion>5.5.4-cu-port-fix2</NetworkVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
-		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.4-cu-port-bugfix1</UpdateReleaseVersion>
+		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.4-cu-port-bugfix2</UpdateReleaseVersion>
 
 		<SlnRoot>$(SolutionDir)</SlnRoot>
 
@@ -123,6 +123,14 @@
 	</Target>
 
 </Project>
+
+
+
+
+
+
+
+
 
 
 

@@ -118,6 +118,10 @@ internal static class DeferredPlayerSaveRestore {
                 yield return null;
             }
             slotRestored = Current(world, session) && waiting.Count == 0 && !restoreFailed && !WorldSnapshotTransfer.Failed;
+            // Per-player save.sv files each carry their own savedRecipeData.
+            // Re-apply the host table last so an older player copy cannot put
+            // the mercenary scarf back to INT 99.
+            if (Current(world, session)) RecipeProgress.FinishRestore();
         } finally {
             WorldMP.OnWorldgenFinish -= finish; pendingRestores--;
             SaveSlots.LoadCompleted(slotRestored);

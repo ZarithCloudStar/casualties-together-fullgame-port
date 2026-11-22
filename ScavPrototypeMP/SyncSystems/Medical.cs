@@ -2038,7 +2038,8 @@ if (limb.HasProsthetic()
 && item.id != "titaniumsheet"
 && item.id != "titaniumrod"
 && item.id != "wrench"
-&& item.id != "makeshiftwrench") {
+&& item.id != "makeshiftwrench"
+&& item.id != "tweezers") {
 return false;
 }
 

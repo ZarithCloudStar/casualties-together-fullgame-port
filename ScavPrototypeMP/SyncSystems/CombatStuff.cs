@@ -676,12 +676,33 @@ return building_dmg;
         }
         if (atk.physicalSwing) {
             attacker.dirtyness += atk.cooldown * 1f;
+            // PR #1 proposed re-enabling this vanilla call. That would double-award
+            // validated client hits because AwardValidatedPhysicalSwingXp below
+            // already restores the same damage/300 STR XP when the host rerun
+            // misses. Keep the one authoritative award path.
             //attacker.skills.AddExp(0, atk.damage / 300f);
         }
 
     }
 
 
+
+    // A validated client swing can miss the host-side Body.Attack rerun because
+    // the victim/limb already moved. Award the vanilla physical-swing XP only
+    // when that rerun did not already add it. Host-local swings are excluded:
+    // their own Body.Attack already awarded it.
+    internal static void AwardValidatedPhysicalSwingXp(Body attacker, float damage, float expBefore, bool allowLocal = false) {
+        if (attacker == null || attacker.skills == null || damage <= 0f || (Util.IsBodyLocal(attacker) && !allowLocal))
+            return;
+        if (attacker.skills.expSTR > expBefore + 0.0001f)
+            return;
+        float before = attacker.skills.expSTR;
+        attacker.skills.AddExp(0, damage / 300f);
+        if (attacker.TryGetNetBody(out var nb))
+            MedicalSync.Server_QueueSendCharacterHealth(nb, true);
+        log.l($"[combat-xp] validated physical swing attacker={attacker.name} damage={damage:F1} " +
+            $"exp {before:F2}->{attacker.skills.expSTR:F2}");
+    }
 
     public static bool breakTheAttackLoop = false;
 
@@ -1266,6 +1287,7 @@ return building_dmg;
             Plugin.log.LogWarning($"COPYING atkinfo {LastAttackInfo?.damage} ");
 #endif
             var atkinfo = LastAttackInfo.CloneViaSerialization();
+            float xpDamage = atkinfo.damage;
             // The retrieval-only attack skips vanilla Body.Attack, which applies
             // this run setting before calculating either kind of hit damage.
             float damageRule = WorldGeneration.GetRunSettingFloat("attackdamage");
@@ -1282,6 +1304,7 @@ return building_dmg;
 #endif
 
             bool didhitconfirmed = false;
+            bool pvpValidated = false;
 
             if (hitobj.IsBlockHit()) {
                 // client reported the block cell via hitPos. don't re-raycast (chunk sleep / pose lag miss).
@@ -1341,6 +1364,7 @@ return building_dmg;
 
                         MedicalSync.Server_QueueSendCharacterHealth(victimpb, true);
                         didhitconfirmed = true;
+                        pvpValidated = true;
                     }
 
                 }
@@ -1392,6 +1416,7 @@ return building_dmg;
             log.l($"{plr}  {hitobj} applied damages ");
 #endif
 
+            float xpBefore = plr.body != null && plr.body.skills != null ? plr.body.skills.expSTR : 0f;
             if (pb.IsLocal && hostWorldSwing?.body == plr.body) {
                 // The original host swing already used stamina and played its
                 // animation. Its delegate will consume condition on return.
@@ -1421,6 +1446,13 @@ return building_dmg;
                     StaticHitValidation = false;
                 }
             }
+
+            // Vanilla Body.Attack awards STR for a landed physical swing. The
+            // host-side validation rerun can miss a moving/desynced target even
+            // though the PVP/building/animal hit was already accepted above, so
+            // clients otherwise lose that XP when their health state is synced.
+            if (didhitconfirmed && atkinfo.physicalSwing)
+                AwardValidatedPhysicalSwingXp(plr.body, xpDamage, xpBefore, pvpValidated);
 
             if (!LastAttackResult && // if the flag wasnt true
                 didhitconfirmed// if friendly fire or building damage validated and occured

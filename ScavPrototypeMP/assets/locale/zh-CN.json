@@ -90,7 +90,7 @@
   "casualtiestogether_drillpod_not_enough_plrs": "所有人必须进入钻探舱。{0}/{1}",
   "casualtiestogether_layerfinish_not_enough_plrs": "所有人必须到达终点！",
   "casualtiestogether_layerfinish_wait_for_friends": "你已完成该地层，请等待好友。",
-  "casualtiestogether_layerfinish_wait_for_host": "你已完成该地层，请等待主机。",
+  "casualtiestogether_layerfinish_wait_for_host": "你已到达层级底部，请等待主机保存或继续。",
   "casualtiestogether_plr_finished_layer": "{0} 刚刚完成了该地层。",
   "casualtiestogether_everyone_is_dead": "所有人都死了。",
   "casualtiestogether_everyone_is_dead_host": "所有人都死了，请返回主菜单并重新开始本局。",

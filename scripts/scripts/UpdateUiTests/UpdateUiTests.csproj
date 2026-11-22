@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="UnityUiStubs.cs" />
+    <Compile Include="UpdateFallbackTests.cs" />
+    <Compile Include="../../ScavPrototypeMP/Content/ReleaseUpdate.cs" Link="ReleaseUpdate.cs" />
+    <Compile Include="../../ScavPrototypeMP/UI/MenuDialogUI.cs" Link="MenuDialogUI.cs" />
+    <Compile Include="../../ScavPrototypeMP/Content/UpdateSourceProbe.cs" Link="UpdateSourceProbe.cs" />
+    <Compile Include="../../ScavPrototypeMP/Content/UpdateResultCache.cs" Link="UpdateResultCache.cs" />
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>F:\cu-port\CU_Fullgame\CasualtiesUnknown_Data\Managed\Newtonsoft.Json.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>

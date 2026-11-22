@@ -99,7 +99,7 @@
   "casualtiestogether_drillpod_not_enough_plrs": "Everyone must be in the drill. {0}/{1}",
   "casualtiestogether_layerfinish_not_enough_plrs": "Everyone must be at the finish!",
   "casualtiestogether_layerfinish_wait_for_friends": "You finished the layer, wait for your friends.",
-  "casualtiestogether_layerfinish_wait_for_host": "You finished the layer, wait for host.",
+  "casualtiestogether_layerfinish_wait_for_host": "You reached the bottom. Wait for the host to save or continue.",
   "casualtiestogether_plr_finished_layer": "{0} just finished the layer.",
   "casualtiestogether_everyone_is_dead": "Everyone is dead.",
   "casualtiestogether_everyone_is_dead_host": "Everyone is dead, go to main menu and restart the run.",

@@ -170,6 +170,8 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
                         var poses = PlayerPlacementCheckpoint.Capture();
                         dict["PLRPOS"] = poses.ToDictionary(p => p.Key, p => (p.Value.x, p.Value.y));
                         dict["PLRPOSE"] = poses;
+                        var recipeIntel = RecipeProgress.CaptureForSave();
+                        if (recipeIntel != null) dict["RECIPES"] = recipeIntel;
 #endif
 
                         string serialized = JsonConvert.SerializeObject(dict, Formatting.Indented);

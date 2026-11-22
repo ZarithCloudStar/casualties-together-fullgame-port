@@ -846,6 +846,8 @@ NetObjectRegistry.AlertObjectNotRegistered(true);
 
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.HandleInput))]
 public static class PlayerCamera_HandleInput_MultiplayerPatch {
+static Body layerEndMovementBody;
+
 static bool Prefix() {
 
 if (Net.IsRunning && UIInGame.SpectatorModeActive) {
@@ -860,16 +862,28 @@ else PauseHandler.TogglePause();
 return false;
 }
 
-if (Net.IsRunning) {
-// Respect the host-synchronized native run setting at ordinary layer exits.
-if (!WorldGeneration.world.generatingWorld && !WorldGeneration.world.doingRegen &&
-ServerMain.DidHeFinishTheLayer(PlayerCamera.main.body)) {
-#if FULLGAME
-PlayerCamera.main.body.forceWalk = !WorldGeneration.GetRunSettingBool("allowlayerendmovement");
-#else
-PlayerCamera.main.body.forceWalk = false;
-#endif
-}
+if (Net.IsRunning && PlayerCamera.main != null && PlayerCamera.main.body != null &&
+    WorldGeneration.world != null && !WorldGeneration.world.generatingWorld && !WorldGeneration.world.doingRegen) {
+    var body = PlayerCamera.main.body;
+    // Movement restriction belongs to the physical bottom line, not the
+    // latched "finished layer" state used by the save panel. Once the player
+    // steps back above the line, restore the previous forceWalk value.
+    #if FULLGAME
+    bool atExit = FullgameWorldCompat.IsAtLayerExit(body);
+    #else
+    bool atExit = ServerMain.IsLayerFinishPosition(body.transform.position.y);
+    #endif
+    if (atExit) {
+        layerEndMovementBody = body;
+        body.forceWalk = !WorldGeneration.GetRunSettingBool("allowlayerendmovement");
+    } else if (layerEndMovementBody == body) {
+        // The restriction belongs to the line, not to the body forever. Never
+        // restore a forceWalk captured while entering the line: the native
+        // finish-panel path may already have set it, which is exactly how the
+        // old latched implementation became permanent.
+        body.forceWalk = false;
+        layerEndMovementBody = null;
+    }
 }
 
 return

@@ -247,9 +247,15 @@ PlayerCamera.main.DoAlert(Lang.Get("layerfinish_wait_for_host"));
 }
 
 if (Net.IsClient) {
-world.savePanel.SetActive(ServerMain.HostBodyIsDead() && ServerMain.LocalPlayerAtLayerExit()
-    && ServerMain.CheckIfEnoughPeopleAreAtLayerFinish() && !LayerExitWhenHostDead.ExitBlocked());
+// Clients never own the save/continue transaction. When the host is dead
+// and the percentage condition is met, show only the waiting notice; the
+// host panel is forced on the host side.
+world.savePanel.SetActive(false);
 } else {
+// The host panel is authoritative even when the host is not physically at
+// the exit: once the required percentage of living players reached it, the
+// host must be able to continue/save. A postfix below re-asserts this after
+// the native Update pass so it cannot flicker against local player checks.
 var newww = ServerMain.CheckIfEnoughPeopleAreAtLayerFinish();
 if (newww != world.savePanel.activeSelf) {
 world.savePanel.SetActive(newww);

@@ -282,17 +282,20 @@ public static class PlayerCheckpoint {
 
     // the first-craft payout is per player. the stock recipe flags in the file are one global table.
     internal static void StampCrafted(string folder, List<int> crafted) {
-        if (crafted == null)
-            return;
         var path = Path.Combine(folder, "save.sv");
         if (!File.Exists(path))
             return;
         try {
             var root = JObject.Parse(SaveSystem.Unzip(File.ReadAllBytes(path)));
-            var arr = new JArray();
-            for (int i = 0; i < crafted.Count; i++)
-                arr.Add(crafted[i]);
-            root["craftedBefore"] = arr;
+            if (crafted != null) {
+                var arr = new JArray();
+                for (int i = 0; i < crafted.Count; i++)
+                    arr.Add(crafted[i]);
+                root["craftedBefore"] = arr;
+            }
+            var intel = RecipeProgress.CaptureForSave();
+            if (intel != null)
+                root["sharedRecipeINT"] = JArray.FromObject(intel);
             File.WriteAllBytes(path, SaveSystem.Zip(root.ToString(Newtonsoft.Json.Formatting.None)));
         } catch (Exception e) {
             log.error($"PlayerCheckpoint.StampCrafted\n{e}");
@@ -492,6 +495,8 @@ public static class PlayerCheckpoint {
                 foreach (var pair in positions) log.l($"CHECKPOINT: position player={pair.Key} x={pair.Value.Item1:0.##} y={pair.Value.Item2:0.##}");
             }
             dict["PLRPOS"] = positions;
+            var recipeIntel = RecipeProgress.CaptureForSave();
+            if (recipeIntel != null) dict["RECIPES"] = recipeIntel;
 #if FULLGAME
             var poses = PlayerPlacementCheckpoint.Capture();
             dict["PLRPOS"] = poses.ToDictionary(p => p.Key, p => (p.Value.x, p.Value.y));

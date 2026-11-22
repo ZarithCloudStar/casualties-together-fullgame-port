@@ -916,7 +916,8 @@ static class Container_UnloadItem_MultiplayerPatch {
 			if (Net.IsServer) {
 				//NetObjectRegistry.Server_QueueSync(si);
 			}
-			if (PlayerCamera_TryPerformInventoryAction_MultiplayerPatch.is_inside_TryPerformInventoryAction) {
+			if (PlayerCamera_TryPerformInventoryAction_MultiplayerPatch.is_inside_TryPerformInventoryAction ||
+                PlayerCamera_TryPerformInventoryAction_MultiplayerPatch.is_inside_LocalContainerAction) {
 				ItemSync.ItemContainerChanged.Add(si);
 				si.SetIgnoreTimeForRoundTrip(1);
 			}
@@ -943,7 +944,8 @@ static class Container_LoadItem_MultiplayerPatch {
             return;
         if (item.transform.parent != __instance.transform)
             return;
-        if (!PlayerCamera_TryPerformInventoryAction_MultiplayerPatch.is_inside_TryPerformInventoryAction)
+        if (!PlayerCamera_TryPerformInventoryAction_MultiplayerPatch.is_inside_TryPerformInventoryAction &&
+            !PlayerCamera_TryPerformInventoryAction_MultiplayerPatch.is_inside_LocalContainerAction)
             return;
         if (!ItemSync.TryGetSyncInfo(item, out var si))
             return;
@@ -960,6 +962,7 @@ static class Container_LoadItem_MultiplayerPatch {
 public static class PlayerCamera_TryPerformInventoryAction_MultiplayerPatch {
 
     public static bool is_inside_TryPerformInventoryAction = false;
+    public static bool is_inside_LocalContainerAction = false;
 
     static bool Prefix(PlayerCamera __instance, ref bool __result, RaycastResult hit, List<RaycastResult> uiCasts) {
         if (!Net.IsRunning) return true;
@@ -1123,6 +1126,20 @@ public static class PlayerCamera_TryPerformInventoryAction_MultiplayerPatch {
             button.transform.localScale = Vector3.one * 1.5f;
         }
         return true;
+    }
+
+    // TryPerformWorldActions calls Container.UnloadItem/LoadItem directly. It
+    // does not pass through TryPerformInventoryAction, so without this scope a
+    // drag out of a bag (or into a bag on the ground) never sent a container
+    // change. The host kept the old parent and the next sync snapped it back.
+    [HarmonyPatch(typeof(PlayerCamera), "HandleReleaseDragging")]
+    static class PlayerCamera_HandleReleaseDragging_ContainerActionPatch {
+        static void Prefix() {
+            PlayerCamera_TryPerformInventoryAction_MultiplayerPatch.is_inside_LocalContainerAction = true;
+        }
+        static void Postfix() {
+            PlayerCamera_TryPerformInventoryAction_MultiplayerPatch.is_inside_LocalContainerAction = false;
+        }
     }
     
 

@@ -380,7 +380,7 @@ GUI.skin.label.wordWrap = false;
 GUI.skin.label.margin = new RectOffset(0, 0, 0, 0);
 GUI.skin.label.fontSize = (int)(ogfontsize * 1.3f);
 
-GUILayout.Label($"{Lang.Get("netpanel_title")} v{Plugin.FULL_MOD_VERSION}", GUILayout.Height(GUI.skin.label.fontSize * 1.75f));
+GUILayout.Label($"{Lang.Get("netpanel_title")} v{BuildInfo.NETWORK_VERSION}", GUILayout.Height(GUI.skin.label.fontSize * 1.75f));
 
 GUI.skin.label.fontSize = ogfontsize;
 GUI.skin.label.alignment = ogalign;
