@@ -744,6 +744,22 @@ static void _GUI_RenderServerBrowser(Rect r) {
             }
             GUILayout.EndHorizontal();
 
+            GUILayout.Space(12 * GetMenuUIScale());
+            GUI.skin.label.alignment = TextAnchor.MiddleLeft;
+            GUILayout.Label(Lang.Get("mmct_directconnecttitle"));
+            GUILayout.BeginHorizontal();
+            {
+                GUILayout.Label(Lang.Get("mmct_ipportfield"), GUILayout.Width(60 * GetMenuUIScale()));
+                UIMainMenu.USERINPUT_IPPORT = GUILayout.TextField(UIMainMenu.USERINPUT_IPPORT);
+            }
+            GUILayout.EndHorizontal();
+            {
+                var og_ipconnect_enabled = GUI.enabled;
+                GUI.enabled = og_ipconnect_enabled && !Multiplayer.IsNetworkActiveOrIsInGame();
+                if (GUILayout.Button(Lang.Get("mmct_startclient"))) UIMainMenu.ConnectClientViaIp();
+                GUI.enabled = og_ipconnect_enabled;
+            }
+
             GUILayout.FlexibleSpace();
         }
 

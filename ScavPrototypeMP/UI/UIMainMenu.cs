@@ -400,6 +400,9 @@ HostTransferUI.DrawLobbyAction();
 var should_do_buttons_usable = Util.IsInWorld() && !UIMainMenu.IsOpen();
 
 if (should_do_buttons_usable) {
+#if FULLGAME
+SaveCurrentLayerExit.DrawButton(30 * GetMenuUIScale());
+#endif
 if (GUILayout.Button(Lang.Get("netpanel_settings"))) {
 if (mainmenu_open && Util.IsInWorld()) {
 Util.OpenBrightnessPanel(true);
@@ -1401,21 +1404,6 @@ Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
 }
 }
 
-if (Util.IsInMainMenu()) {
-if (GUILayout.Button(Lang.Get("mmct_startclient"), GUILayout.Height(bigheight))) {
-Multiplayer.DoMultiplayerStatusMessageLog("Client Connect clicked!");
-// Connect first without a password. A password-protected server rejects
-// the empty intro; Net's disconnect handler then opens PasswordPromptUI,
-// which retries with the entered value.
-string savedPassword = Multiplayer.INPUT_PASSWORD;
-Multiplayer.INPUT_PASSWORD = "";
-TransportLiteNetLib.OnWantToConnect(USERINPUT_IPPORT, Net.NetType.Client);
-Multiplayer.INPUT_PASSWORD = savedPassword;
-
-Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
-}
-}
-
 } else if (multiplayer_method_menu == 1) {
 _GUI___DirectConnect_DoSteamConnectButtons(r2, fieldheight, fieldnameswidth, fieldswidth, bigheight);
 } else {
@@ -1495,6 +1483,20 @@ GUILayout.FlexibleSpace();
 
 public static string USERINPUT_IPPORT = Net.IP_LOCALHOST_IPv4 + ":" + Net.DEFAULT_PORT.ToString();
 public static string USERINPUT_NAME = "TEST_NAME";
+
+// Client-side direct IP connect. Lives in the server browser's right panel.
+internal static void ConnectClientViaIp() {
+if (!Util.IsInMainMenu() || Net.IsRunning) return;
+Multiplayer.DoMultiplayerStatusMessageLog("Client Connect clicked!");
+// Connect first without a password. A password-protected server rejects
+// the empty intro; Net's disconnect handler then opens PasswordPromptUI,
+// which retries with the entered value.
+string savedPassword = Multiplayer.INPUT_PASSWORD;
+Multiplayer.INPUT_PASSWORD = "";
+TransportLiteNetLib.OnWantToConnect(USERINPUT_IPPORT, Net.NetType.Client);
+Multiplayer.INPUT_PASSWORD = savedPassword;
+Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
+}
 
 
 
