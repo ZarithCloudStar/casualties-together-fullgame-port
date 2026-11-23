@@ -1,4 +1,4 @@
-﻿using CasualtiesTogetherUtils;
+using CasualtiesTogetherUtils;
 using DiscordRPC;
 using HarmonyLib;
 using KrokV5Optimization;
@@ -97,15 +97,8 @@ static class PreRunScript_SelectCharacter_MultiplayerPatch {
 
 
 
-[HarmonyPatch(typeof(ConsoleScript), nameof(ConsoleScript.CheckForCheats))]
-static class ConsoleScript_CheckForCheats_MultiplayerPatch {
-    static bool Prefix() {
-        if (!Net.IsRunning) return true;
-
-        return false;
-    }
-}
-
+// ConsoleScript_CheckForCheats is patched in Patches/PortCheatCommands.cs; the
+// older copy here duplicated the type and broke clean builds.
 
 
 
@@ -186,65 +179,6 @@ static class GuardSpawner_MultiplayerPatch {
 
 
 
-[HarmonyPatch]
-static class CargoDrillPod_MultiplayerPatch {
-
-    [HarmonyPrefix]
-    [HarmonyPatch(typeof(CargoDrillPod), nameof(CargoDrillPod.OnUse))]
-    static bool StartPrefix(CargoDrillPod __instance) {
-        if (!Net.IsRunning) return true;
-
-        var writer = Net.CreateWriter(NetmsgId.___19);
-        writer.Put(1);
-        writer.Put(AnyObjectNetId.GetNetIdFromGameObject(__instance.gameObject));
-        Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
-
-        return false;
-    }
-
-    [HarmonyPrefix]
-    [HarmonyPatch(typeof(CargoDrillPod), nameof(CargoDrillPod.Update))]
-    static bool UpdatePrefix(CargoDrillPod __instance) {
-        if (!Net.IsRunning) return true;
-
-        if (ScavPlayer.AllLivingPlayers.Any(x => x.body.hasCargo) && !__instance.didReady) {
-            __instance.GetComponent<UsableObject>().toggleString = Locale.GetOther("finaltravel");
-            __instance.bld.description = Locale.GetBuilding("highpowereddrillpoddsc2");
-            Utils.Create("Special/Tesla", __instance.transform);
-            __instance.didReady = true;
-        }
-
-        return false;
-    }
-
-
-    static void RealOnUse(Body b, CargoDrillPod drill) {
-        if (!drill.didReady) {
-            b.talker.Talk(Locale.GetCharacter("endpodexamine"));
-        } else if (!drill.started) {
-            drill.started = true;
-            WorldGeneration.world.StartCoroutine("RegenerateWorld", false);
-            Sound.Play("drillpoduse", Vector2.zero, twoDimensional: true, pitchShift: false, null, 1f, 1f, noReverb: true);
-        }
-    }
-
-
-    [ServerReceiver((byte)NetmsgId.___19)]
-    static void Server_aaaaaaaaaaaaaaaaaaa(knetid clientId, LiteNetLib.Utils.NetDataReader reader) {
-
-        reader.Get(out AnyObjectNetId aoni);
-
-        if (
-            ScavPlayer.TryGetPlayerAndBodyFromClientId(clientId, out var user, out var body)
-            && aoni.TryGetGameObject(out var go)
-        ) {
-            if (go.TryGetComponent(out CargoDrillPod drill)) {
-                RealOnUse(body, drill);
-            }
-        }
-    }
-
-}
 
 
 
