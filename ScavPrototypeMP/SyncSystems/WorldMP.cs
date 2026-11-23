@@ -590,6 +590,8 @@ public class WorldMP : CasualtiesTogetherSingleton {
         }
 #endif
 
+        if (Net.IsServer) TeamSpawns.BeginLayer();
+
         SharedMain.LastWorldgenFinishTime = Time.realtimeSinceStartupAsDouble;
         ServerMain._ded_server_switch_counter = -20;
 
@@ -631,24 +633,32 @@ public class WorldMP : CasualtiesTogetherSingleton {
             }
         }
 
+        bool vanillaPlacement = true;
 #if FULLGAME
         if (Net.IsServer && (ScavPlayer.LocalPlayer?.body == null || !ScavPlayer.LocalPlayer.body.alive)) {
             // A spectator camera can point at a guest. Never place that guest as
             // if it were the host, nor publish the host corpse's old-layer pose.
             // The server publishes a layer start independently below.
+            vanillaPlacement = false;
             yield return null;
         } else if (WorldSnapshotTransfer.SnapshotMode) {
             // Vanilla placement creates a fresh starting pod and carves terrain
             // and fluids. A checkpoint owns those cells/objects already.
+            vanillaPlacement = false;
             yield return null;
             if (PlayerCamera.main != null && PlayerCamera.main.body != null) PlayerCamera.main.body.PlaceBody();
         } else if (Net.IsServer && (PlayerCamera.main == null || PlayerCamera.main.body == null)) {
             // Dedicated servers can have no local body to run vanilla placement.
+            vanillaPlacement = false;
             yield return null;
         } else
 #endif
-        yield return WorldGeneration_WorldPlacePlayer_MultiplayerPatch.WorldPlacePlayer(world); 
+        yield return WorldGeneration_WorldPlacePlayer_MultiplayerPatch.WorldPlacePlayer(world);
         log.l("WorldGeneration.WorldPlacePlayer");
+
+#if !FULLGAME
+        if (Net.IsServer) TeamSpawns.TryPrepare(Body_PlaceBody_MultiplayerPatch.SpawnLocation, !vanillaPlacement);
+#endif
 
 #if FULLGAME
         if (Net.IsServer) {
@@ -663,6 +673,7 @@ public class WorldMP : CasualtiesTogetherSingleton {
                     for (int y = Math.Max(1, center.y - 16); y <= Math.Min(world.height - 2, center.y + 16); y++)
                         FluidManager.main.SetLiquid(x, y, 0);
             }
+            TeamSpawns.TryPrepare(Body_PlaceBody_MultiplayerPatch.SpawnLocation, !vanillaPlacement || neededSpawn);
         }
 #endif
     }

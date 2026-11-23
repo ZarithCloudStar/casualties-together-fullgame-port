@@ -621,7 +621,7 @@ NetBody pb;
 double spawnWaitStart = Time.realtimeSinceStartupAsDouble;
 var spawnSession = Net.ServerEntityManager;
 var spawnWorld = WorldGeneration.world;
-while (!ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out plr, out pb) || !Util.IsWorldGenerated() || !Body_PlaceBody_MultiplayerPatch.has_spawn_location
+while (!ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out plr, out pb) || !Util.IsWorldGenerated() || !Body_PlaceBody_MultiplayerPatch.has_spawn_location || TeamSpawns.WaitingForSites()
 #if FULLGAME
 || (Util.GameIsFull() && Util.IsTutorialWorld() && !SandboxMode.SpawnReady)
 #endif
@@ -682,6 +682,7 @@ plr.Server_TeleportCharacter(SandboxMode.SpawnLocation);
 log.l($"[sandbox] authoritative spawn player={plr.playerName} at={SandboxMode.SpawnLocation:F3}");
 } else if (!PlayerPlacementCheckpoint.TryApply(plr, true) &&
 !TryRestoreDisconnectPosition(plr, id) &&
+!TeamSpawns.TryTeleport(plr) &&
 !TrySpawnLateJoinOnCompanion(plr, pb)) {
 plr.Server_TeleportCharacter(Body_PlaceBody_MultiplayerPatch.SpawnLocation);
 log.l($"[spawn] shared authoritative layer={WorldGeneration.world.biomeDepth} player={id} at={Body_PlaceBody_MultiplayerPatch.SpawnLocation}");
@@ -821,6 +822,10 @@ return true;
 #endif
 
 public static void LateSpawnLocation(NetBody b) {
+if (TeamSpawns.TrySetBodyPosition(b)) {
+if (b != null && b.plr != null) PlayerCheckpoint.ReclaimGear(b.plr.playerId);
+return;
+}
 var pb = GetPlayerBodyHostOrAnyoneAlive(b.plr, b);
 var shouldSpawnOnPlayer = Multiplayer.rules.SpawnOnPlayer && pb != null && pb.body.alive;
 

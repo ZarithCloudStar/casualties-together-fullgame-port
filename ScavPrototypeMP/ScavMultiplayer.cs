@@ -183,6 +183,9 @@ public bool CharacterYapPublic = true; // broadcast whatever the character is fe
 
 
 public bool Teams = false;
+// no effect unless Teams is on. first layer of a new run only: one starting
+// pod per team, at the same height and separated by a fixed distance.
+public bool TeamSpawnPositions = false;
 public bool PVP = false;
 public bool PVPCombatDismember = true;
 public float PVPMoodDebuff = 0.5f;
@@ -1807,7 +1810,7 @@ MyPluginInfo.PLUGIN_GUID,
 "dannad.krmultiupdater",
 };
 
-l.RemoveAll(x => x.Metadata == null || toremove_guids.Contains(x.Metadata.GUID));
+l.RemoveAll(x => x.Metadata == null || toremove_guids.Contains(x.Metadata.GUID) || OtherMods.IsDisabled(x));
 return l;
 }
 

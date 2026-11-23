@@ -7,7 +7,8 @@
 		<ModVersion>5.5.4-cu-port-bugfix3</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Wire/protocol identity; intentionally separate from the package version. -->
-		<NetworkVersion>5.5.4-cu-port-fix3</NetworkVersion>
+		<!-- fix4: MultiplayerGameRules gained TeamSpawnPositions, so the memcpy rule blob changed. -->
+		<NetworkVersion>5.5.4-cu-port-fix4</NetworkVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
 		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.4-cu-port-bugfix3</UpdateReleaseVersion>
 
