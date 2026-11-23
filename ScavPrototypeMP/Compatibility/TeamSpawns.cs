@@ -6,7 +6,7 @@ using UnityEngine.Tilemaps;
 
 namespace Together;
 
-// Server-side first-layer team spawns, used by the "Spawn at Different
+// Server-side first-layer team spawns, used by the "Descend at Different
 // Positions by Team" rule. The rule only takes effect while Teams is on. The host's normal starting pod
 // stays where vanilla placed it and becomes the host team's pod; every other
 // team gets an identical carved pod room at the same height, Spacing apart.
