@@ -1768,8 +1768,75 @@ if (groups.Count == 0) {
     }
     _GUI____RenderRuleField_last_max_width = Mathf.Min(r2.width * 0.5f, _GUI____RenderRuleField_cur_max_width);
 }
+if (!searching) {
+    _GUI___RenderOtherModsSection();
+}
 GUILayout.EndScrollView();
 
+}
+
+static bool _GUI____OtherModsExpanded = false;
+
+// Local, client-side section: lists every other BepInEx plugin next to the
+// rules. The checkbox is the same square toggle the rules and "Hide IP" use.
+static void _GUI___RenderOtherModsSection() {
+    List<OtherMods.Entry> mods;
+    try {
+        mods = OtherMods.Snapshot();
+    } catch (Exception e) {
+        log.error("_GUI___RenderOtherModsSection snapshot: " + e);
+        mods = new List<OtherMods.Entry>();
+    }
+    bool open = _GUI____OtherModsExpanded;
+    string title = Lang.Get("rule_cat_othermods", true) ?? "Other Mods";
+    string header = string.Format("{0} {1} ({2})", open ? "[-]" : "[+]", title, mods.Count);
+    if (GUILayout.Button(header)) {
+        Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
+        _GUI____OtherModsExpanded = !open;
+    }
+    if (!open) return;
+
+    var ogwrap = GUI.skin.label.wordWrap;
+    var ogalign = GUI.skin.label.alignment;
+    var ogtogglefont = GUI.skin.toggle.fontSize;
+    GUI.skin.label.wordWrap = true;
+    GUI.skin.label.alignment = TextAnchor.UpperLeft;
+    GUI.skin.toggle.fontSize = GUI.skin.label.fontSize;
+    try {
+        string hint = Lang.Get("mmct_mods_hint", true) ?? "";
+        if (!string.IsNullOrEmpty(hint)) {
+            GUILayout.Label(hint);
+        }
+
+        if (mods.Count == 0) {
+            GUILayout.Label(Lang.Get("mmct_mods_none", true) ?? "No other mods detected.");
+            return;
+        }
+
+        foreach (var mod in mods) {
+            GUILayout.BeginHorizontal();
+            try {
+                bool enabled = GUILayout.Toggle(mod.Enabled, mod.DisplayName);
+                bool hover = UIBullshit.CheckCursorOverlap(GUIUtility.GUIToScreenRect(GUILayoutUtility.GetLastRect()));
+                if (hover) {
+                    string tip = (string.IsNullOrEmpty(mod.Guid) ? mod.RelativePath : mod.Guid) + "\n" + hint;
+                    UIBullshit._GUI_SetTooltip(mod.Guid, tip);
+                }
+                if (enabled != mod.Enabled) {
+                    Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
+                    OtherMods.SetEnabled(mod, enabled);
+                }
+                GUILayout.FlexibleSpace();
+            } catch (Exception e) {
+                log.error($"_GUI___RenderOtherModsSection: {mod?.Guid}\n{e}");
+            }
+            GUILayout.EndHorizontal();
+        }
+    } finally {
+        GUI.skin.label.wordWrap = ogwrap;
+        GUI.skin.label.alignment = ogalign;
+        GUI.skin.toggle.fontSize = ogtogglefont;
+    }
 }
 
 static string _GUI____RenderRuleField_search = "";

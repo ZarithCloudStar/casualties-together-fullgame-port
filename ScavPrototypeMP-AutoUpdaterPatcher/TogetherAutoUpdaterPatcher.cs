@@ -21,6 +21,70 @@ public static class TogetherAutoUpdaterPatcher {
     public static void Patch(AssemblyDefinition assembly) {
         try { Apply(); }
         catch (Exception ex) { WriteLog("FATAL " + ex); }
+        try { ApplyModToggles(); }
+        catch (Exception ex) { WriteLog("FATAL mod toggles: " + ex); }
+    }
+
+    // The plugin writes BepInEx/config/casualtiestogether_mod_toggles.txt when
+    // the user toggles another mod. Patchers run before Chainloader scans
+    // BepInEx/plugins, which is the only safe point to rename plugin DLLs.
+    static void ApplyModToggles() {
+        string configPath = Path.Combine(GameRoot, "BepInEx", "config", "casualtiestogether_mod_toggles.txt");
+        if (!File.Exists(configPath)) return;
+
+        string pluginsRoot = Path.GetFullPath(Path.Combine(GameRoot, "BepInEx", "plugins"))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        int applied = 0;
+        foreach (string raw in File.ReadAllLines(configPath)) {
+            string line = raw == null ? "" : raw.Trim();
+            if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+            string[] parts = line.Split('\t');
+            if (parts.Length < 3) continue;
+
+            bool enabled = parts[0].Trim() != "0";
+            string relative = parts[2].Trim();
+            if (relative.Length == 0) continue;
+
+            string full;
+            try {
+                full = Path.IsPathRooted(relative)
+                    ? Path.GetFullPath(relative)
+                    : Path.GetFullPath(Path.Combine(GameRoot, relative));
+            } catch (Exception ex) { WriteLog("toggle path invalid " + relative + ": " + ex.Message); continue; }
+
+            if (!full.StartsWith(pluginsRoot, StringComparison.OrdinalIgnoreCase)
+                || !full.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) {
+                WriteLog("toggle path outside plugins, skipped: " + full);
+                continue;
+            }
+
+            string disabled = full + ".disabled";
+            try {
+                if (enabled) {
+                    if (!File.Exists(disabled)) continue;
+                    if (File.Exists(full)) {
+                        File.Delete(disabled);
+                        WriteLog("re-enabled " + full + " (stale .disabled removed)");
+                    } else {
+                        File.Move(disabled, full);
+                        WriteLog("re-enabled " + full);
+                    }
+                } else {
+                    if (!File.Exists(full)) continue;
+                    if (File.Exists(disabled)) {
+                        File.Copy(full, disabled, true);
+                        File.Delete(full);
+                    } else {
+                        File.Move(full, disabled);
+                    }
+                    WriteLog("disabled " + full);
+                }
+                applied++;
+            } catch (Exception ex) {
+                WriteLog("toggle failed " + full + ": " + ex.Message);
+            }
+        }
+        if (applied > 0) WriteLog("Applied " + applied + " other-mod toggle(s).");
     }
 
     static void Apply() {

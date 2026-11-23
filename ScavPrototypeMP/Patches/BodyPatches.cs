@@ -372,12 +372,29 @@ public static bool ShouldKeepLayerXOffset() => !Util.GameIsFull() && Multiplayer
                 if (Util.GameIsFull() && (!body.alive || !IsValidLayerSpawn(body.transform.position))) return;
 #endif
                 has_spawn_location = true;
+                SpawnLocation = body.transform.position;
+                // Build the per-team sites before the first spawn packet goes out.
+                // Otherwise the fan-out below would let every client start at the
+                // host pod and only correct them afterwards.
+                TeamSpawns.TryPrepare(body.transform.position, false);
+                bool initialTeamFanOut = TeamSpawns.BeginInitialFanOut();
                 foreach (var item in NetBody.all_instances) {
                     if (item.IsPlayer && !item.IsBodyLocal()) {
 #if FULLGAME
                         if (Util.GameIsFull() && item.plr.ServerPlayerState.spawn_placement_completed) continue;
 #endif
                         item.plr.ResetEntropy();
+                        if (initialTeamFanOut && TeamSpawns.TryResolve(item.plr, out var teamSpawn)) {
+#if FULLGAME
+                            if (Util.GameIsFull()) {
+                                item.plr.Server_TeleportCharacter(teamSpawn);
+                                log.l($"[spawn] team player={item.plr.GetPersistentId()} layer={WorldGeneration.world.biomeDepth} at={teamSpawn}");
+                                continue;
+                            }
+#endif
+                            item.SetBodyPosition(teamSpawn);
+                            continue;
+                        }
 #if FULLGAME
                         if (Util.GameIsFull()) {
                             item.plr.Server_TeleportCharacter(body.transform.position);
