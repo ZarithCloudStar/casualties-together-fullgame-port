@@ -1255,7 +1255,7 @@ if (multiplayer_method_menu == 0) {
 
 GUILayout.BeginHorizontal(GUILayout.Height(fieldheight));// IP
 {
-GUILayout.Label(Lang.Get("mmct_ipportfield") + ":  ", GUILayout.Width(fieldnameswidth));
+GUILayout.Label(Lang.Get("mmct_ipportfield") + "：  ", GUILayout.Width(fieldnameswidth));
 
 GUI.skin.label.alignment = TextAnchor.UpperLeft;
 if (textfields_are_readonly) {
