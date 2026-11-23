@@ -950,6 +950,8 @@ GUILayout.EndHorizontal();
 static void _GUI___DirectConnect_DoSteamConnectButtons(Rect r2, float fieldheight, float fieldnameswidth, float fieldswidth, float bigheight) {
 
 GUILayout.FlexibleSpace();
+GUILayout.BeginVertical(GUILayout.Width(r2.width * 0.5f));
+{
 if (GUILayout.Button(Lang.Get("mmct_steam_createlobby"), GUILayout.Height(bigheight))) {
 
 var type = KSteam.NumToLobbyType(_STEAM_CHOSEN_LOBBYTYPE);
@@ -965,7 +967,7 @@ type
 
 Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
 }
-GUILayout.FlexibleSpace();
+GUILayout.Space(8 * GetMenuUIScale());
 if (GUILayout.Button(Lang.Get("mmct_steam_openfriendlist"), GUILayout.Height(bigheight))) {
 Multiplayer.DoMultiplayerStatusMessageLog("Open Friends list!");
 
@@ -974,6 +976,8 @@ SteamFriends.ActivateGameOverlay("friends");
 
 Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
 }
+}
+GUILayout.EndVertical();
 GUILayout.FlexibleSpace();
 
 }
@@ -1296,13 +1300,14 @@ _GUI___DirectConnect_DoSteamInfoo(r2, fieldheight, fieldnameswidth, fieldswidth)
 _GUI___DirectConnect_DoPasswordField(r2, fieldheight, fieldnameswidth, fieldswidth); // PASSWORD
 }
 
-GUILayout.Space(20 * GetMenuUIScale());
+GUILayout.Space((multiplayer_method_menu == 1 ? 8 : 20) * GetMenuUIScale());
 
 
 if (Net.IsRunning && Net.IsConnecting) {
 GUILayout.Label(Lang.Get("mmct_connecting"));
 } else {
-GUILayout.BeginHorizontal(GUILayout.Height(bigheight));
+var steamConnectButtons = !Net.IsRunning && !Util.IsInWorld() && multiplayer_method_menu == 1;
+GUILayout.BeginHorizontal(GUILayout.Height(steamConnectButtons ? bigheight * 2 + 8 * GetMenuUIScale() : bigheight));
 {
 if (Net.IsServer) {
 if (GUILayout.Button(Lang.Get("mmct_serveroptions"))) {
