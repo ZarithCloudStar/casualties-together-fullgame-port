@@ -1409,6 +1409,9 @@ GUILayout.Label("get tf outta my room im playin minecraft!!");
 }
 }
 GUILayout.EndHorizontal();
+#if FULLGAME
+LobbyReadyUI.DrawReadySummary();
+#endif
 
 {
 var ogwordwrap = GUI.skin.label.wordWrap;

@@ -52,7 +52,14 @@ internal static class LobbyReadyUI {
             CharacterReadyGate.RequestLoad();
         }
         GUI.enabled = previous;
+    }
 
+    // Keep the ready summary below the disconnect / invite row so it cannot
+    // push those actions down, and above the last-status message.
+    internal static void DrawReadySummary() {
+        if (!Util.GameIsFull() || !Net.IsServer || Net.IsDedicatedServer || Util.IsInWorld() || !Net.IsRunning) return;
+
+        GUILayout.Space(4 * UIMainMenu.GetMenuUIScale());
         int ready = CharacterLobby.ReadySummary(out int guests);
         if (guests > 0) {
             GUILayout.Label(string.Format(Text("lobby_ready_summary", "{0}/{1} players ready"), ready, guests));
