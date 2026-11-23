@@ -62,13 +62,13 @@ internal sealed class LobbyCharacterPanel : MonoBehaviour {
 
     internal static void DrawModMenuButton(float height) {
         if (!Util.GameIsFull()) return;
+        // Only meaningful inside a hosted/joined lobby: before creating or joining
+        // there is no character page to open, so do not draw a dead button.
+        if (!CharacterLobby.InLobby || !Net.IsConnected || (!Net.IsClient && !Net.IsServer)) return;
         bool previousEnabled = GUI.enabled;
-        bool canChoose = CharacterLobby.InLobby && Net.IsConnected && (Net.IsClient || Net.IsServer);
-        GUI.enabled = previousEnabled && canChoose;
         try {
             string text = CharacterSelection.Text("character_open_button", "Choose character");
-            string tooltip = canChoose ? "" : CharacterSelection.Text("character_need_connection", "Connect to a server first.");
-            if (GUILayout.Button(new GUIContent(text, tooltip), GUILayout.Height(height))) {
+            if (GUILayout.Button(new GUIContent(text), GUILayout.Height(height))) {
                 CharacterSelection.DeferUiAction("mod menu reopen", () => {
                     if (CharacterLobby.ReopenPanel()) {
                         // The IMGUI menu is also hidden outside its click event,
