@@ -1197,7 +1197,6 @@ var fieldnameswidth = r2.width * 0.27f;
 var fieldswidth = r2.width * 0.36f;
 var bigheight = 50 * GetMenuUIScale();
 var fieldheight = 30 * GetMenuUIScale();
-var ipportfieldwidth = r2.width * 0.45f;
 
 
 var multiplayer_method_menu = 0;
@@ -1255,20 +1254,23 @@ if (multiplayer_method_menu == 0) {
 
 GUILayout.BeginHorizontal(GUILayout.Height(fieldheight));// IP
 {
-GUILayout.Label(Lang.Get("mmct_ipportfield") + "：  ", GUILayout.Width(fieldnameswidth));
+GUILayout.Label(Lang.Get("mmct_ipportfield") + "：", GUILayout.ExpandWidth(false));
+GUILayout.Space(4 * GetMenuUIScale());
 
 GUI.skin.label.alignment = TextAnchor.UpperLeft;
 if (textfields_are_readonly) {
 if (_HIDE_IPPORT) {
-GUILayout.Label(new string('*', USERINPUT_IPPORT.Length), GUILayout.Width(ipportfieldwidth));
+GUILayout.Label(new string('*', USERINPUT_IPPORT.Length), GUILayout.ExpandWidth(true));
 } else {
-GUILayout.Label(USERINPUT_IPPORT, GUILayout.Width(ipportfieldwidth));
+GUILayout.Label(USERINPUT_IPPORT, GUILayout.ExpandWidth(true));
 }
 } else {
+var ipTextStyle = new GUIStyle(GUI.skin.textField);
+ipTextStyle.padding = new RectOffset(8, 8, 2, 2);
 if (_HIDE_IPPORT) {
-USERINPUT_IPPORT = GUILayout.PasswordField(USERINPUT_IPPORT, '*', GUILayout.Width(ipportfieldwidth));
+USERINPUT_IPPORT = GUILayout.PasswordField(USERINPUT_IPPORT, '*', ipTextStyle, GUILayout.ExpandWidth(true));
 } else {
-USERINPUT_IPPORT = GUILayout.TextField(USERINPUT_IPPORT, GUILayout.Width(ipportfieldwidth));
+USERINPUT_IPPORT = GUILayout.TextField(USERINPUT_IPPORT, ipTextStyle, GUILayout.ExpandWidth(true));
 }
 }
 GUI.skin.label.alignment = TextAnchor.UpperLeft;
