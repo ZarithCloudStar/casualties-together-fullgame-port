@@ -1477,7 +1477,9 @@ if (String.IsNullOrEmpty(text)) {
 text = "";
 }
 
-var nwww = GUILayout.TextField(text, Multiplayer.MAX_NAME_LENGTH, GUILayout.Width(fieldswidth));
+var nameTextStyle = new GUIStyle(GUI.skin.textField);
+nameTextStyle.padding = new RectOffset(8, 8, 2, 2);
+var nwww = GUILayout.TextField(text, Multiplayer.MAX_NAME_LENGTH, nameTextStyle, GUILayout.Width(fieldswidth));
 if (nwww != USERINPUT_NAME) {
 Multiplayer.ExplicitSessionName = true;
 }
