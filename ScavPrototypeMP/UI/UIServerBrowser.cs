@@ -748,6 +748,12 @@ static void _GUI_RenderServerBrowser(Rect r) {
 
             GUILayout.Space(14 * GetMenuUIScale());
             GUI.skin.label.alignment = TextAnchor.MiddleLeft;
+            if (GUILayout.Button(Lang.Get("mmct_steam_openfriendlist"))) {
+                Multiplayer.DoMultiplayerStatusMessageLog("Open Friends list!");
+                SteamFriends.ActivateGameOverlay("friends");
+                Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
+            }
+            GUILayout.Space(10 * GetMenuUIScale());
             GUILayout.Label(Lang.Get("mmct_directconnecttitle"));
             GUILayout.Space(6 * GetMenuUIScale());
             GUILayout.BeginHorizontal();

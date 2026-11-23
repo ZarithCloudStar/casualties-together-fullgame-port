@@ -401,7 +401,7 @@ var should_do_buttons_usable = Util.IsInWorld() && !UIMainMenu.IsOpen();
 
 if (should_do_buttons_usable) {
 #if FULLGAME
-SaveCurrentLayerExit.DrawButton(30 * GetMenuUIScale());
+SaveCurrentLayerExit.DrawButton(0f);
 #endif
 if (GUILayout.Button(Lang.Get("netpanel_settings"))) {
 if (mainmenu_open && Util.IsInWorld()) {
@@ -949,8 +949,6 @@ GUILayout.EndHorizontal();
 
 static void _GUI___DirectConnect_DoSteamConnectButtons(Rect r2, float fieldheight, float fieldnameswidth, float fieldswidth, float bigheight) {
 
-GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
-{
 if (GUILayout.Button(Lang.Get("mmct_steam_createlobby"), GUILayout.Height(bigheight))) {
 
 var type = KSteam.NumToLobbyType(_STEAM_CHOSEN_LOBBYTYPE);
@@ -966,17 +964,6 @@ type
 
 Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
 }
-GUILayout.Space(8 * GetMenuUIScale());
-if (GUILayout.Button(Lang.Get("mmct_steam_openfriendlist"), GUILayout.Height(bigheight))) {
-Multiplayer.DoMultiplayerStatusMessageLog("Open Friends list!");
-
-// https://partner.steamgames.com/doc/api/ISteamFriends
-SteamFriends.ActivateGameOverlay("friends");
-
-Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
-}
-}
-GUILayout.EndVertical();
 
 }
 
@@ -1350,8 +1337,7 @@ SandboxMode.DrawButton(bigheight);
 GUILayout.Space(8 * GetMenuUIScale());
 }
 #endif
-var steamConnectButtons = !Net.IsRunning && !Util.IsInWorld() && multiplayer_method_menu == 1;
-GUILayout.BeginHorizontal(GUILayout.Height(steamConnectButtons ? bigheight * 2 + 8 * GetMenuUIScale() : bigheight));
+GUILayout.BeginHorizontal(GUILayout.Height(bigheight));
 {
 if (Net.IsRunning) {
 
