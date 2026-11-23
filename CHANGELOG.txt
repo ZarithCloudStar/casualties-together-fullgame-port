@@ -19,6 +19,8 @@ KNOWN ISSUES:
 	创建/加入房间前隐藏“切换角色”
 - 左侧悬浮窗
 	“设置”上方新增“保存并退出（当前层）”，按钮使用自然高度
+- 同步主线
+	移除 FullgamePatches.cs 中重复的 CheckForCheats 补丁和旧钻探舱类
 
 
  --- 5.2.0 --- 29.10.2026 --- V5 Extra optimization --- 
