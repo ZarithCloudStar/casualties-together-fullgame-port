@@ -671,7 +671,7 @@ static void _GUI_RenderServerBrowser(Rect r) {
         }
         GUILayout.EndVertical();
 
-        GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(190 * GetMenuUIScale()));
+        GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(220 * GetMenuUIScale()));
         {
 
             GUILayout.BeginHorizontal();
@@ -744,21 +744,25 @@ static void _GUI_RenderServerBrowser(Rect r) {
             }
             GUILayout.EndHorizontal();
 
-            GUILayout.Space(12 * GetMenuUIScale());
+            GUILayout.Space(14 * GetMenuUIScale());
             GUI.skin.label.alignment = TextAnchor.MiddleLeft;
             GUILayout.Label(Lang.Get("mmct_directconnecttitle"));
+            GUILayout.Space(6 * GetMenuUIScale());
             GUILayout.BeginHorizontal();
             {
-                GUILayout.Label(Lang.Get("mmct_ipportfield"), GUILayout.Width(60 * GetMenuUIScale()));
-                UIMainMenu.USERINPUT_IPPORT = GUILayout.TextField(UIMainMenu.USERINPUT_IPPORT);
+                GUILayout.Label(Lang.Get("mmct_ipportfield") + "：", GUILayout.ExpandWidth(false));
+                GUILayout.Space(4 * GetMenuUIScale());
+                UIMainMenu.USERINPUT_IPPORT = GUILayout.TextField(UIMainMenu.USERINPUT_IPPORT, GUILayout.MinWidth(80 * GetMenuUIScale()));
             }
             GUILayout.EndHorizontal();
+            GUILayout.Space(6 * GetMenuUIScale());
             {
                 var og_ipconnect_enabled = GUI.enabled;
                 GUI.enabled = og_ipconnect_enabled && !Multiplayer.IsNetworkActiveOrIsInGame();
                 if (GUILayout.Button(Lang.Get("mmct_startclient"))) UIMainMenu.ConnectClientViaIp();
                 GUI.enabled = og_ipconnect_enabled;
             }
+            GUILayout.Space(8 * GetMenuUIScale());
 
             GUILayout.FlexibleSpace();
         }
