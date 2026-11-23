@@ -22,16 +22,15 @@ internal static class StockCharacterSelectUI {
     static TextMeshProUGUI chipChippedLabel, chipUnchippedLabel;
     static Button startButton, backButton;
     static Button.ButtonClickedEvent stockBack;
+    static TextMeshProUGUI[] startLabels;
+    static string[] startOriginalTexts;
     static TextMeshProUGUI waitingLabel;
     static PreRunScript observedMenu;
     static Transform observedPage;
 
     internal static bool IsVisible => Net.IsRunning && observedPage != null && observedPage.gameObject.activeInHierarchy;
 
-    static string ClientReadyText => CharacterLobby.LocalChosen
-        ? CharacterSelection.Text("character_stock_ready_done", "Ready")
-        : CharacterSelection.Text("character_stock_ready", "Ready");
-    static string HostReadyText => CharacterSelection.Text("character_stock_start", "Ready up");
+    static string ConfirmText => CharacterSelection.Text("character_confirm", "Confirm");
 
     internal static void Tick() {
         if (!Util.GameIsFull()) return;
@@ -41,13 +40,12 @@ internal static class StockCharacterSelectUI {
             observedPage = FindCharSelect(menu);
         }
         if (!Net.IsRunning) { Hide(); return; }
-        if (Net.IsClient) TickClient();
-        else TickHost();
+        TickLobby();
     }
 
-    static void TickClient() {
+    static void TickLobby() {
         if (!Util.IsInMainMenu() || Util.IsInWorld() || !CharacterLobby.ShouldShowPanel) {
-            Hide();
+            if (shown) Hide();
             return;
         }
         PreRunScript p = PreRunScript.instance;
@@ -55,28 +53,17 @@ internal static class StockCharacterSelectUI {
         if (!shown) Show(p);
         if (!shown) return;
         if (Input.GetKeyDown(KeyCode.Escape)) {
-            CharacterLobby.DismissPanel();
-            Hide();
+            DismissAndReturnToRoom();
             return;
         }
         RefreshPreview(p);
         UpdateChips();
-        SetStartText(ClientReadyText);
-    }
-
-    static void TickHost() {
-        if (!Util.IsInMainMenu() || Util.IsInWorld()) return;
-        PreRunScript p = PreRunScript.instance;
-        if (p == null) return;
-        Transform root = observedPage;
-        if (root == null || !root.gameObject.activeInHierarchy) return;
-        charSelect = root;
-        SetStartText(HostReadyText);
-        UpdateWaitingLabel(p);
+        SetStartText(ConfirmText);
+        if (Net.IsServer) UpdateWaitingLabel(p);
     }
 
     internal static void Show() {
-        if (!Util.GameIsFull() || !Net.IsClient || !CharacterLobby.ShouldShowPanel) return;
+        if (!Util.GameIsFull() || !CharacterLobby.ShouldShowPanel) return;
         PreRunScript p = PreRunScript.instance;
         if (p != null) Show(p);
     }
@@ -98,15 +85,17 @@ internal static class StockCharacterSelectUI {
         if (bottom != null) bottom.gameObject.SetActive(true);
 
         HookButtons(root);
+        CaptureStartText();
         BuildChips(root);
         shown = true;
         RefreshPreview(p, true);
-        SetStartText(ClientReadyText);
+        SetStartText(ConfirmText);
         UpdateChips();
     }
 
     internal static void Hide() {
         if (!shown) return;
+        RestoreStartText();
         if (chipBar != null) {
             Object.Destroy(chipBar);
             chipBar = null;
@@ -134,7 +123,15 @@ internal static class StockCharacterSelectUI {
         if (backButton == null) return;
         stockBack = backButton.onClick;
         backButton.onClick = new Button.ButtonClickedEvent();
-        backButton.onClick.AddListener(CharacterLobby.DismissPanel);
+        backButton.onClick.AddListener(DismissAndReturnToRoom);
+    }
+
+    // Back/ESC from the character page returns to the room menu, not the
+    // vanilla main menu.
+    static void DismissAndReturnToRoom() {
+        CharacterLobby.DismissPanel();
+        Hide();
+        LobbyNavigation.ReturnToRoom();
     }
 
     static void RefreshPreview(PreRunScript p, bool force = false) {
@@ -145,7 +142,7 @@ internal static class StockCharacterSelectUI {
     }
 
     static void UpdateWaitingLabel(PreRunScript p) {
-        int waiting = CharacterReadyGate.WaitingCount;
+        int waiting = CharacterReadyGate.WaitingCount + CharacterReadyGate.LobbyMissing;
         if (waitingLabel == null && waiting > 0) {
             var go = new GameObject("CT_CharacterWaiting", typeof(RectTransform), typeof(TextMeshProUGUI));
             var rect = (RectTransform)go.transform;
@@ -161,7 +158,10 @@ internal static class StockCharacterSelectUI {
         }
         if (waitingLabel == null) return;
         waitingLabel.gameObject.SetActive(waiting > 0);
-        if (waiting > 0) waitingLabel.text = CharacterReadyGate.WaitingText(waiting);
+        if (waiting > 0) {
+            int missing = CharacterReadyGate.LobbyMissing;
+            waitingLabel.text = missing > 0 ? CharacterReadyGate.ReadyText(missing) : CharacterReadyGate.WaitingText(waiting);
+        }
     }
 
     static void BuildChips(Transform root) {
@@ -170,6 +170,7 @@ internal static class StockCharacterSelectUI {
         chipBar.transform.SetParent(root, false);
         chipChipped = MakeChip(chipBar.transform, false, out chipChippedLabel);
         chipUnchipped = MakeChip(chipBar.transform, true, out chipUnchippedLabel);
+        chipBar.SetActive(ChipState.IndividualChipChoiceAllowed);
         Canvas.ForceUpdateCanvases();
         FitChipRow();
     }
@@ -209,6 +210,7 @@ internal static class StockCharacterSelectUI {
     }
 
     static void UpdateChips() {
+        if (chipBar != null) chipBar.SetActive(ChipState.IndividualChipChoiceAllowed);
         if (chipChipped == null || chipUnchipped == null) return;
         FitChipRow();
         bool unchipped = CharacterLobby.DraftUnchipped;
@@ -229,6 +231,30 @@ internal static class StockCharacterSelectUI {
             labels[i].text = text;
             labels[i].raycastTarget = false;
         }
+    }
+
+    // The single-player flow uses the same stock page and must keep its
+    // "开始冒险"/Start label. Remember the prefab's text before the lobby
+    // page changes it and put it back when the lobby page closes.
+    static void CaptureStartText() {
+        RestoreStartText();
+        if (startButton == null) return;
+        startLabels = startButton.GetComponentsInChildren<TextMeshProUGUI>(true);
+        startOriginalTexts = new string[startLabels.Length];
+        for (int i = 0; i < startLabels.Length; i++) {
+            startOriginalTexts[i] = startLabels[i] != null ? startLabels[i].text : null;
+        }
+    }
+
+    static void RestoreStartText() {
+        if (startLabels != null && startOriginalTexts != null) {
+            int count = Mathf.Min(startLabels.Length, startOriginalTexts.Length);
+            for (int i = 0; i < count; i++) {
+                if (startLabels[i] != null && startOriginalTexts[i] != null) startLabels[i].text = startOriginalTexts[i];
+            }
+        }
+        startLabels = null;
+        startOriginalTexts = null;
     }
 
     static void HideRunRuleSiblings(PreRunScript p) {
@@ -290,13 +316,17 @@ internal static class StockCharacterSelectUI {
     }
 }
 
-// The stock Start button becomes Ready for clients. StartRun is stopped here so
-// a lobby client can never start the host's world by pressing it.
+// While the lobby's character page is open, the stock Start button confirms
+// the pick instead of starting the run. This applies to the host too, so the
+// actual start always goes through the room's gated Start adventure button.
 [HarmonyPatch(typeof(PreRunScript), nameof(PreRunScript.StartRun))]
 internal static class PreRunScript_StartRun_StockCharacterSelectPatch {
-    [HarmonyPriority(Priority.First)]
+    // Run before the lobby gate so confirming the page is never reported as an
+    // attempted (blocked) start.
+    [HarmonyPriority(900)]
     static bool Prefix() {
-        if (!Util.GameIsFull() || !Net.IsClient || !CharacterLobby.ShouldShowPanel) return true;
+        if (!Util.GameIsFull() || !CharacterLobby.ShouldShowPanel) return true;
+        CharacterLobby.NoteStartClick();
         CharacterLobby.ConfirmPanel();
         return false;
     }

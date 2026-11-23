@@ -2164,10 +2164,13 @@ Plugin.log.LogInfo("Run settings: " + WorldMP.CompileRunSettings());
 if (Net.IsDedicatedServer) {
 UIInGame.StartSpectatorMode();
 } else {
-// and add the player body tracker to local body!
+// NetBody is MP-only. Adding it in single-player would let the shared
+// temperature/sleep/name-tag paths run without a session.
+if (Net.IsRunning) {
 var pb = PlayerCamera.main.body.GetOrAddComponent<NetBody>();
 
 pb.BackupLocalPlayerInit();
+}
 
 UIMainMenu.SetOpen(false);
 }

@@ -1246,6 +1246,7 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
 
         try {
             if (peer == CLIENT_PEER) {
+                bool wrongPassword = false;
                 try {
                     string rejection = "";
                     // Use a separate reader: leave AdditionalData intact for the existing UI path.
@@ -1259,8 +1260,13 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
                     string reason = disconnectInfo.Reason + " socket=" + disconnectInfo.SocketErrorCode;
                     SessionLog.Event("DIRECT DISCONNECTED", reason + " detail=" + rejection);
                     SessionJoinLog.Failure(reason, rejection, disconnectInfo.Reason == DisconnectReason.ConnectionRejected);
+                    wrongPassword = !string.IsNullOrEmpty(rejection)
+                        && rejection.IndexOf("wrong password", StringComparison.OrdinalIgnoreCase) >= 0;
                 } catch { }
                 Multiplayer.ShutdownNetwork(); // to go back to main menu and shutdown
+#if FULLGAME
+                if (wrongPassword) PasswordPromptUI.OpenForIp(UIMainMenu.USERINPUT_IPPORT);
+#endif
 
                 if (disconnectInfo.Reason == DisconnectReason.UnknownHost) {
                     Multiplayer.DoMultiplayerStatusMessageLog("Unknown Host");

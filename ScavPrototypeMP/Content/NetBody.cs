@@ -1525,6 +1525,7 @@ last_alive = body.alive;
 
 
 void UpdateBodySleepShare() {
+if (!Net.IsRunning) return;
 // energy now trends via median sleepCycleSpeed mult; only track nearby sleepers for later sleep-quality hooks
 NearBodiesDistanceIs5 = false;
 if (Multiplayer.rules.DisableSleep || !body.alive || !body.sleeping || NearBodies.Count == 0) {
@@ -1538,9 +1539,10 @@ return;
 }
 }
 void UpdateBodyTempShare() {
+if (!Net.IsRunning) return;
 if (!body.alive) return;
 // temperature is medical / host-authoritative
-if (Net.IsRunning && !Net.IsServer) return;
+if (!Net.IsServer) return;
 
 const float body_temperature_share_speed = 0.12f * 0.1f;
 

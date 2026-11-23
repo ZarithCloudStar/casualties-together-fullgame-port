@@ -68,6 +68,22 @@ internal sealed class HostTransferUI : CasualtiesTogetherSingleton {
         instance.view = View.Offer; instance.error = null; instance.Render();
     }
 
+    // The leave-room flow starts a LobbyOnlyAuto transfer without a player
+    // picker. Show the existing progress view so the host knows to wait for
+    // the handoff before the scene reload.
+    internal static void OpenAutoProgress() {
+        if (instance == null) return;
+        instance.atExit = false;
+        instance.error = null;
+        instance.view = View.Progress;
+        instance.Render();
+    }
+
+    internal static void CloseForLeave() {
+        if (instance == null) return;
+        instance.Close();
+    }
+
     internal static void NotifyComplete(string message) {
         if (instance == null) return;
 #if FULLGAME

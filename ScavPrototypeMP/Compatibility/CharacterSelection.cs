@@ -137,6 +137,9 @@ internal static class CharacterSelection {
 
     static bool ApplyChoice(int chr, bool chosen, bool persist) {
         if (!Util.GameIsFull()) return false;
+        // Single-player keeps the vanilla stock-page selection; the mod's
+        // character/chip rows are multiplayer-only.
+        if (!Net.IsRunning) return true;
         if (chr < 0 || chr > 2) {
             log.warn($"CHARACTER: rejected local choice chr={chr}; expected 0..2");
             Multiplayer.DoMultiplayerStatusMessageLog(Text("character_invalid", "Choose character 0, 1 or 2."));
@@ -155,8 +158,11 @@ internal static class CharacterSelection {
 
         // Once a body exists the character is locked: the server cannot rebuild a
         // live body, and a client-only swap desyncs the appearance between peers.
+        // A body reference can survive the world scene on a client. Only an
+        // active world actually locks the choice; otherwise the room's switch
+        // button would stay dead after the first run.
         var bodyOwner = ScavPlayer.LocalPlayer;
-        if (chosen && bodyOwner != null && bodyOwner.body != null && Local != (byte)chr) {
+        if (chosen && Util.IsInWorld() && bodyOwner != null && bodyOwner.body != null && Local != (byte)chr) {
             log.warn($"CHARACTER: refused changing chr={chr}; the local player is already in the world as chr={Local}.");
             Multiplayer.DoMultiplayerStatusMessageLog(Text("character_locked_in_game", "You cannot change your character after entering the world."));
             return false;
@@ -192,7 +198,7 @@ internal static class CharacterSelection {
                 writer.Put(PendingCharacterAdmission.RequestedTimeoutSeconds.Value);
             Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
             log.l($"CHARACTER: sent choice chr={chr}");
-            CharacterLobby.OnLocalChoiceSent(chosen);
+            CharacterLobby.OnLocalChoiceSent(chosen, persist);
             var local = ScavPlayer.LocalPlayer;
             bool hasBody = local != null && local.body != null;
             if (persist) RunUiAction("choice status", () => Multiplayer.DoMultiplayerStatusMessageLog(hasBody
@@ -263,6 +269,21 @@ internal static class CharacterSelection {
         return true;
     }
 
+    [ServerReceiver((byte)NetmsgId.SERVER_SetLobbyReady)]
+    static void ReceiveSetLobbyReady(knetid caller, NetDataReader reader) {
+        if (!Util.GameIsFull() || !Net.IsServer) return;
+        if (reader.AvailableBytes != 1) {
+            log.warn($"CHARACTER: rejected malformed SetLobbyReady from player={caller}; bytes={reader.AvailableBytes}");
+            return;
+        }
+        byte value = reader.GetByte();
+        if (value > 1) {
+            log.warn($"CHARACTER: rejected invalid lobby ready byte from player={caller}: {value}");
+            return;
+        }
+        CharacterLobby.ServerSetReady(caller, value == 1);
+    }
+
     [ServerReceiver((byte)NetmsgId.SERVER_SetCharacter)]
     static void ReceiveSetCharacter(knetid caller, NetDataReader reader) {
         if (!Util.GameIsFull() || !Net.IsServer) return;
@@ -321,6 +342,9 @@ internal static class PlayerCamera_SpawnCharacter_CommandLinePatch {
     static MethodBase TargetMethod() => AccessTools.Method(typeof(PlayerCamera), "SpawnCharacter", new[] { typeof(int) });
 
     static void Prefix(ref int chr) {
+        // Single-player must keep the vanilla pre-run selection / loaded save
+        // character; the lobby's remembered choice is MP-only.
+        if (!Net.IsRunning) return;
         chr = CharacterSelection.Local;
         PreRunScript.characterSelected = chr;
     }
@@ -329,7 +353,12 @@ internal static class PlayerCamera_SpawnCharacter_CommandLinePatch {
 [HarmonyPatch(typeof(PreRunScript), "Awake")]
 internal static class PreRunScript_Awake_RememberCharacterPatch {
     static bool Prepare() => Util.GameIsFull();
-    static void Postfix() => CharacterSelection.RestoreRememberedChoice();
+    static void Postfix() {
+        // The lobby's remembered character is MP-only; single-player keeps the
+        // vanilla pre-run selection / loaded save character.
+        if (!Net.IsRunning) return;
+        CharacterSelection.RestoreRememberedChoice();
+    }
 }
 
 [HarmonyPatch(typeof(PreRunScript), "SelectCharacter", new[] { typeof(int) })]
@@ -339,9 +368,11 @@ internal static class PreRunScript_SelectCharacter_RememberPatch {
         if (CharacterSelection.CommandLineOverride.HasValue) chr = CharacterSelection.Local;
     }
     static void Postfix(int chr) {
-        if (Net.IsClient && CharacterLobby.ShouldShowPanel) {
+        if (CharacterLobby.ShouldShowPanel) {
             CharacterLobby.Preview(chr);
-            if (CharacterLobby.LocalChosen) CharacterLobby.CommitDraft();
+            // A client that already confirmed keeps later changes in sync; the
+            // host waits for the page's Confirm/Start button.
+            if (Net.IsClient && CharacterLobby.LocalChosen) CharacterLobby.CommitDraft();
             return;
         }
         CharacterSelection.Choose(chr);

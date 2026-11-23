@@ -568,6 +568,18 @@ public bool hasCargo {
 get => pb2[0];
 set => pb2[0] = value;
 }
+// Reuse spare pb2 bits: 1-2 overdose index (0-3), 3 hard-stimulant moodle.
+public byte overdoseIndex {
+get => (byte)((pb2[1] ? 1 : 0) | (pb2[2] ? 2 : 0));
+set {
+pb2[1] = (value & 1) != 0;
+pb2[2] = (value & 2) != 0;
+}
+}
+public bool onHardStimulants {
+get => pb2[3];
+set => pb2[3] = value;
+}
 public float venomFake;
 public float barotrauma;
 #endif
@@ -616,6 +628,10 @@ maxSpeed = body.maxSpeed;
 moveForce = body.moveForce;
 jumpSpeed = body.jumpSpeed;
 caffeinated = body.caffeinated;
+#if FULLGAME
+overdoseIndex = (byte)Mathf.Clamp(body.overdoseIndex, 0, 3);
+onHardStimulants = body.onHardStimulants;
+#endif
 
 bloodVolume = body.bloodVolume;
 bloodOxygen = body.bloodOxygen;
@@ -827,6 +843,10 @@ component.opiateTolerance = 0f;
 }
 
 body.stimulantMultiplier = stimulantMultiplier;
+#if FULLGAME
+body.overdoseIndex = overdoseIndex;
+body.onHardStimulants = onHardStimulants;
+#endif
 #if FULLGAME
 // rising edge: show cargo + ragdoll locally without re-running EmbedCargo damage/SFX
 // (host already applied full effects; BlueHeart cutscene must not double-impale)

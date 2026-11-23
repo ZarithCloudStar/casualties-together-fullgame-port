@@ -31,6 +31,10 @@ static class Program {
         File.WriteAllText(Path.Combine(dir, "character_choices.txt"), "seed=" + content);
         File.WriteAllText(Path.Combine(dir, "world_tiles.bin"), "地形 " + content);
     }
+    static void WriteSp(string dir, string content) {
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "save.sv"), content);
+    }
     static string Hash(string dir) => string.Join(";", Directory.GetFiles(dir, "*", SearchOption.AllDirectories).OrderBy(x => x)
         .Select(x => Path.GetRelativePath(dir, x) + ":" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(x)))));
     static void Main(string[] args) {
@@ -44,6 +48,18 @@ static class Program {
             store.Publish(i, Meta("槽位 " + i), null, d => Write(d, "内容 " + copy));
         }
         for (int i = 1; i <= 5; i++) Check(File.ReadAllText(Path.Combine(store.Data(i), "save.sv")) == "内容 " + i, "five-slot isolation " + i);
+        // SP slots contain only save.sv and must not require mp_rules.json.
+        var spStore = new SaveSlotStore(Path.Combine(root, "sp"), requireRules: false);
+        for (int i = 1; i <= 5; i++) {
+            int copy = i;
+            spStore.Publish(i, Meta("单人 " + i), null, d => WriteSp(d, "单机 " + copy));
+        }
+        for (int i = 1; i <= 5; i++) Check(File.ReadAllText(Path.Combine(spStore.Data(i), "save.sv")) == "单机 " + i, "singleplayer slot isolation " + i);
+        Throws(() => spStore.Publish(1, Meta("缺 save"), null, d => { }), "singleplayer missing save.sv rejected");
+        var strictStore = new SaveSlotStore(Path.Combine(root, "strict"));
+        Throws(() => strictStore.Publish(1, Meta("缺 rules"), null, d => WriteSp(d, "仅 save")), "multiplayer rules still required");
+        Check(strictStore.Read(1) == null, "failed strict publish leaves the slot empty");
+        Check(File.ReadAllText(Path.Combine(spStore.Data(3), "save.sv")) == "单机 3", "singleplayer store unaffected by strict failure");
         string slot2 = Hash(store.Data(2)), slot1 = Hash(store.Data(1));
         string head1 = store.Read(1).generation;
         store.Publish(1, Meta("重命名"), store.Data(1), d => Write(d, "新内容"));

@@ -46,8 +46,30 @@ internal static class MultiUserSetup {
         SetSkills(guest.body, "guest");
         FillBackpacks(guest.body);
         FillBelt(guest.body);
+        if (Environment.GetEnvironmentVariable("CT_PROSTHETIC_TEST") == "1") SetupProsthetic(guest.body);
         Log($"skills=30/30/30 guest={guest.playerName} containers={guest.body.GetComponentsInChildren<Container>(true).Length}");
         stage = 99;
+    }
+
+    static void SetupProsthetic(Body body) {
+        var limb = body.limbs.FirstOrDefault(l => l != null && l.isLegLimb && !l.dismembered
+            && !l.name.ToLowerInvariant().Contains("torso"));
+        if (limb == null) limb = body.limbs.FirstOrDefault(l => l != null && l.isLegLimb && !l.dismembered);
+        if (limb == null) { Log("prosthetic test: no leg limb"); return; }
+        if (!limb.prostheticInfo.hasProsthetic)
+            limb.AttachProsthetic(Item.PegLimbInfo(), true);
+        limb.Dislocate();
+        limb.dislocationTimer = 100f;
+        var wrench = Make("wrench", null, body);
+        if (wrench != null) {
+            for (int slot = 0; slot < body.slots.Length; slot++) {
+                if (body.HoldingItem(slot)) continue;
+                body.PickUpItem(wrench, slot, true);
+                break;
+            }
+        }
+        MedicalSync.Server_SendCharacterHealth(limb.GetNetBody(), true);
+        Log($"prosthetic test: limb={limb.name} prosthetic={limb.prostheticInfo.hasProsthetic} dislocated={limb.dislocated} timer={limb.dislocationTimer} wrench={wrench != null}");
     }
 
     static void SetSkills(Body body, string who) {

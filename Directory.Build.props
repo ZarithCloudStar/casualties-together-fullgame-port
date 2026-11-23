@@ -3,15 +3,17 @@
   
 	<PropertyGroup>
 
-		<!-- Use a distinct identity while the 5.5.4 protocol sync is being validated. -->
-		<ModVersion>5.5.4-cu-port-bugfix2</ModVersion>
+		<!-- Single-player / multiplayer split, separate save pages, room leave flow. -->
+		<ModVersion>5.5.4-cu-port-bugfix3</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Wire/protocol identity; intentionally separate from the package version. -->
-		<NetworkVersion>5.5.4-cu-port-fix2</NetworkVersion>
+		<NetworkVersion>5.5.4-cu-port-fix3</NetworkVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
-		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.4-cu-port-bugfix2</UpdateReleaseVersion>
+		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.4-cu-port-bugfix3</UpdateReleaseVersion>
 
-		<SlnRoot>$(SolutionDir)</SlnRoot>
+		<!-- VS/solution builds set SolutionDir; direct `dotnet build <project>` does not. -->
+		<SlnRoot Condition="'$(SlnRoot)' == '' and '$(SolutionDir)' != ''">$(SolutionDir)</SlnRoot>
+		<SlnRoot Condition="'$(SlnRoot)' == ''">$(MSBuildThisFileDirectory)</SlnRoot>
 
 		<OutputDir>$(SlnRoot)\build\artifacts\$(MSBuildProjectName)</OutputDir>
 		<BaseOutputPath>$(OutputDir)\bin</BaseOutputPath>

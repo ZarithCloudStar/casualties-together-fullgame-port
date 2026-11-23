@@ -54,6 +54,12 @@ internal static class SkinMenuUI {
 
     internal static bool IsPopupOpen => _popupWindow != null && _popupWindow.activeSelf;
 
+    internal static void SetTopButtonVisible(bool visible) {
+        if (_menuButtonRt != null && _menuButtonRt.gameObject.activeSelf != visible) {
+            _menuButtonRt.gameObject.SetActive(visible);
+        }
+    }
+
     internal static void EnsureCanvas() {
         if (_canvas != null) {
             // AlignMenuButtonBesideMp reparents the icon to the current menu canvas so it
@@ -371,8 +377,13 @@ internal static class SkinMenuUI {
     }
 
     internal static void OpenPopup() {
+        EnsureCanvas();
         if (_canvas == null) {
             return;
+        }
+
+        if (!_canvas.activeSelf) {
+            SetVisible(true);
         }
 
         try {

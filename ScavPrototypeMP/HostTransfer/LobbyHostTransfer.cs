@@ -15,11 +15,11 @@ namespace Together
 {
     internal sealed class LobbyHostTransfer : CasualtiesTogetherSingleton
     {
-        internal enum TransferMode : byte { NextLayer, LobbyWithSave, LobbyOnly }
+        internal enum TransferMode : byte { NextLayer, LobbyWithSave, LobbyOnly, LobbyOnlyAuto }
         private enum Phase { Idle, Offered, Accepted, Preparing, Ready, CommitApproved, Switching, Reconnecting, Resuming }
         private enum Message : byte { Offer, Answer, Prepare, Begin, Chunk, Ready, Abort, Arrived, Complete, Commit, CommitAck }
-        private const string MessageName = "together.host-transfer.v2";
-        private const int Protocol = 2, ChunkSize = 12288;
+        private const string MessageName = "together.host-transfer.v3";
+        private const int Protocol = 3, ChunkSize = 12288;
         private static LobbyHostTransfer instance;
         private static string id, targetName, stage, password, runSettings;
         private static int sourceSlot, receiveSlot;
@@ -45,6 +45,8 @@ namespace Together
         private static bool holdLobbyAutoStart;
         private static ulong heldLobby;
         private static bool reconnectAttemptScheduled;
+        private static bool leaveAfterComplete;
+        private static Action<bool, string> leaveCompletion;
         private static ulong Local => KSteam.GetLocalUserSteamID().m_SteamID;
         private static string T(string key, string fallback) => Lang.Get("host_transfer_" + key, true) ?? fallback;
         private static bool Accepted => phase >= Phase.Accepted && phase <= Phase.Reconnecting;
@@ -52,7 +54,7 @@ namespace Together
         private static bool Switching => phase == Phase.Switching || phase == Phase.Reconnecting;
         internal static bool HasRequest => id != null;
         internal static bool CanCancel => id != null && Local == originalHost && !Switching;
-        internal static bool IncludesSave => mode != TransferMode.LobbyOnly;
+        internal static bool IncludesSave => mode == TransferMode.NextLayer || mode == TransferMode.LobbyWithSave;
         internal static bool PauseAutoContinue => HostTransferUI.SelectingAtExit || (id != null && mode == TransferMode.NextLayer && !Accepted);
         internal static string Status => id == null ? (AwaitingTransferredLoad ? T("status_hosting", "You are hosting the transferred expedition. Select Resume Expedition.") : T("status_none", "No transfer queued."))
             : targetName + ": " + (Switching ? T("status_reconnecting", "reconnecting players") : Preparing ? T("status_preparing", "preparing transfer") : Accepted ? T("status_accepted", "accepted; waiting to continue") : T("status_waiting", "waiting for acceptance"));
@@ -227,6 +229,22 @@ namespace Together
             Say("Waiting for " + targetName + " to accept hosting. Keep your game open until the transfer completes.");
         }
 
+        // Leave-to-single-player handoff: the recipient auto-accepts; the host
+        // leaves only after the Complete packet. done(false, reason) on abort.
+        internal static void RequestAutoLeave(ScavPlayer recipient, Action<bool, string> done) {
+            leaveAfterComplete = true;
+            leaveCompletion = done;
+            try { Request(recipient, TransferMode.LobbyOnlyAuto); }
+            catch (Exception ex) {
+                leaveAfterComplete = false;
+                leaveCompletion = null;
+                if (HasRequest) {
+                    try { Reset(false, ex.Message); } catch { }
+                }
+                done?.Invoke(false, ex.Message);
+            }
+        }
+
         internal static bool HasSavedExpedition => File.Exists(Path.Combine(SavesystemPatch.mpsavefolder, "save.sv"))
             && File.Exists(Path.Combine(SavesystemPatch.mpsavefolder, "mp_rules.json"));
 
@@ -272,7 +290,7 @@ namespace Together
                 {
                     ulong l = r.GetULong(), host = r.GetULong(), t = r.GetULong(); string n = ReadText(r);
                     var requestedMode = (TransferMode)r.GetByte();
-                    if (requestedMode > TransferMode.LobbyOnly) throw new InvalidDataException("Unknown host transfer mode.");
+                    if (requestedMode > TransferMode.LobbyOnlyAuto) throw new InvalidDataException("Unknown host transfer mode.");
                     if (!Net.IsClient || l != KSteam.LobbyId.m_SteamID || host != SteamMatchmaking.GetLobbyOwner(new CSteamID(l)).m_SteamID) return;
                     if (id != null && id != token) return;
                     if (kind == Message.Offer && t != Local) return;
@@ -284,6 +302,13 @@ namespace Together
                     deadline = Time.realtimeSinceStartupAsDouble + (kind == Message.Offer ? 60 : 120);
                     if (kind == Message.Offer)
                     {
+                        if (mode == TransferMode.LobbyOnlyAuto) {
+                            // The leaving host does not ask the next teammate to click
+                            // Accept; the transfer protocol still runs normally.
+                            Say("Auto-accepting host transfer for the leaving host.");
+                            AnswerOffer(token, true);
+                            return;
+                        }
                         Say(OfferWarning(mode));
                         HostTransferUI.ShowOffer(token, Find(host)?.playerName ?? "The host", mode);
                         return;
@@ -302,12 +327,18 @@ namespace Together
                 { phase = Phase.CommitApproved; Reply(Message.CommitAck); return; }
                 if (kind == Message.Complete && Switching && Net.IsClient && KSteam.CURRENT_LOBBY.ownerID.m_SteamID == target)
                 {
+                    bool leavingHost = mode == TransferMode.LobbyOnlyAuto && Local == originalHost;
+                    if (leavingHost) {
+                        // The leave-room flow finishes immediately; no "safe to
+                        // quit" notice is useful because we are reloading the menu.
+                        Reset(true); return;
+                    }
                     string message = string.Format(T("complete_client", "Host transfer complete. {0} is now hosting. "), targetName)
                         + (mode == TransferMode.NextLayer ? T("complete_resuming", "The expedition is resuming. ") : "")
                         + (Local == originalHost ? T("complete_quit", "You can safely quit.") : T("complete_former_quit", "The former host can safely quit."));
                     Say(message);
                     HostTransferUI.NotifyComplete(message);
-                    Reset(); return;
+                    Reset(true); return;
                 }
                 if (!Preparing || Local != target) return;
                 if (kind == Message.Begin)
@@ -594,10 +625,14 @@ namespace Together
                 // Steam membership, so explicitly leave through the Steam lifecycle.
                 KSteam.LeaveLobbyAndResetNet(true);
             }
-            Reset();
+            Reset(false, reason);
         }
-        private static void Reset()
+        private static void Reset(bool success = false, string reason = null)
         {
+            var done = leaveCompletion;
+            bool notify = leaveAfterComplete && done != null;
+            leaveAfterComplete = false;
+            leaveCompletion = null;
             id = targetName = stage = password = runSettings = null; incoming = null;
             sourceSlot = receiveSlot = 0;
             lobby = originalHost = target = 0; phase = Phase.Idle; boundaryArmed = false;
@@ -607,11 +642,24 @@ namespace Together
             reconnectAttemptScheduled = false;
             continueWhenAccepted = false;
             // pendingTransferredLoad survives success until the user's Load Run.
+            if (notify) {
+                try { done(success, reason); }
+                catch (Exception ex) { Plugin.Logger?.LogWarning("[LobbyTransfer] leave callback failed: " + ex.Message); }
+            }
         }
         private static void OnWorldFinished() { if (AwaitingTransferredLoad && Util.IsInWorld()) pendingTransferredLoad = false; }
-        private void OnDestroy() { if (instance == this) { WorldMP.OnWorldgenFinish -= OnWorldFinished; Reset(); instance = null; } }
+        private void OnDestroy() {
+            if (instance != this) return;
+            leaveAfterComplete = false;
+            leaveCompletion = null;
+            WorldMP.OnWorldgenFinish -= OnWorldFinished;
+            Reset();
+            instance = null;
+        }
 
         internal static bool AllowRun(bool load) {
+            // Stale transfer state must never block a single-player run.
+            if (!Net.IsRunning) return true;
             // Native Continue/Save&Exit must not race an active handoff. The
             // transfer performs its own ContinueRun through the flag above.
             if (Busy || (HasRequest && Net.IsHost && !Switching && !continuingForTransfer)) { Say("Wait for host transfer to finish."); return false; }

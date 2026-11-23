@@ -25,6 +25,14 @@ public static class SaveSystem_HasSave_MultiplayerPatch {
             force = false;
             return false;
         }
+#if FULLGAME
+        // Keep the single-player continue entry scoped to the SP slot store;
+        // MP slots must never light it up outside a room.
+        if (!Net.IsRunning) {
+            __result = SpSaveSlots.HasSave;
+            return false;
+        }
+#endif
         // vanilla path is the save.sv the menu reads, so only that file counts.
         string path = SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
         SavesystemPatch.savedatapathreplacement = path;
@@ -85,6 +93,15 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
         // a practice world must not overwrite the real mp_save. saveandquit still returns to the menu.
         if (SavesystemPatch.PreserveSave && !force)
             return false;
+#if FULLGAME
+        if (!Net.IsRunning) {
+            // Single-player: vanilla SaveGame writes the root save, or the SP
+            // staging directory selected by SpSaveSlots.Commit.
+            if (!SpSaveSlots.Committing)
+                SavesystemPatch.savedatapathreplacement = SavesystemPatch.vanillasavefolder;
+            return true;
+        }
+#endif
         if (!force) {
             SavesystemPatch.savedatapathreplacement = SavesystemPatch.mpsavefolder;
             var OG_LOCAL_BODY = Util.GetLocalBody();
@@ -316,7 +333,13 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
             }
         }
 
+#if FULLGAME
+        // SP slots keep the legacy root save after a slot load; the slot copy is
+        // the source of truth and the root may be the migration source.
+        deleteVanillaAfter = !Net.IsRunning && !SpSaveSlots.Enabled;
+#else
         deleteVanillaAfter = !Net.IsRunning;
+#endif
         log.l($"LOADING SAVE FROM DIRECTORY: {SavesystemPatch.savedatapathreplacement}");
 
         return true;
@@ -337,6 +360,9 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
         }
         if (!force ) {
             SaveSystem.loadedRun = __state;
+            // Single-player load is fully handled by the vanilla root save /
+            // SP slot working copy. Never walk the multiplayer lobby here.
+            if (!Net.IsRunning) return;
 
             SavesystemPatch.savedatapathreplacement = SavesystemPatch.mpsavefolder;
             var OG_LOCAL_BODY = Util.GetLocalBody();
@@ -561,22 +587,13 @@ public static class PreRunScript_Start_MultiplayerPatch {
 
     static void Prefix() {
 #if FULLGAME
-        if (SaveSlots.Enabled) {
-            SavesystemPatch.savedatapathreplacement = SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
-            return;
-        }
+        // The menu scene is the end of any loaded-run session; release the SP
+        // load latch so the Continue preview uses the published slots.
+        if (!Net.IsRunning) SpSaveSlots.OnMenuStart();
 #endif
-        // In the main menu Net is not running yet, so the plain helper always falls
-        // back to the vanilla folder and "continue" would ignore the multiplayer
-        // save entirely, looking like a brand new run. Prefer mp_save whenever a
-        // multiplayer save exists; a session that starts singleplayer still writes
-        // to the vanilla folder because GetPersistentDataPathToSave checks Net.
-        SavesystemPatch.savedatapathreplacement = SavesystemPatch.HasMultiplayerSaveFile()
-            ? SavesystemPatch.mpsavefolder
-            : SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
-        if (SavesystemPatch.savedatapathreplacement == SavesystemPatch.mpsavefolder) {
-            log.l("SAVE: main menu will use the multiplayer save in mp_save");
-        }
+        // GetTheOne... is mode-aware: SP slots/preview outside a room, MP slots
+        // inside one, vanilla root when the corresponding store is empty.
+        SavesystemPatch.savedatapathreplacement = SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
     }
 }
 
@@ -602,7 +619,8 @@ public static class SavesystemPatch {
     public static string mpsavefolder {
         get {
 #if FULLGAME
-            if (SaveSlots.Enabled) return SaveSlots.DirectoryPath;
+            // Never initialize or expose MP slot storage outside a room.
+            if (SaveSlots.Enabled && Net.IsRunning) return SaveSlots.DirectoryPath;
 #endif
             return MultiplayerSaveRoot;
         }
@@ -639,37 +657,76 @@ public static class SavesystemPatch {
     }
 
     public static void UpdatePersistentDataPathCuzMultiplayer() {
-
         SavesystemPatch.savedatapathreplacement = SavesystemPatch.GetTheOnePersistentDataPathWithSaveFile();
+        if (Util.IsInMainMenu()) RefreshMainMenuSavePreview();
+    }
 
-        if (Util.IsInMainMenu()) {
-            var prs = PreRunScript.instance;
-            if (prs != null) {
-                prs.loadButton.interactable = SaveSystem.HasSave();
+    // The vanilla PreRunScript.Start body is transpiled to read this directory.
+    // The SP save flow can return to the menu before its slot is published, so
+    // refresh the preview after the commit as well.
+    internal static void RefreshMainMenuSavePreview() {
+        var prs = PreRunScript.instance;
+        if (prs == null || prs.loadButton == null) return;
+        SavesystemPatch.savedatapathreplacement = GetTheOnePersistentDataPathWithSaveFile();
+        bool has = SaveSystem.HasSave();
+        prs.loadButton.interactable = has;
+        if (!has) {
+            if (prs.loadButtonImage != null) prs.loadButtonImage.enabled = false;
+            if (prs.saveTimeText != null) prs.saveTimeText.text = Locale.GetOther("savecontinuemenu");
+            return;
+        }
+        try {
+            JObject jObject = JObject.Parse(SaveSystem.Unzip(File.ReadAllBytes(
+                Path.Combine(SavesystemPatch.savedatapathreplacement, "save.sv"))));
+            if (prs.loadButtonImage != null) {
+                prs.loadButtonImage.sprite = Resources.Load<Sprite>("BiomeIcon/" + ((int)jObject["biome"] + 1));
+                prs.loadButtonImage.enabled = true;
             }
+            TimeSpan timeSpan = TimeSpan.FromSeconds((float)jObject["runTime"]);
+            if (prs.saveTimeText != null)
+                prs.saveTimeText.text = Locale.GetOther("savecontinuemenu") + " (" + timeSpan.ToString("hh\\:mm\\:ss") + ")";
+            int chr = (int)jObject["character"];
+            if (chr >= 0 && chr <= 2)
+                Traverse.Create(prs).Field("savedCharacter").SetValue(chr);
+        } catch (Exception ex) {
+            if (prs.loadButtonImage != null) prs.loadButtonImage.enabled = false;
+            if (prs.saveTimeText != null) prs.saveTimeText.text = "<color=\"red\">Save is corrupted!";
+            log.error("SAVE: main menu preview refresh failed: " + ex);
         }
     }
 
     internal static string GetTheOnePersistentDataPathWithSaveFile() {
 
 #if FULLGAME
-        if (SaveSlots.Enabled && HasMultiplayerSaveFile())
-            return Util.IsInWorld() || SaveSlots.LoadPrepared ? mpsavefolder : SaveSlots.PreviewDirectory;
-#endif
-
-        if (Net.IsRunning && HasMultiplayerSaveFile()) {
-            return mpsavefolder;
-        } else {
+        if (Net.IsRunning) {
+            if (SaveSlots.Enabled && HasMultiplayerSaveFile())
+                return Util.IsInWorld() || SaveSlots.LoadPrepared ? mpsavefolder : SaveSlots.PreviewDirectory;
             return Application.persistentDataPath;
         }
+        if (SpSaveSlots.Enabled) {
+            // During a save-and-exit the menu scene is loaded before the slot
+            // is published; point the preview at the staging snapshot so it
+            // reflects the save that is being committed.
+            if (SpSaveSlots.Committing) return SpSaveSlots.DirectoryPath;
+            if (SpSaveSlots.LoadPrepared) return SpSaveSlots.DirectoryPath;
+            if (SpSaveSlots.HasSave) return SpSaveSlots.PreviewDirectory;
+            return Application.persistentDataPath;
+        }
+#else
+        if (Net.IsRunning && HasMultiplayerSaveFile()) return mpsavefolder;
+#endif
+        return Application.persistentDataPath;
     }
     internal static string GetPersistentDataPathToSave() {
 
         if (Net.IsRunning) {
             return mpsavefolder;
-        } else {
-            return Application.persistentDataPath;
         }
+#if FULLGAME
+        if (SpSaveSlots.Enabled && (SpSaveSlots.Committing || SpSaveSlots.LoadPrepared))
+            return SpSaveSlots.DirectoryPath;
+#endif
+        return Application.persistentDataPath;
     }
     internal static void DeleteMPSave() {
 #if FULLGAME

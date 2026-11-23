@@ -9,7 +9,7 @@
     <Compile Include="Program.cs" />
     <Compile Include="../../ScavPrototypeMP/Compatibility/SaveSlotStore.cs" Link="SaveSlotStore.cs" />
     <Reference Include="Newtonsoft.Json">
-      <HintPath>F:\cu-port\CU_Fullgame\CasualtiesUnknown_Data\Managed\Newtonsoft.Json.dll</HintPath>
+      <HintPath>$(BaseGamePath)\CasualtiesUnknown_Data\Managed\Newtonsoft.Json.dll</HintPath>
     </Reference>
   </ItemGroup>
 </Project>

@@ -487,7 +487,9 @@ namespace Together {
         public static bool AnyCmdArgsPassed { get; private set; }
 
         public static List<string> commands_to_run = new();
+#if TESTING
         public static string test_scenario = null;
+#endif
         public static bool dump_game_ids { get; private set; }
         public static bool start_network { get; private set; }
         public static bool do_immidiate_start { get; private set; }
@@ -702,11 +704,13 @@ namespace Together {
 
                     continue;
                 }
+#if TESTING
                 if (arg == ("--mp-test")) {
                     i++; if (i == args.Length) break; arg = args[i];
 
                     test_scenario = arg;
                 }
+#endif
                 if (arg == ("--mp-runcommand") || arg == "--ksm-con") {
                     i++; if (i == args.Length) break; arg = args[i];
                     AnyCmdArgsPassed = true;
@@ -934,12 +938,15 @@ namespace Together {
 #endif
 
 
+#if TESTING
             if (test_scenario != null) {
                 yield return DEV_RunTestScenario();
             }
+#endif
 
 
         }
+#if TESTING
         static IEnumerator DEV_RunTestScenario() {
 
 #if !RELEASE
@@ -1199,6 +1206,7 @@ namespace Together {
 #endif 
             yield return null;
         }
+#endif
 
 
         private float nextDuneBite;
@@ -1210,6 +1218,8 @@ namespace Together {
             if (SUCCESFULLY_INITIALIZED) AmmoActor102.TickAttachmentPatches();
             CharacterReadyGate.Tick();
             StockCharacterSelectUI.Tick();
+            LobbyVanillaMenu.Tick();
+            LobbyNavigation.Tick();
             WorldSnapshotTransfer.TickClientLoad();
             EndingFlow.Tick();
 #if TESTING

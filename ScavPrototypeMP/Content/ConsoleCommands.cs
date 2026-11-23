@@ -4276,12 +4276,7 @@ helptext += "krok syncevent // visualise events tied to a pos\n";
 helptext += "krok verbose // verbose\n";
 helptext += "krok cleanworld // despawn monsters and useless items\n";
 helptext += "krok objreset // unregister all objects, to test sync again\n";
-helptext += "krok sync // Toggle specific synchronization systems (DEV ONLY):\n" +
-#endif
-#if !RELEASE
-"\tkrok sync tile // World tiles sync.\n" +
-"\tkrok sync fluid // World fluids sync.\n" +
-"\tkrok sync health // Player health sync.\n";
+helptext += "krok sync // Toggle specific synchronization systems (DEV ONLY):\n";
 #endif
 #if !RELEASE
 helptext += "\tkrok sync tile // World tiles sync.\n";

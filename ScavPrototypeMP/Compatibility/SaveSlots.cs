@@ -320,7 +320,9 @@ internal static class WorldGeneration_SaveAndExit_Slots {
         __state = null;
         if (!__runOriginal) return false;
         if (!SaveSlots.Enabled) return true;
-        if (!Net.IsServer || !Net.IsRunning || SaveSlots.Busy || SaveCurrentLayerExit.IsSaving || SaveSlotMenu.IsOpen) return false;
+        // Single-player uses the SP slot flow / vanilla SaveAndExit.
+        if (!Net.IsRunning) return true;
+        if (!Net.IsServer || SaveSlots.Busy || SaveCurrentLayerExit.IsSaving || SaveSlotMenu.IsOpen) return false;
         if (SavesystemPatch.PreserveSave) return true;
         if (SaveSlots.Active == 0 && !resuming) {
             SaveSlotMenu.Open(false, (slot, name) => {

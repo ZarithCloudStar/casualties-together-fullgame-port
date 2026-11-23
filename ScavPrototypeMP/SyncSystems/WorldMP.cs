@@ -992,10 +992,12 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
 #if FULLGAME
                 if (Util.GameIsFull()) {
-                    plr_is_unchipped = plr.modUnchipped;
-                    Multiplayer.rules.UnchippedIsIndividual = true;
+                    plr_is_unchipped = Multiplayer.rules.UnchippedIsIndividual
+                        ? plr.modUnchipped
+                        : ChipState.UniformUnchipped();
                 }
 #endif
+                if (!Multiplayer.rules.UnchippedIsIndividual) ChipState.ApplyServer(plr, plr_is_unchipped, false);
                 plr.unchipped = plr_is_unchipped;
                 if (plr.body != null) {
                     plr.SetUnchipped(plr_is_unchipped);
@@ -1043,10 +1045,12 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
 #if FULLGAME
                 if (Util.GameIsFull()) {
-                    plr_is_unchipped = plr.modUnchipped;
-                    Multiplayer.rules.UnchippedIsIndividual = true;
+                    plr_is_unchipped = Multiplayer.rules.UnchippedIsIndividual
+                        ? plr.modUnchipped
+                        : ChipState.UniformUnchipped();
                 }
 #endif
+                if (!Multiplayer.rules.UnchippedIsIndividual) ChipState.ApplyServer(plr, plr_is_unchipped, false);
                 plr.unchipped = plr_is_unchipped;
                 if (plr.body != null) {
                     plr.SetUnchipped(plr_is_unchipped) ;

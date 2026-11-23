@@ -297,10 +297,15 @@ log.error("UIBULLSHIT 1 " + e.ToString());
 }
 
 if (Input.GetKeyDown(KeyBinds.GetBind("pause"))) {
+// In a lobby the room menu is the room. ESC must not close it (which would
+// look like leaving the room); character-page ESC is handled separately.
+bool keepLobbyRoomOpen = UIMainMenu.IsOpen() && Net.IsRunning && !Util.IsInWorld();
+if (!keepLobbyRoomOpen) {
 if (PauseHandler.main != null && PauseHandler.main.disallowPause && !UIMainMenu.IsOpen()) {
 UIMainMenu.SetOpen(true);
 } else {
 UIMainMenu.SetOpen(false);
+}
 }
 }
 
@@ -388,6 +393,23 @@ GUILayout.Label(content, GUILayout.Height(siz.y));
 GUI.skin.label.fontSize = ogfontsize;
 
 }
+
+public static void _GUI_BiggerLabelBold(in string txt, float multiplier) {
+
+int ogfontsize = GUI.skin.label.fontSize;
+FontStyle ogfontstyle = GUI.skin.label.fontStyle;
+GUI.skin.label.fontSize = (int)(ogfontsize * multiplier);
+GUI.skin.label.fontStyle = FontStyle.Bold;
+
+GUIContent content = FixGuiContent.Content(txt, 1);
+Vector2 siz = GUI.skin.label.CalcSize(content);
+
+GUILayout.Label(content, GUILayout.Height(siz.y));
+
+GUI.skin.label.fontStyle = ogfontstyle;
+GUI.skin.label.fontSize = ogfontsize;
+
+}
 public static bool _GUI_FocusableButton(in Rect rect, in string text, out bool focused, GUIStyle style = null) {
 
 
@@ -429,6 +451,7 @@ CheckCursorOverlap(rect);
 }
 public static bool IsAnyMenuOpen() {
 if (UpdateChecker.PopupOpen) return true;
+if (ReturnToSingleplayerUI.IsOpen) return true;
 #if FULLGAME
 if (SaveSlotMenu.IsOpen) return true;
 #endif
@@ -440,6 +463,12 @@ public static bool _reset_gui_textures_next_frame = false;
 public static bool dev348432843289723498723497824398 = true;
 public static bool dev34843gfddgfgdfdfgfdgfdg4398 = false;
 void OnGUI() {
+if (ReturnToSingleplayerUI.IsOpen) {
+_GUI_CaptureOGUITextures();
+_GUI_DoTexturesForMPUserInterface();
+try { ReturnToSingleplayerUI.Draw(); } finally { _GUI_ResetToOGUITextures(); }
+return;
+}
 #if FULLGAME
 if (JoinModNotice.IsOpen) {
 _GUI_CaptureOGUITextures();

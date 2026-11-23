@@ -605,6 +605,9 @@ public static class Util_BodyExtensions {
             body.clawHealth = 100f;
             body.bloodPressureChangeFromMedicine = 0f;
             body.caffeinated = 0f;
+            body.overdoseIndex = 0;
+            body.onHardStimulants = false;
+            body.stimulantMultiplier = 0f;
             body.clawRegrowTime = 0f;
             body.painShock = 0f;
 

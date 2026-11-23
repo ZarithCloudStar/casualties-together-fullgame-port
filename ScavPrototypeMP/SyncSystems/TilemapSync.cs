@@ -228,7 +228,12 @@ WorldGeneration_SetBlock_MultiplayerPatch.FlushChangedBlocks();
 
 
 if (world.savePanel.activeSelf) {
-PlayerCamera.main.body.forceWalk = false;
+// The layer-end setting must still win over the save panel. Previously
+// this cleared forceWalk every frame, making "free movement at the bottom"
+// impossible to turn off. Leave forceWalk alone when the option is off; the
+// PlayerCamera patch re-applies it from the player's physical position.
+if (WorldGeneration.GetRunSettingBool("allowlayerendmovement"))
+    PlayerCamera.main.body.forceWalk = false;
 
 if (Multiplayer.rules.CheckIfLayerContinueIsDisabled()) {
 world.savePanel.SetActive(value: false);

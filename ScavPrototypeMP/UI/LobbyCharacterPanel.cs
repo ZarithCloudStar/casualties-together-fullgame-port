@@ -28,6 +28,7 @@ internal sealed class LobbyCharacterPanel : MonoBehaviour {
     readonly Button[] chipButtons = new Button[2];
     readonly TextMeshProUGUI[] chipLabels = new TextMeshProUGUI[2];
     bool displayedUnchipped;
+    bool displayedChipAllowed;
     int displayedChoice = -1;
     string displayedLanguage;
     bool displayedBody, shown, cursorVisible;
@@ -62,7 +63,7 @@ internal sealed class LobbyCharacterPanel : MonoBehaviour {
     internal static void DrawModMenuButton(float height) {
         if (!Util.GameIsFull()) return;
         bool previousEnabled = GUI.enabled;
-        bool canChoose = Net.IsClient && Net.IsConnected && CharacterLobby.ClientSession;
+        bool canChoose = CharacterLobby.InLobby && Net.IsConnected && (Net.IsClient || Net.IsServer);
         GUI.enabled = previousEnabled && canChoose;
         try {
             string text = CharacterSelection.Text("character_open_button", "Choose character");
@@ -106,7 +107,7 @@ internal sealed class LobbyCharacterPanel : MonoBehaviour {
         if (!shown) return;
         if (Input.GetKeyDown(KeyCode.Escape)) QueueAction("escape", () => { CharacterLobby.DismissPanel(); Hide(); }, true);
         else if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)) QueueAction("confirm key", Confirm, true);
-        if (displayedChoice != CharacterLobby.SafeDraftChoice() || displayedLanguage != Locale.currentLangName || displayedBody != LocalHasBody() || displayedUnchipped != CharacterLobby.DraftUnchipped) Refresh();
+        if (displayedChoice != CharacterLobby.SafeDraftChoice() || displayedLanguage != Locale.currentLangName || displayedBody != LocalHasBody() || displayedUnchipped != CharacterLobby.DraftUnchipped || displayedChipAllowed != ChipState.IndividualChipChoiceAllowed) Refresh();
         if (!CharacterLobby.ShouldShowPanel) Hide();
     }
 
@@ -342,6 +343,9 @@ internal sealed class LobbyCharacterPanel : MonoBehaviour {
         }
         chipHint = Label(card.transform, "ChipHint", "chip_hint", "Saved per player for this save; used by multiplayer ending rules.",
             new Vector2(0, -210), new Vector2(900, 56), 18);
+        bool showChips = ChipState.IndividualChipChoiceAllowed;
+        for (int i = 0; i < 2; i++) chipButtons[i].gameObject.SetActive(showChips);
+        chipHint.gameObject.SetActive(showChips);
         hint = Label(card.transform, "Status", "character_saved", "Character choice saved.", new Vector2(0, -274), new Vector2(900, 58), 18);
         Button(card.transform, "Confirm", "character_confirm", "Confirm", new Vector2(0, -362), new Vector2(420, 64),
             Confirm, out confirmLabel);
@@ -388,8 +392,12 @@ internal sealed class LobbyCharacterPanel : MonoBehaviour {
         displayedBody = LocalHasBody();
         displayedUnchipped = CharacterLobby.DraftUnchipped;
         chipHint.text = CharacterSelection.Text("chip_hint", "Saved per player for this save; used by multiplayer ending rules.");
+        bool showChips = ChipState.IndividualChipChoiceAllowed;
+        displayedChipAllowed = showChips;
+        chipHint.gameObject.SetActive(showChips);
         for (int i = 0; i < 2; i++) {
             bool selected = displayedUnchipped == (i == 1);
+            if (chipButtons[i] != null) chipButtons[i].gameObject.SetActive(showChips);
             chipLabels[i].text = (selected ? "[" + CharacterSelection.Text("character_selected", "Selected") + "] " : "") + ChipState.Label(i == 1);
             chipButtons[i].GetComponent<Image>().color = selected ? new Color(.35f, .85f, .55f, 1) : Color.white;
         }

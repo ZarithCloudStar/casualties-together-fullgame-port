@@ -95,7 +95,7 @@
   "casualtiestogether_ur_too_weak": "Muy débil",
   "casualtiestogether_plr_dead": "Está muerto.",
   "casualtiestogether_trader_buy_deny": "Verificación deniega la compra.",
-  "casualtiestogether_singleplayer_warn": "¡El mod de multijugador sigue activo! ¡DESACTÍVALO EN LAS OPCIONES PARA JUGAR EN MODO DE UN SOLO JUGADOR!",
+  "casualtiestogether_singleplayer_warn": "Modo un jugador.",
   "casualtiestogether_antidispersion_activated_alert": "¡Estás demasiado lejos de los demás!",
   "casualtiestogether_healthchipalert_antidispersion_warn": "SEÑAL DE ALIADOS\nES DÉBIL",
   "casualtiestogether_healthchipalert_antidispersion1": "MUY LEJOS DE\nTUS ALIADOS",
@@ -534,7 +534,15 @@
   "casualtiestogether_plrdeath_creaturekill": "fue comido por",
   "casualtiestogether_plrdeath_objkill": "murió por",
   "casualtiestogether_mmta_port_note": "Esta versión multijugador se basa en Casualties: Together 5.5.4, con mejoras de jugabilidad adicionales.",
-  "casualtiestogether_mmta_author_note": "Port realizado por bilibili: 星云Zarith",
+  "casualtiestogether_mmta_author_note": "Port realizado por bilibili: 星云Zarith\nColaboradores:\nSeparación UI/lógica: Cloudawolf潭",
     "casualtiestogether_rule_name_ShowTeammateList": "Mostrar lista de compañeros",
-    "casualtiestogether_rule_desc_ShowTeammateList": "El anfitrión controla si todos pueden ver la lista de compañeros."
+    "casualtiestogether_rule_desc_ShowTeammateList": "El anfitrión controla si todos pueden ver la lista de compañeros.",
+    "casualtiestogether_return_sp_title": "Volver al modo un jugador",
+    "casualtiestogether_return_sp_confirm": "¿Seguro que quieres volver al modo un jugador?",
+    "casualtiestogether_return_sp_ok": "Confirmar",
+    "casualtiestogether_return_sp_cancel": "Cancelar",
+    "casualtiestogether_return_sp_blocked": "Termina la operación actual primero.",
+    "casualtiestogether_return_sp_transfer_failed": "No se pudo volver al modo un jugador: ",
+    "casualtiestogether_sp_save_title": "Partidas de un jugador",
+    "casualtiestogether_sp_save_hint": "Elige una ranura para guardar o cargar el progreso de un jugador."
 }

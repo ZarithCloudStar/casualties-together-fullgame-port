@@ -17,7 +17,7 @@ internal static class MultiplayerQuit {
         // The host-transfer dialog and the receive-slot selector are modal. The
         // native save/exit controls live behind them, so a single click can
         // otherwise reach PreRunScript.Quit and close the game mid-transfer.
-        if (HostTransferUI.IsModalOpen
+        if (HostTransferUI.IsModalOpen || ReturnToSingleplayerUI.IsOpen || LobbyHostTransfer.Busy
 #if FULLGAME
             || SaveSlotMenu.IsTransferOpen
 #endif

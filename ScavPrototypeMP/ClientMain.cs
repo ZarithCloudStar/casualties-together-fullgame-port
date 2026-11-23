@@ -323,7 +323,11 @@ public class ClientMain : MonoBehaviour {
                     }
                 }
 
-                limb.transform.position = limb_rb_position;
+                // The pose is transported from limb.rb. Moving only the Transform
+                // leaves the Rigidbody2D/joints at their old positions, which makes
+                // the remote head/torso/legs visually separate until Stand() snaps
+                // them back. Teleport the physics body itself.
+                limb.rb.position = limb_rb_position;
                 limb.rb.rotation = limb_rb_rotation;
                 limb.rb.velocity = limb_rb_velocity;
                 limb.rb.angularVelocity = Util_MPExtensions.UnquantizeFloatFromShort(limb_rb_angularVelocity, _RAGDOLL_ANGVEL_QUANTIZE);

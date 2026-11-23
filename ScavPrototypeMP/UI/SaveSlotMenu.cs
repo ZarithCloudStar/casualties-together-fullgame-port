@@ -8,6 +8,8 @@ using UnityEngine.UI;
 
 namespace Together;
 
+internal enum SaveSlotMode { Multiplayer, SinglePlayer }
+
 internal static class SaveSlotMenu {
     sealed class Row {
         internal SaveSlotStore.Head head;
@@ -15,6 +17,7 @@ internal static class SaveSlotMenu {
     }
     static Row[] rows;
     static bool load, confirmed, transferSource, transferReceive, requireExisting;
+    static SaveSlotMode mode = SaveSlotMode.Multiplayer;
     static int selected;
     static string name = "", error = "";
     static Action<int, string> accept;
@@ -25,36 +28,54 @@ internal static class SaveSlotMenu {
     static Vector2 detailsScroll;
     internal static bool IsOpen => accept != null || !string.IsNullOrEmpty(error);
     internal static bool IsTransferOpen => IsOpen && (transferSource || transferReceive);
+    static SaveSlotStore PageStore => mode == SaveSlotMode.SinglePlayer ? SpSaveSlots.Store : SaveSlots.Store;
 
     internal static void Open(bool loading, Action<int, string> onAccept) {
         if (!Net.IsServer || !Net.IsRunning || IsOpen) return;
-        OpenCore(loading, onAccept, false, false, false);
+        OpenCore(SaveSlotMode.Multiplayer, loading, onAccept, false, false, false);
+    }
+
+    internal static void Open(SaveSlotMode pageMode, bool loading, Action<int, string> onAccept) {
+        if (IsOpen) return;
+        if (pageMode == SaveSlotMode.Multiplayer) {
+            if (!Net.IsServer || !Net.IsRunning) return;
+        } else {
+            if (!SpSaveSlots.Enabled || Net.IsRunning) return;
+            SpSaveSlots.Ensure();
+        }
+        OpenCore(pageMode, loading, onAccept, false, false, false);
     }
 
     internal static void OpenTransferSource(Action<int, string> onAccept) {
         if (!Net.IsServer || !Net.IsRunning || IsOpen) return;
-        OpenCore(false, onAccept, true, false, true);
+        OpenCore(SaveSlotMode.Multiplayer, false, onAccept, true, false, true);
     }
 
     internal static void OpenTransferReceive(Action<int, string> onAccept) {
         if (!Net.IsClient || !Net.IsRunning || IsOpen) return;
-        OpenCore(false, onAccept, false, true, false);
+        OpenCore(SaveSlotMode.Multiplayer, false, onAccept, false, true, false);
     }
 
-    static void OpenCore(bool loading, Action<int, string> onAccept, bool source, bool receive, bool existing) {
-        SaveSlots.Ensure();
-        rows = new Row[5];
-        for (int i = 0; i < 5; i++) {
+    static void OpenCore(SaveSlotMode pageMode, bool loading, Action<int, string> onAccept, bool source, bool receive, bool existing) {
+        mode = pageMode;
+        if (mode == SaveSlotMode.SinglePlayer) SpSaveSlots.Ensure(); else SaveSlots.Ensure();
+        rows = new Row[SaveSlotStore.Count];
+        for (int i = 0; i < SaveSlotStore.Count; i++) {
             rows[i] = new Row();
-            try { rows[i].head = SaveSlots.Store.Read(i + 1); }
+            try { rows[i].head = PageStore.Read(i + 1); }
             catch (Exception ex) { rows[i].error = "存档损坏或不可读取"; log.error($"SLOTS: inspect slot={i + 1}: {ex}"); }
         }
         load = loading; transferSource = source; transferReceive = receive; requireExisting = existing;
         selected = 0; confirmed = false; scroll = detailsScroll = Vector2.zero;
         name = ""; error = ""; accept = onAccept;
-        session = Net.IsServer ? Net.ServerEntityManager : Net.ClientEntityManager; world = WorldGeneration.world;
+        session = mode == SaveSlotMode.SinglePlayer
+            ? (object)PreRunScript.instance
+            : (Net.IsServer ? Net.ServerEntityManager : Net.ClientEntityManager);
+        // SP load lives in the menu; SP save lives in the world. Use the
+        // matching token so a scene/world change closes the right page.
+        world = mode == SaveSlotMode.SinglePlayer && loading ? null : WorldGeneration.world;
         BlockCanvas();
-        log.l("SLOTS: opened " + (transferSource ? "transfer source" : transferReceive ? "transfer receive" : load ? "load" : "save") + " selector");
+        log.l("SLOTS: opened " + (mode == SaveSlotMode.SinglePlayer ? "singleplayer " : "") + (transferSource ? "transfer source" : transferReceive ? "transfer receive" : load ? "load" : "save") + " selector");
     }
     static void BlockCanvas() {
         if (blocker != null) return;
@@ -71,7 +92,22 @@ internal static class SaveSlotMenu {
     }
     internal static void ShowError(string message) {
         if (!SaveSlots.Enabled || (!Net.IsServer && !transferReceive)) return;
-        error = message; session = Net.IsServer ? Net.ServerEntityManager : Net.ClientEntityManager; world = WorldGeneration.world; BlockCanvas();
+        ShowErrorCore(SaveSlotMode.Multiplayer, message);
+    }
+    internal static void ShowError(SaveSlotMode pageMode, string message) {
+        if (pageMode == SaveSlotMode.SinglePlayer) {
+            if (!SpSaveSlots.Enabled || Net.IsRunning) return;
+        } else if (!SaveSlots.Enabled || (!Net.IsServer && !transferReceive)) return;
+        ShowErrorCore(pageMode, message);
+    }
+    static void ShowErrorCore(SaveSlotMode pageMode, string message) {
+        mode = pageMode;
+        error = message;
+        session = pageMode == SaveSlotMode.SinglePlayer
+            ? (object)PreRunScript.instance
+            : (Net.IsServer ? Net.ServerEntityManager : Net.ClientEntityManager);
+        world = WorldGeneration.world;
+        BlockCanvas();
     }
     static void Close() {
         accept = null; error = ""; rows = null; selected = 0;
@@ -84,11 +120,20 @@ internal static class SaveSlotMenu {
     }
     internal static void Tick() {
         if (!IsOpen) return;
+        if (mode == SaveSlotMode.SinglePlayer) {
+            if (Net.IsRunning) { Close(); return; }
+            if (world != null) {
+                if (!ReferenceEquals(world, WorldGeneration.world)) Close();
+            } else if (!ReferenceEquals(session, PreRunScript.instance)) Close();
+            return;
+        }
         object currentSession = Net.IsServer ? Net.ServerEntityManager : Net.ClientEntityManager;
         if ((!Net.IsServer && !transferReceive) || !Net.IsRunning || !ReferenceEquals(session, currentSession) || !ReferenceEquals(world, WorldGeneration.world)) Close();
     }
     internal static void Draw() {
-        if (!IsOpen || (!Net.IsServer && !transferReceive) || !Net.IsRunning) return;
+        if (!IsOpen) return;
+        if (mode == SaveSlotMode.Multiplayer && ((!Net.IsServer && !transferReceive) || !Net.IsRunning)) return;
+        if (mode == SaveSlotMode.SinglePlayer && Net.IsRunning) return;
         bool enabled = GUI.enabled;
         try {
             GUI.enabled = true;
@@ -104,8 +149,12 @@ internal static class SaveSlotMenu {
                 if (MenuDialogUI.Button(new Rect(area.xMax - 140 * scale, area.yMax - 42 * scale, 140 * scale, 42 * scale), "关闭", scale)) Close();
                 return;
             }
-            string heading = transferSource ? "发送多人存档" : transferReceive ? "保存接收的多人存档" : load ? "继续探险" : "保存并退出";
-            string hint = transferSource ? "选择要发送给新主机的存档槽位" : transferReceive ? "选择一个槽位保存对方发送的存档" : load ? "选择存档槽位，确认后继续旅程" : "选择存档槽位，为这段旅程命名";
+            string heading = mode == SaveSlotMode.SinglePlayer
+                ? (Lang.Get("sp_save_title", true) ?? "单人存档")
+                : transferSource ? "发送多人存档" : transferReceive ? "保存接收的多人存档" : load ? "继续探险" : "保存并退出";
+            string hint = mode == SaveSlotMode.SinglePlayer
+                ? (Lang.Get("sp_save_hint", true) ?? "选择存档槽位，保存或读取单人进度。")
+                : transferSource ? "选择要发送给新主机的存档槽位" : transferReceive ? "选择一个槽位保存对方发送的存档" : load ? "选择存档槽位，确认后继续旅程" : "选择存档槽位，为这段旅程命名";
             float y = MenuDialogUI.Label(area, area.y, heading, title);
             y = MenuDialogUI.Label(area, y + gap * .4f, hint, muted);
             float buttonHeight = Mathf.Max(34, body.fontSize * 1.9f);
@@ -223,9 +272,18 @@ internal static class SaveSlotMenu {
             bool overwrite = (transferReceive || (!load && !transferSource)) && (rows[selected - 1].head != null || rows[selected - 1].error != null);
             if (overwrite && !confirmed) { confirmed = true; return; }
             var action = accept; int slot = selected; string chosenName = name; bool allowClientTransfer = transferReceive;
-            object oldSession = session; var oldWorld = world;
+            object oldSession = session; var oldWorld = world; var pageMode = mode;
             Close();
             CharacterSelection.DeferUiAction("存档槽位确认", () => {
+                if (pageMode == SaveSlotMode.SinglePlayer) {
+                    if (Net.IsRunning) return;
+                    if (oldWorld != null) {
+                        if (!ReferenceEquals(oldWorld, WorldGeneration.world)) return;
+                    } else if (!ReferenceEquals(oldSession, PreRunScript.instance)) return;
+                    try { action(slot, chosenName); }
+                    catch (Exception ex) { SpSaveSlots.Report("存档操作失败，原存档已保留，请重试。", ex); }
+                    return;
+                }
                 object currentSession = Net.IsServer ? Net.ServerEntityManager : Net.ClientEntityManager;
                 if ((!Net.IsServer && !allowClientTransfer) || !Net.IsRunning || !ReferenceEquals(oldSession, currentSession) || !ReferenceEquals(oldWorld, WorldGeneration.world)) return;
                 try { action(slot, chosenName); }
@@ -237,7 +295,7 @@ internal static class SaveSlotMenu {
 
 [HarmonyPatch(typeof(Plugin), "Update")]
 internal static class SaveSlotMenuTick {
-    static void Postfix() { SaveSlotMenu.Tick(); SaveSlots.Tick(); }
+    static void Postfix() { SaveSlotMenu.Tick(); SaveSlots.Tick(); SpSaveSlots.Tick(); }
 }
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.HandleInput))]
 internal static class SaveSlotMenuInput { static bool Prefix() => !SaveSlotMenu.IsOpen && !UpdateChecker.PopupOpen; }

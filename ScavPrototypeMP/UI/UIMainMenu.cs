@@ -252,6 +252,12 @@ UpdateChecker.ClosePopup();
 Util.PlayUISound(PlayerCamera.UISoundType.Close);
 }
 ApplyMpMenuButton(open_or_nah);
+if (!open_or_nah) {
+UIServerBrowser.CancelPasswordPrompt();
+#if FULLGAME
+PasswordPromptUI.Close();
+#endif
+}
 OnMenuTabChange();
 }
 if (open_or_nah) {
@@ -353,6 +359,9 @@ GUILayout.EndHorizontal();
 static Vector2 scrollbullshit = Vector2.zero;
 public static void _GUI_DrawSideMenuWithPlayerList() {
 if (!Net.IsRunning) return;
+// Lobby UI carries its own player/ready list; the floating side panel is
+// in-world only.
+if (!Util.IsInWorld()) return;
 if (!UIBullshit.IsAnyMenuOpen()) return;
 var ingame = Util.IsInWorld();
 
@@ -565,7 +574,7 @@ PlayerCamera.main.craftingPanel.SetActive(false);
 }
 }
 
-// x 1148.91   y 611.41
+// Original centered menu size.
 Rect mainpanelcontentrect;
 Rect mainpanelrect;
 {
@@ -776,6 +785,13 @@ GUILayout.EndArea();
 
 
 GUILayout.BeginArea(mainpanelcontentrect);
+#if FULLGAME
+// Disable the menu underneath the center prompt so a click on the prompt
+// cannot also press a control behind it.
+bool passwordPromptOpen = PasswordPromptUI.IsOpen;
+bool passwordPromptWasEnabled = GUI.enabled;
+if (passwordPromptOpen) GUI.enabled = false;
+#endif
 
 if (current_tab != null && current_tab.gui_func != null) {
 try {
@@ -791,6 +807,10 @@ GUI.skin.label.fontSize = ogfontsize;
 }
 
 GUILayout.EndArea();
+#if FULLGAME
+if (passwordPromptOpen) GUI.enabled = passwordPromptWasEnabled;
+PasswordPromptUI.Draw();
+#endif
 
 
 {
@@ -1293,8 +1313,12 @@ GUILayout.FlexibleSpace();
 
 if (Net.IsServer && Net.IsConnected && Util.IsInMainMenu() && PreRunScript.instance != null) {
 if (GUILayout.Button(Lang.Get("mmct_gotorunsettings"))) {
+#if FULLGAME
+LobbyNavigation.OpenRunSettingsFromRoom();
+#else
 SetOpen(false);
 PreRunScript.instance.runSettingsScreen.SetActive(value: true);
+#endif
 }
 }
 }
@@ -1308,6 +1332,8 @@ GUILayout.Space(15 * GetMenuUIScale());
 #if FULLGAME
 if (Util.GameIsFull()) {
 LobbyCharacterPanel.DrawModMenuButton(bigheight);
+LobbyReadyUI.DrawHostStartButtons(bigheight);
+LobbyReadyUI.DrawClientReadyButton(bigheight);
 SaveCurrentLayerExit.DrawButton(bigheight);
 SandboxMode.DrawButton(bigheight);
 GUILayout.Space(8 * GetMenuUIScale());
@@ -1378,7 +1404,13 @@ Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
 if (Util.IsInMainMenu()) {
 if (GUILayout.Button(Lang.Get("mmct_startclient"), GUILayout.Height(bigheight))) {
 Multiplayer.DoMultiplayerStatusMessageLog("Client Connect clicked!");
+// Connect first without a password. A password-protected server rejects
+// the empty intro; Net's disconnect handler then opens PasswordPromptUI,
+// which retries with the entered value.
+string savedPassword = Multiplayer.INPUT_PASSWORD;
+Multiplayer.INPUT_PASSWORD = "";
 TransportLiteNetLib.OnWantToConnect(USERINPUT_IPPORT, Net.NetType.Client);
+Multiplayer.INPUT_PASSWORD = savedPassword;
 
 Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
 }
@@ -1958,7 +1990,10 @@ var og_enabled = GUI.enabled;
 
 var displayName = plr.playerName;
 #if FULLGAME
-if (Util.GameIsFull()) displayName += "  " + CharacterLobby.RosterLabel(plr);
+if (Util.GameIsFull()) {
+displayName += "  " + CharacterLobby.RosterLabel(plr);
+if (!Util.IsInWorld()) displayName += "  " + CharacterLobby.ReadyLabel(plr);
+}
 #endif
 var textsize = GUI.skin.label.CalcSize(FixGuiContent.Content(displayName, 19));
 
@@ -1982,6 +2017,28 @@ GUILayout.Label( displayName , GUILayout.Width(Mathf.Min(textsize.x, r.width*0.5
 GUI.color = Color.white;
 
 GUILayout.FlexibleSpace();
+
+#if FULLGAME
+// Host transfer sits to the left of the kick/ban controls. It is available
+// to the host even when the admin controls are hidden.
+if (Util.GameIsFull() && Net.IsHost && !plr.IsLocal && Util.IsInMainMenu()) {
+bool previousEnabled = GUI.enabled;
+bool canTransfer = Net.IsRunningSteam && !LobbyHostTransfer.Busy && !LobbyHostTransfer.HasRequest;
+GUI.enabled = previousEnabled && canTransfer;
+string transferTip = canTransfer ? "" : (!Net.IsRunningSteam
+? CharacterSelection.Text("host_transfer_steam_only", "Only Steam lobbies support host transfer.")
+: CharacterSelection.Text("host_transfer_busy", "Finish or cancel the current transfer first."));
+if (GUILayout.Button(new GUIContent(Lang.Get("host_transfer_player_button", true) ?? "移交主机", transferTip))) {
+try {
+LobbyHostTransfer.Request(plr, LobbyHostTransfer.TransferMode.LobbyOnly, 0);
+HostTransferUI.Open(false);
+} catch (Exception ex) {
+Multiplayer.DoMultiplayerStatusMessageLog("Host transfer failed: " + ex.Message);
+}
+}
+GUI.enabled = previousEnabled;
+}
+#endif
 
 // kick buttons
 
@@ -2404,6 +2461,7 @@ settings_origin = typeof(DebugMenuSettings)
 internal static SettingsTab _skins_setting_tab = new SettingsTab {
 name = "mmst_skins",
 settings_origin = typeof(SkinSettings),
+gui_func = _GUI___SettingsSkins,
 on_reset = () => {
 SettingsJsonThing.json.Save();
 SpriteReplacerPlugin.SyncSpeciesCache();
@@ -2637,6 +2695,16 @@ DrawUpdateButton();
 
 GUILayout.Space(20 * GetMenuUIScale());
 
+if (GUILayout.Button(Lang.Get("mmst_game_settings", true) ?? "游戏设置", GUILayout.Height(42 * GetMenuUIScale()))) {
+#if FULLGAME
+LobbyNavigation.OpenGameSettingsFromRoom();
+#else
+SetOpen(false);
+Util.OpenSettingsPanel(true);
+#endif
+}
+GUILayout.Space(10 * GetMenuUIScale());
+
 GUILayout.BeginHorizontal();
 {
 var activatethisbutton = !Net.IsRunning && !Util.IsInWorld();
@@ -2657,6 +2725,16 @@ GUILayout.EndHorizontal();
 }
 
 
+
+static void _GUI___SettingsSkins(Rect r) {
+GUILayout.Space(20 * GetMenuUIScale());
+if (GUILayout.Button(Lang.Get("mmst_open_skin_editor", true) ?? "Switch skin…", GUILayout.Height(42 * GetMenuUIScale()))) {
+// The skin selector is a uGUI popup; close the IMGUI menu so it can render
+// on top and keep its own modal input handling.
+SetOpen(false);
+SkinMenuUI.OpenPopup();
+}
+}
 
 static void __GUI____RenderFieldsWithThatAttribute(List<FieldInfo> flds, in Rect r) {
 var halfwidth = r.width * ASJOUFMIGHDSYDSGFMKFSDKYGJUFSYGJFSDGKVYJSFDKJGYFSDGKVJHBFJKVFDJVMBYFJDYG;
@@ -2800,7 +2878,14 @@ GUI.skin.label.alignment = TextAnchor.UpperCenter;
 GUILayout.Label("");
 GUI.skin.label.wordWrap = true;
 UIBullshit._GUI_BiggerLabel(Lang.Get("mmta_port_note"), 0.95f);
-UIBullshit._GUI_BiggerLabel(Lang.Get("mmta_author_note"), 0.95f);
+var authorNote = Lang.Get("mmta_author_note") ?? "";
+var authorLines = authorNote.Split('\n');
+for (int i = 0; i < authorLines.Length; i++) {
+    // The localized author note is: author / contributor heading / credit.
+    // Render only the middle heading in bold, leaving the name and credit normal.
+    if (i == 1) UIBullshit._GUI_BiggerLabelBold(authorLines[i], 0.95f);
+    else UIBullshit._GUI_BiggerLabel(authorLines[i], 0.95f);
+}
 GUI.skin.label.wordWrap = false;
 GUILayout.Label("");
 UIBullshit._GUI_BiggerLabel(Lang.Get("mmta_credits"), 1.2f);

@@ -21,6 +21,9 @@ internal sealed class LobbyCharacterSelection : MonoBehaviour {
     static readonly string[] names = { "Experiment", "Milky", "Dune" };
 
     internal static void Build(ref float height) {
+        // Multiplayer-only rows: single-player must not see or change the
+        // lobby character/chip selection from this settings page.
+        if (!Net.IsRunning) return;
         SettingsMenu_Start_MultiplayerPatch.CreateSettingButton(CharacterSelection.Text("character_title", "Choose your character"),
             ref height, out var header, out var headerButton, out var headerText);
         SettingsMenu_Start_MultiplayerPatch.SetSettingNameAndTooltip(header,

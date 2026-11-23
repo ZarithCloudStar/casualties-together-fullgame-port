@@ -260,7 +260,11 @@ return GetFinishSpot(limb);
 }
 }
 public static Vector2 GetFinishSpot(Limb limb) {
-//TODO
+// Native DislocationMinigame.FinishSpot uses a lower target for prosthetic
+// limbs (375, 3). A hardcoded (375, 54.6) makes the host reject the client's
+// completed wrench repair, so the client snaps back to dislocated.
+if (limb != null && limb.prostheticInfo.hasProsthetic)
+return new Vector2(375f, 3f);
 return new Vector2(375f, 54.6f);
 }
 

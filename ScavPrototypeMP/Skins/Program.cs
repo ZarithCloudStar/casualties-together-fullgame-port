@@ -230,7 +230,8 @@ public class SpriteReplacerPlugin : MonoBehaviour {
         private static bool _mpTickError;
 
         private void Update() {
-            SkinMenuUI.SetVisible(MenuGate.ShouldShowButton());
+            SkinMenuUI.SetVisible(MenuGate.ShouldShowButton() || SkinMenuUI.IsPopupOpen);
+            SkinMenuUI.SetTopButtonVisible(!Util.IsInWorld());
             SkinMenuUI.AlignMenuButtonBesideMp();
             SkinMenuUI.TickCooldown();
 

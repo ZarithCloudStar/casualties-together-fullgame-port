@@ -119,13 +119,17 @@ internal static class PendingCharacterAdmission {
             log.l($"CHARACTER: pending player={intro.userName} tempId={id} chr={intro.characterSelected} timeout={RequestedTimeoutSeconds ?? 180f:0.###}");
             log.l($"CHARACTER: roster {intro.userName}=unset chosen=false");
 
-            // Rejoining the same save: the server already knows this player's pick,
-            // so admit immediately and let the client skip the panel.
+            // Never create a BasePlayer/Body before the joining client has
+            // confirmed its character. The client opens the character page as
+            // soon as the transport connects; confirmation arrives as
+            // SERVER_SetCharacter and completes admission. A stored save binding
+            // only preseeds the choice, it does not skip the page.
             if (CharacterRunMemory.TryGet(CharacterRunMemory.PlayerKey(steamId, creationName), out byte stored)) {
                 entry.Intro.characterSelected = stored;
                 entry.ModUnchipped = CharacterRunMemory.GetChip(CharacterRunMemory.PlayerKey(steamId, creationName));
-                log.l($"CHARACTER: stored choice for this save player={intro.userName} chr={stored}; admitting without the panel");
-                return Complete(entry, true);
+                log.l($"CHARACTER: stored choice for this save player={intro.userName} chr={stored}; awaiting confirmation");
+            } else {
+                log.l($"CHARACTER: awaiting character confirmation from player={intro.userName}");
             }
             return true;
         } catch (Exception ex) {
@@ -183,7 +187,7 @@ internal static class PendingCharacterAdmission {
               bool bindToWorld = chosen && Util.IsInWorld();
               if (bindToWorld) CharacterRunMemory.SetIfAbsent(CharacterRunMemory.PlayerKey(entry.SteamId, entry.CreationName), entry.Intro.characterSelected);
               ChipState.ApplyServer(entity.player, entry.ModUnchipped, bindToWorld);
-            log.l($"CHARACTER: admitted player={entry.Intro.userName} tempId={entry.Id} playerId={entity.OwnerId} reason={(chosen ? "confirmed" : "timeout")}");
+            log.l($"CHARACTER: admitted player={entry.Intro.userName} tempId={entry.Id} playerId={entity.OwnerId} reason={(chosen ? "confirmed" : "joined")}");
             if (chosen) log.l($"CHARACTER: player={entry.Intro.userName} chose chr={entry.Intro.characterSelected} ({ServerMain.GetCharacterPrefabPath(entry.Intro.characterSelected)})");
             return true;
         } catch (Exception ex) {

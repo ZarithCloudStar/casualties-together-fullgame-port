@@ -14,6 +14,7 @@ internal sealed class SaveSlotStore {
     internal const int Count = 5;
     internal sealed class Meta {
         public string name, hostName, modVersion, buildTag;
+        public string mode;
         public long savedAtUnix;
         public int layer, playerCount, schema = 1;
     }
@@ -22,9 +23,15 @@ internal sealed class SaveSlotStore {
         public Meta meta;
     }
     readonly string root;
+    readonly bool requireRules;
     static readonly ConcurrentDictionary<string, object> gates = new(StringComparer.OrdinalIgnoreCase);
     readonly object gate;
-    internal SaveSlotStore(string root) { this.root = Path.GetFullPath(root); gate = gates.GetOrAdd(this.root, _ => new object()); }
+    // MP slots carry mp_rules.json; SP slots are the vanilla save.sv only.
+    internal SaveSlotStore(string root, bool requireRules = true) {
+        this.root = Path.GetFullPath(root);
+        this.requireRules = requireRules;
+        gate = gates.GetOrAdd(this.root, _ => new object());
+    }
     internal string Working => Path.Combine(root, "_session");
     string Slot(int slot) {
         if (slot < 1 || slot > Count) throw new ArgumentOutOfRangeException(nameof(slot));
@@ -88,7 +95,8 @@ internal sealed class SaveSlotStore {
             Directory.CreateDirectory(staging);
             if (Directory.Exists(source)) CopyTree(source, staging);
             writeAndValidate(staging);
-            if (!File.Exists(Path.Combine(staging, "save.sv")) || !File.Exists(Path.Combine(staging, "mp_rules.json")))
+            if (!File.Exists(Path.Combine(staging, "save.sv"))
+                || (requireRules && !File.Exists(Path.Combine(staging, "mp_rules.json"))))
                 throw new InvalidDataException("存档文件不完整，未替换旧存档。");
             // Flush every staged file before publishing its immutable generation.
             foreach (string file in Directory.GetFiles(staging, "*", SearchOption.AllDirectories))

@@ -244,7 +244,9 @@ public enum NetmsgId : byte {
     CLIENT_WorldSnapshot = ___22,
     SERVER_WorldSnapshot = ___23,
     SERVER_SetCharacter = ___5,
-    // ___6 remains reserved. Client-asserted keypad unlocks are not accepted.
+    // Lobby ready toggle. Reuses a reserved byte; keypad unlocks remain client-asserted
+    // only through the existing keypad minigame messages.
+    SERVER_SetLobbyReady = ___6,
     CLIENT_EndingState = ___7,
     SERVER_EndingRequest = ___8,
     CLIENT_EndingEvent = ___9,

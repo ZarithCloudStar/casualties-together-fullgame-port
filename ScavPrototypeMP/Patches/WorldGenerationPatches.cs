@@ -45,8 +45,12 @@ public static class PreRunScript_StartRun_MultiplayerPatch {
 
             return false;
         } else {
-            Multiplayer.DoMultiplayerStatusMessageLog(Multiplayer.CANT_PLAY_SP_MSG);
-            return false;
+#if FULLGAME
+            // Single-player: start a fresh vanilla run. Only session scratch is
+            // cleared; the five SP slots stay.
+            SpSaveSlots.BeginNewRun();
+#endif
+            return true;
         }
         return true;
     }
@@ -70,8 +74,13 @@ public static class PreRunScript_LoadRun_MultiplayerPatch {
 
             return false;
         } else {
-            Multiplayer.DoMultiplayerStatusMessageLog(Multiplayer.CANT_PLAY_SP_MSG);
-            return false;
+#if FULLGAME
+            // Single-player load: the SP slot page / prepared working copy owns
+            // this path. When slots are unavailable, let vanilla LoadRun run.
+            return SpSaveSlots.HandleLoadRun();
+#else
+            return true;
+#endif
         }
         return true;
     }

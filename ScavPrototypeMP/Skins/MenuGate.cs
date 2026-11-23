@@ -9,6 +9,13 @@ internal static class MenuGate {
     private static FieldInfo _textObjField;
 
     internal static bool ShouldShowButton() {
+        // Do not add a floating skin icon to the in-world HUD/ESC menu.
+        // The existing "Switch skin…" button inside the multiplayer settings
+        // tab opens the popup directly; Program.Update keeps the canvas alive
+        // while that popup is open.
+        if (CasualtiesTogetherUtils.Util.IsInWorld()) {
+            return false;
+        }
         if (MpMenuButtonVisible()) {
             return true;
         }

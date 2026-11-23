@@ -36,7 +36,7 @@ public static void Postfix(AdaptiveButton __instance, ref bool __result) {
 if (Con.IsConsoleOpen()) {
 __result = true;
 }
-if (UIMainMenu.IsOpen()) {
+if (UIMainMenu.IsOpen() || ReturnToSingleplayerUI.IsOpen || HostTransferUI.IsModalOpen) {
 __result = true;
 }
 }

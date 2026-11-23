@@ -95,7 +95,7 @@
   "casualtiestogether_ur_too_weak": "太弱了",
   "casualtiestogether_plr_dead": "死掉了。",
   "casualtiestogether_trader_buy_deny": "此購買驗證遭拒。",
-  "casualtiestogether_singleplayer_warn": "載入多人模組！若想要進行一般的單人遊戲的話，請至設定將其關閉！",
+  "casualtiestogether_singleplayer_warn": "目前為單人模式。",
   "casualtiestogether_antidispersion_activated_alert": "離別人太遠了！",
   "casualtiestogether_healthchipalert_antidispersion_warn": "同伴訊號\n微弱",
   "casualtiestogether_healthchipalert_antidispersion1": "距離同伴\n過遠",
@@ -460,5 +460,13 @@
   "casualtiestogether_plrdeath_creaturekill": "死於",
   "casualtiestogether_plrdeath_objkill": "死於",
     "casualtiestogether_rule_name_ShowTeammateList": "顯示隊友清單",
-    "casualtiestogether_rule_desc_ShowTeammateList": "由主機控制所有玩家是否顯示隊友清單。"
+    "casualtiestogether_rule_desc_ShowTeammateList": "由主機控制所有玩家是否顯示隊友清單。",
+    "casualtiestogether_return_sp_title": "回到單人模式",
+    "casualtiestogether_return_sp_confirm": "您確定要回到單人模式嗎？",
+    "casualtiestogether_return_sp_ok": "確定",
+    "casualtiestogether_return_sp_cancel": "取消",
+    "casualtiestogether_return_sp_blocked": "請先完成目前操作。",
+    "casualtiestogether_return_sp_transfer_failed": "回到單人模式失敗：",
+    "casualtiestogether_sp_save_title": "單人存檔",
+    "casualtiestogether_sp_save_hint": "選擇存檔槽位，儲存或讀取單人進度。"
 }
