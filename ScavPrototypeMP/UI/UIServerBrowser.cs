@@ -699,7 +699,9 @@ static void _GUI_RenderServerBrowser(Rect r) {
                 GUILayout.Label(Lang.Get("mmct_search"));
                 // max players
                 {
-                    var newnamefilter = GUILayout.TextField(_LOBBY_SEARCH_FILTER, GUILayout.Width(fieldswidth));
+                    var searchTextStyle = new GUIStyle(GUI.skin.textField);
+                    searchTextStyle.padding = new RectOffset(8, 8, 2, 2);
+                    var newnamefilter = GUILayout.TextField(_LOBBY_SEARCH_FILTER, searchTextStyle, GUILayout.Width(fieldswidth));
                     if (newnamefilter != _LOBBY_SEARCH_FILTER) {
                         _LOBBY_SEARCH_FILTER = newnamefilter;
                         RefilterList();

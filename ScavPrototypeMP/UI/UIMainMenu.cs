@@ -1237,7 +1237,9 @@ GUILayout.Label(Lang.Get("mmct_sconfig_servername"), GUILayout.ExpandWidth(false
 
 GUI.skin.label.alignment = TextAnchor.UpperLeft;
 if ((!Net.IsRunning || Net.IsServer)) { // is readonly
-var newname = GUILayout.TextField(Net.MyServerInfo.name);
+var serverNameStyle = new GUIStyle(GUI.skin.textField);
+serverNameStyle.padding = new RectOffset(8, 8, 2, 2);
+var newname = GUILayout.TextField(Net.MyServerInfo.name, serverNameStyle);
 
 if (Net.MyServerInfo.name != newname) {
 Multiplayer.SetServerName(newname);
@@ -1300,7 +1302,7 @@ _GUI___DirectConnect_DoSteamInfoo(r2, fieldheight, fieldnameswidth, fieldswidth)
 _GUI___DirectConnect_DoPasswordField(r2, fieldheight, fieldnameswidth, fieldswidth); // PASSWORD
 }
 
-GUILayout.Space((multiplayer_method_menu == 1 ? 8 : 20) * GetMenuUIScale());
+GUILayout.Space(8 * GetMenuUIScale());
 
 
 if (Net.IsRunning && Net.IsConnecting) {
