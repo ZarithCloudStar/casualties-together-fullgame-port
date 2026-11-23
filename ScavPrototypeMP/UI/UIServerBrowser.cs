@@ -752,7 +752,9 @@ static void _GUI_RenderServerBrowser(Rect r) {
             {
                 GUILayout.Label(Lang.Get("mmct_ipportfield") + "：", GUILayout.ExpandWidth(false));
                 GUILayout.Space(4 * GetMenuUIScale());
-                UIMainMenu.USERINPUT_IPPORT = GUILayout.TextField(UIMainMenu.USERINPUT_IPPORT, GUILayout.MinWidth(80 * GetMenuUIScale()));
+                var ipTextStyle = new GUIStyle(GUI.skin.textField);
+                ipTextStyle.padding = new RectOffset(8, 8, 2, 2);
+                UIMainMenu.USERINPUT_IPPORT = GUILayout.TextField(UIMainMenu.USERINPUT_IPPORT, ipTextStyle, GUILayout.MinWidth(80 * GetMenuUIScale()));
             }
             GUILayout.EndHorizontal();
             GUILayout.Space(6 * GetMenuUIScale());
