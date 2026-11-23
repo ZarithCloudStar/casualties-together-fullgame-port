@@ -1257,20 +1257,22 @@ GUILayout.BeginHorizontal(GUILayout.Height(fieldheight));// IP
 GUILayout.Label(Lang.Get("mmct_ipportfield") + "：", GUILayout.ExpandWidth(false));
 GUILayout.Space(4 * GetMenuUIScale());
 
+var ipMinWidth = 180 * GetMenuUIScale();
+var ipMaxWidth = r2.width * 0.55f;
 GUI.skin.label.alignment = TextAnchor.UpperLeft;
 if (textfields_are_readonly) {
 if (_HIDE_IPPORT) {
-GUILayout.Label(new string('*', USERINPUT_IPPORT.Length), GUILayout.ExpandWidth(true));
+GUILayout.Label(new string('*', USERINPUT_IPPORT.Length), GUILayout.MinWidth(ipMinWidth), GUILayout.MaxWidth(ipMaxWidth), GUILayout.ExpandWidth(true));
 } else {
-GUILayout.Label(USERINPUT_IPPORT, GUILayout.ExpandWidth(true));
+GUILayout.Label(USERINPUT_IPPORT, GUILayout.MinWidth(ipMinWidth), GUILayout.MaxWidth(ipMaxWidth), GUILayout.ExpandWidth(true));
 }
 } else {
 var ipTextStyle = new GUIStyle(GUI.skin.textField);
 ipTextStyle.padding = new RectOffset(8, 8, 2, 2);
 if (_HIDE_IPPORT) {
-USERINPUT_IPPORT = GUILayout.PasswordField(USERINPUT_IPPORT, '*', ipTextStyle, GUILayout.ExpandWidth(true));
+USERINPUT_IPPORT = GUILayout.PasswordField(USERINPUT_IPPORT, '*', ipTextStyle, GUILayout.MinWidth(ipMinWidth), GUILayout.MaxWidth(ipMaxWidth), GUILayout.ExpandWidth(true));
 } else {
-USERINPUT_IPPORT = GUILayout.TextField(USERINPUT_IPPORT, ipTextStyle, GUILayout.ExpandWidth(true));
+USERINPUT_IPPORT = GUILayout.TextField(USERINPUT_IPPORT, ipTextStyle, GUILayout.MinWidth(ipMinWidth), GUILayout.MaxWidth(ipMaxWidth), GUILayout.ExpandWidth(true));
 }
 }
 GUI.skin.label.alignment = TextAnchor.UpperLeft;
