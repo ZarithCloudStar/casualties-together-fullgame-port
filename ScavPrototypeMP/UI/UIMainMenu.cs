@@ -949,8 +949,7 @@ GUILayout.EndHorizontal();
 
 static void _GUI___DirectConnect_DoSteamConnectButtons(Rect r2, float fieldheight, float fieldnameswidth, float fieldswidth, float bigheight) {
 
-GUILayout.FlexibleSpace();
-GUILayout.BeginVertical(GUILayout.Width(r2.width * 0.5f));
+GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
 {
 if (GUILayout.Button(Lang.Get("mmct_steam_createlobby"), GUILayout.Height(bigheight))) {
 
@@ -978,7 +977,6 @@ Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
 }
 }
 GUILayout.EndVertical();
-GUILayout.FlexibleSpace();
 
 }
 
@@ -1307,9 +1305,8 @@ GUILayout.Space(8 * GetMenuUIScale());
 
 if (Net.IsRunning && Net.IsConnecting) {
 GUILayout.Label(Lang.Get("mmct_connecting"));
-} else {
-var steamConnectButtons = !Net.IsRunning && !Util.IsInWorld() && multiplayer_method_menu == 1;
-GUILayout.BeginHorizontal(GUILayout.Height(steamConnectButtons ? bigheight * 2 + 8 * GetMenuUIScale() : bigheight));
+} else if (Net.IsRunning) {
+GUILayout.BeginHorizontal(GUILayout.Height(bigheight));
 {
 if (Net.IsServer) {
 if (GUILayout.Button(Lang.Get("mmct_serveroptions"))) {
@@ -1353,7 +1350,8 @@ SandboxMode.DrawButton(bigheight);
 GUILayout.Space(8 * GetMenuUIScale());
 }
 #endif
-GUILayout.BeginHorizontal(GUILayout.Height(bigheight));
+var steamConnectButtons = !Net.IsRunning && !Util.IsInWorld() && multiplayer_method_menu == 1;
+GUILayout.BeginHorizontal(GUILayout.Height(steamConnectButtons ? bigheight * 2 + 8 * GetMenuUIScale() : bigheight));
 {
 if (Net.IsRunning) {
 
