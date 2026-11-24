@@ -164,6 +164,29 @@ internal static class ModSync {
         return result;
     }
 
+    internal static bool HasDifferences(IEnumerable<Entry> hostManifest) {
+        foreach (var entry in hostManifest ?? Enumerable.Empty<Entry>()) {
+            if (entry == null || string.IsNullOrEmpty(entry.Guid)) continue;
+            if (!Chainloader.PluginInfos.TryGetValue(entry.Guid, out var info)) return true;
+            string clientVersion = info.Metadata?.Version?.ToString() ?? "";
+            if (!string.Equals(clientVersion, entry.Version, StringComparison.Ordinal)) return true;
+        }
+        return false;
+    }
+
+    internal static string DescribeVersionDifferences(IEnumerable<Entry> hostManifest) {
+        var lines = new List<string>();
+        foreach (var entry in hostManifest ?? Enumerable.Empty<Entry>()) {
+            if (entry == null || string.IsNullOrEmpty(entry.Guid)) continue;
+            if (!Chainloader.PluginInfos.TryGetValue(entry.Guid, out var info)) continue;
+            string clientVersion = info.Metadata?.Version?.ToString() ?? "";
+            if (string.Equals(clientVersion, entry.Version, StringComparison.Ordinal)) continue;
+            lines.Add("- " + (string.IsNullOrWhiteSpace(entry.Name) ? entry.Guid : entry.Name)
+                + "：本机 " + clientVersion + "，主机 " + entry.Version);
+        }
+        return lines.Count == 0 ? "" : "版本不同：\n" + string.Join("\n", lines);
+    }
+
     internal static void Begin(Entry entry) {
         if (entry == null || string.IsNullOrEmpty(entry.Guid)) return;
         if (entry.State == EntryState.Queued || entry.State == EntryState.Downloading
