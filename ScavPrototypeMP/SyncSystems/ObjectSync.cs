@@ -990,7 +990,7 @@ public class NetObjectRegistry : CasualtiesTogetherSingleton {
                 if (networkignored_buildings_maingame.Contains(b.id)) {
                     return true;
                 }
-                if (obj.TryGetComponent<Climbable>(out var c)) {
+                if (!ScavMPBuildingSynchronizer.IsSpiceVine(b) && obj.TryGetComponent<Climbable>(out var c)) {
                     if (!obj.TryGetComponent<TrackerClimbableEntity>(out var _)) {
                         var r = obj.AddComponent<TrackerClimbableEntity>();
                         if (!r.is_ladder && log.verbose)

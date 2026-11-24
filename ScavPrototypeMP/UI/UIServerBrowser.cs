@@ -671,7 +671,7 @@ static void _GUI_RenderServerBrowser(Rect r) {
         }
         GUILayout.EndVertical();
 
-        GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(190 * GetMenuUIScale()));
+        GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(220 * GetMenuUIScale()));
         {
 
             GUILayout.BeginHorizontal();
@@ -699,7 +699,9 @@ static void _GUI_RenderServerBrowser(Rect r) {
                 GUILayout.Label(Lang.Get("mmct_search"));
                 // max players
                 {
-                    var newnamefilter = GUILayout.TextField(_LOBBY_SEARCH_FILTER, GUILayout.Width(fieldswidth));
+                    var searchTextStyle = new GUIStyle(GUI.skin.textField);
+                    searchTextStyle.padding = new RectOffset(8, 8, 2, 2);
+                    var newnamefilter = GUILayout.TextField(_LOBBY_SEARCH_FILTER, searchTextStyle, GUILayout.Width(fieldswidth));
                     if (newnamefilter != _LOBBY_SEARCH_FILTER) {
                         _LOBBY_SEARCH_FILTER = newnamefilter;
                         RefilterList();
@@ -743,6 +745,34 @@ static void _GUI_RenderServerBrowser(Rect r) {
                 GUILayout.FlexibleSpace();
             }
             GUILayout.EndHorizontal();
+
+            GUILayout.Space(14 * GetMenuUIScale());
+            GUI.skin.label.alignment = TextAnchor.MiddleLeft;
+            if (GUILayout.Button(Lang.Get("mmct_steam_openfriendlist"))) {
+                Multiplayer.DoMultiplayerStatusMessageLog("Open Friends list!");
+                SteamFriends.ActivateGameOverlay("friends");
+                Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
+            }
+            GUILayout.Space(10 * GetMenuUIScale());
+            GUILayout.Label(Lang.Get("mmct_directconnecttitle"));
+            GUILayout.Space(6 * GetMenuUIScale());
+            GUILayout.BeginHorizontal();
+            {
+                GUILayout.Label(Lang.Get("mmct_ipportfield") + "：", GUILayout.ExpandWidth(false));
+                GUILayout.Space(4 * GetMenuUIScale());
+                var ipTextStyle = new GUIStyle(GUI.skin.textField);
+                ipTextStyle.padding = new RectOffset(8, 8, 2, 2);
+                UIMainMenu.USERINPUT_IPPORT = GUILayout.TextField(UIMainMenu.USERINPUT_IPPORT, ipTextStyle, GUILayout.MinWidth(80 * GetMenuUIScale()));
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.Space(6 * GetMenuUIScale());
+            {
+                var og_ipconnect_enabled = GUI.enabled;
+                GUI.enabled = og_ipconnect_enabled && !Multiplayer.IsNetworkActiveOrIsInGame();
+                if (GUILayout.Button(Lang.Get("mmct_startclient"))) UIMainMenu.ConnectClientViaIp();
+                GUI.enabled = og_ipconnect_enabled;
+            }
+            GUILayout.Space(8 * GetMenuUIScale());
 
             GUILayout.FlexibleSpace();
         }

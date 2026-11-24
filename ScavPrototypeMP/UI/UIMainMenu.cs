@@ -400,6 +400,9 @@ HostTransferUI.DrawLobbyAction();
 var should_do_buttons_usable = Util.IsInWorld() && !UIMainMenu.IsOpen();
 
 if (should_do_buttons_usable) {
+#if FULLGAME
+SaveCurrentLayerExit.DrawButton(0f);
+#endif
 if (GUILayout.Button(Lang.Get("netpanel_settings"))) {
 if (mainmenu_open && Util.IsInWorld()) {
 Util.OpenBrightnessPanel(true);
@@ -946,7 +949,6 @@ GUILayout.EndHorizontal();
 
 static void _GUI___DirectConnect_DoSteamConnectButtons(Rect r2, float fieldheight, float fieldnameswidth, float fieldswidth, float bigheight) {
 
-GUILayout.FlexibleSpace();
 if (GUILayout.Button(Lang.Get("mmct_steam_createlobby"), GUILayout.Height(bigheight))) {
 
 var type = KSteam.NumToLobbyType(_STEAM_CHOSEN_LOBBYTYPE);
@@ -962,16 +964,6 @@ type
 
 Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
 }
-GUILayout.FlexibleSpace();
-if (GUILayout.Button(Lang.Get("mmct_steam_openfriendlist"), GUILayout.Height(bigheight))) {
-Multiplayer.DoMultiplayerStatusMessageLog("Open Friends list!");
-
-// https://partner.steamgames.com/doc/api/ISteamFriends
-SteamFriends.ActivateGameOverlay("friends");
-
-Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
-}
-GUILayout.FlexibleSpace();
 
 }
 
@@ -1194,7 +1186,6 @@ var fieldnameswidth = r2.width * 0.27f;
 var fieldswidth = r2.width * 0.36f;
 var bigheight = 50 * GetMenuUIScale();
 var fieldheight = 30 * GetMenuUIScale();
-var ipportfieldwidth = r2.width * 0.45f;
 
 
 var multiplayer_method_menu = 0;
@@ -1231,7 +1222,9 @@ GUILayout.Label(Lang.Get("mmct_sconfig_servername"), GUILayout.ExpandWidth(false
 
 GUI.skin.label.alignment = TextAnchor.UpperLeft;
 if ((!Net.IsRunning || Net.IsServer)) { // is readonly
-var newname = GUILayout.TextField(Net.MyServerInfo.name);
+var serverNameStyle = new GUIStyle(GUI.skin.textField);
+serverNameStyle.padding = new RectOffset(8, 8, 2, 2);
+var newname = GUILayout.TextField(Net.MyServerInfo.name, serverNameStyle);
 
 if (Net.MyServerInfo.name != newname) {
 Multiplayer.SetServerName(newname);
@@ -1252,20 +1245,25 @@ if (multiplayer_method_menu == 0) {
 
 GUILayout.BeginHorizontal(GUILayout.Height(fieldheight));// IP
 {
-GUILayout.Label(Lang.Get("mmct_ipportfield") + ":  ", GUILayout.Width(fieldnameswidth));
+GUILayout.Label(Lang.Get("mmct_ipportfield") + "：", GUILayout.ExpandWidth(false));
+GUILayout.Space(4 * GetMenuUIScale());
 
+var ipMinWidth = 180 * GetMenuUIScale();
+var ipMaxWidth = r2.width * 0.55f;
 GUI.skin.label.alignment = TextAnchor.UpperLeft;
 if (textfields_are_readonly) {
 if (_HIDE_IPPORT) {
-GUILayout.Label(new string('*', USERINPUT_IPPORT.Length), GUILayout.Width(ipportfieldwidth));
+GUILayout.Label(new string('*', USERINPUT_IPPORT.Length), GUILayout.MinWidth(ipMinWidth), GUILayout.MaxWidth(ipMaxWidth), GUILayout.ExpandWidth(true));
 } else {
-GUILayout.Label(USERINPUT_IPPORT, GUILayout.Width(ipportfieldwidth));
+GUILayout.Label(USERINPUT_IPPORT, GUILayout.MinWidth(ipMinWidth), GUILayout.MaxWidth(ipMaxWidth), GUILayout.ExpandWidth(true));
 }
 } else {
+var ipTextStyle = new GUIStyle(GUI.skin.textField);
+ipTextStyle.padding = new RectOffset(8, 8, 2, 2);
 if (_HIDE_IPPORT) {
-USERINPUT_IPPORT = GUILayout.PasswordField(USERINPUT_IPPORT, '*', GUILayout.Width(ipportfieldwidth));
+USERINPUT_IPPORT = GUILayout.PasswordField(USERINPUT_IPPORT, '*', ipTextStyle, GUILayout.MinWidth(ipMinWidth), GUILayout.MaxWidth(ipMaxWidth), GUILayout.ExpandWidth(true));
 } else {
-USERINPUT_IPPORT = GUILayout.TextField(USERINPUT_IPPORT, GUILayout.Width(ipportfieldwidth));
+USERINPUT_IPPORT = GUILayout.TextField(USERINPUT_IPPORT, ipTextStyle, GUILayout.MinWidth(ipMinWidth), GUILayout.MaxWidth(ipMaxWidth), GUILayout.ExpandWidth(true));
 }
 }
 GUI.skin.label.alignment = TextAnchor.UpperLeft;
@@ -1289,12 +1287,12 @@ _GUI___DirectConnect_DoSteamInfoo(r2, fieldheight, fieldnameswidth, fieldswidth)
 _GUI___DirectConnect_DoPasswordField(r2, fieldheight, fieldnameswidth, fieldswidth); // PASSWORD
 }
 
-GUILayout.Space(20 * GetMenuUIScale());
+GUILayout.Space(8 * GetMenuUIScale());
 
 
 if (Net.IsRunning && Net.IsConnecting) {
 GUILayout.Label(Lang.Get("mmct_connecting"));
-} else {
+} else if (Net.IsRunning) {
 GUILayout.BeginHorizontal(GUILayout.Height(bigheight));
 {
 if (Net.IsServer) {
@@ -1401,21 +1399,6 @@ Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
 }
 }
 
-if (Util.IsInMainMenu()) {
-if (GUILayout.Button(Lang.Get("mmct_startclient"), GUILayout.Height(bigheight))) {
-Multiplayer.DoMultiplayerStatusMessageLog("Client Connect clicked!");
-// Connect first without a password. A password-protected server rejects
-// the empty intro; Net's disconnect handler then opens PasswordPromptUI,
-// which retries with the entered value.
-string savedPassword = Multiplayer.INPUT_PASSWORD;
-Multiplayer.INPUT_PASSWORD = "";
-TransportLiteNetLib.OnWantToConnect(USERINPUT_IPPORT, Net.NetType.Client);
-Multiplayer.INPUT_PASSWORD = savedPassword;
-
-Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
-}
-}
-
 } else if (multiplayer_method_menu == 1) {
 _GUI___DirectConnect_DoSteamConnectButtons(r2, fieldheight, fieldnameswidth, fieldswidth, bigheight);
 } else {
@@ -1426,6 +1409,9 @@ GUILayout.Label("get tf outta my room im playin minecraft!!");
 }
 }
 GUILayout.EndHorizontal();
+#if FULLGAME
+LobbyReadyUI.DrawReadySummary();
+#endif
 
 {
 var ogwordwrap = GUI.skin.label.wordWrap;
@@ -1480,7 +1466,9 @@ if (String.IsNullOrEmpty(text)) {
 text = "";
 }
 
-var nwww = GUILayout.TextField(text, Multiplayer.MAX_NAME_LENGTH, GUILayout.Width(fieldswidth));
+var nameTextStyle = new GUIStyle(GUI.skin.textField);
+nameTextStyle.padding = new RectOffset(8, 8, 2, 2);
+var nwww = GUILayout.TextField(text, Multiplayer.MAX_NAME_LENGTH, nameTextStyle, GUILayout.Width(fieldswidth));
 if (nwww != USERINPUT_NAME) {
 Multiplayer.ExplicitSessionName = true;
 }
@@ -1495,6 +1483,20 @@ GUILayout.FlexibleSpace();
 
 public static string USERINPUT_IPPORT = Net.IP_LOCALHOST_IPv4 + ":" + Net.DEFAULT_PORT.ToString();
 public static string USERINPUT_NAME = "TEST_NAME";
+
+// Client-side direct IP connect. Lives in the server browser's right panel.
+internal static void ConnectClientViaIp() {
+if (!Util.IsInMainMenu() || Net.IsRunning) return;
+Multiplayer.DoMultiplayerStatusMessageLog("Client Connect clicked!");
+// Connect first without a password. A password-protected server rejects
+// the empty intro; Net's disconnect handler then opens PasswordPromptUI,
+// which retries with the entered value.
+string savedPassword = Multiplayer.INPUT_PASSWORD;
+Multiplayer.INPUT_PASSWORD = "";
+TransportLiteNetLib.OnWantToConnect(USERINPUT_IPPORT, Net.NetType.Client);
+Multiplayer.INPUT_PASSWORD = savedPassword;
+Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
+}
 
 
 

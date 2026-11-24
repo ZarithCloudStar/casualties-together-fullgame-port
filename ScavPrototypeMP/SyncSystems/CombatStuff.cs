@@ -777,10 +777,11 @@ return building_dmg;
             }
             var islocal = Util.IsBodyLocal(LastAttacker);
             var isphysactive = ScavMPBuildingSynchronizer.BuildingHasActivePhysics(b);
+            bool hostCombat = ScavMPBuildingSynchronizer.NeedsHostCombat(b);
 
             // Only animal damage is predicted locally. Renewing this window on a
             // structure hit suppresses its authoritative health until swings stop.
-            if (islocal && b.animal && b.TryGetSyncInfo(out var si))
+            if (islocal && b.animal && !hostCombat && b.TryGetSyncInfo(out var si))
                 si.SetIgnoreTimeForRoundTrip();
 
             // the client reported nothing for this swing, so nobody else applies the damage: let the vanilla code do it on the host copy.
@@ -788,7 +789,7 @@ return building_dmg;
                 return false;
             }
 
-            if (isphysactive) {
+            if (isphysactive || (hostCombat && Net.IsClient)) {
                 _LastHitBuilding = b;
                 _LastHitPos = hit.point;
                 breakTheAttackLoop = true;  // i assume piercing will never be a thing
@@ -1110,7 +1111,7 @@ return building_dmg;
                             pb.SetNetHealthSyncIgnoreTime();
                         }
 
-                    } else if (_LastHitBuilding != null && !_LastHitBuilding.animal) {
+                    } else if (_LastHitBuilding != null && (!_LastHitBuilding.animal || ScavMPBuildingSynchronizer.NeedsHostCombat(_LastHitBuilding))) {
                         // The host publishes structural health. Keep immediate
                         // impact feedback without editing the replica's health.
                         if (attackerIsLocal)
@@ -1139,9 +1140,13 @@ return building_dmg;
                                 victim_netid = new AnyObjectNetId(_LastHitLimb);
                             }
                         } else if (_LastHitBuilding != null) {
-                            if (NetObjectRegistry.TryGetSyncInfoOrRegister(_LastHitBuilding, out var victim_si)) {
+                            bool hostCombat = ScavMPBuildingSynchronizer.NeedsHostCombat(_LastHitBuilding);
+                            bool registered = hostCombat
+                                ? ScavMPBuildingSynchronizer.TryGetCombatSync(_LastHitBuilding, out var victim_si)
+                                : NetObjectRegistry.TryGetSyncInfoOrRegister(_LastHitBuilding, out victim_si);
+                            if (registered) {
                                 victim_netid = new AnyObjectNetId(victim_si);
-                                worldHit = !_LastHitBuilding.animal;
+                                worldHit = hostCombat || !_LastHitBuilding.animal;
                                 victim_si.relaxed_combat_sync = true;
                                 if (!worldHit) victim_si.SetIgnoreTimeForRoundTrip();
                             }
@@ -1377,7 +1382,8 @@ return building_dmg;
 
                 bool inRange = KM.DistanceCheck(plr.body, building_si, 15);
                 float healthBefore = building_si.building != null ? building_si.building.GetHealth() : -1f;
-                if (inRange) {
+                if (inRange && (!ScavMPBuildingSynchronizer.NeedsHostCombat(building_si.building)
+                    || (!building_si.building.cantHit && healthBefore >= 0.5f))) {
 #if DEBUG
                     log.l($"{plr}  CALLED DamageBuilding ");
 #endif
@@ -1968,7 +1974,7 @@ shotsPerFire = gst.shotsPerFire;
 var npc = body.GetNetBody();
 var islocal = Util.IsBodyLocal(body);
 
-List<SyncInfo> hitBuildings = new(); // guranteed to be only physics active buildings
+List<SyncInfo> hitBuildings = new(); // Dynamic buildings and explicitly host-owned combat targets.
 List<Limb> hitLimbs = new();
 
 
@@ -2054,7 +2060,7 @@ if (hitLimbs.Count > 0) log.l($"GUN SHOOT, HIT LIMBS: {String.Join(" ", hitLimbs
 // hit body count (max 30)
 // player ids and limb index
 // hit building count (max 10)
-// buildings syncids (they must be physics active, like monsters)
+// building syncids
 
 
 
@@ -2076,7 +2082,7 @@ writer.Put(new LimbNetId(limb));
 
 byte hitbuildingsamount = (byte)Math.Min(hitBuildings.Count, 40);
 writer.Put(hitbuildingsamount);
-for (byte i = 0; i < hitbuildingsamount; i++) {// theyre guranteed to be registered and physics active
+for (byte i = 0; i < hitbuildingsamount; i++) {
 var b = hitBuildings.ElementAt(i);
 writer.Put(b.syncId);
 }
@@ -2192,12 +2198,13 @@ limbs_hit = Util.LimitMaxRepeats(limbs_hit, Math.Min(gst.shotsPerFire, MAX_HITS_
 List<SyncInfo> buildings_hit = new List<SyncInfo>();
 
 reader.Get(out byte hit_buildings_amount);
-for (byte i = 0; i < hit_buildings_amount; i++) {// theyre guranteed to be registered and physics active
+for (byte i = 0; i < hit_buildings_amount; i++) {
 
 reader.Get(out knetid building_syncid);
 
 if (NetObjectRegistry.TryGetSyncInfo(building_syncid, out var bsi)) {
-if (bsi.IsBuilding() && NetObjectRegistry.IsObjectDynamic(bsi.go)) {
+if (bsi?.go != null && bsi.IsBuilding() &&
+    (NetObjectRegistry.IsObjectDynamic(bsi.go) || ScavMPBuildingSynchronizer.NeedsHostCombat(bsi.building))) {
 if (bsi.building.cantHit) {
 Plugin.log.LogWarning($"SUS: PlayerBodyShoot: {plr} -> They hit a building with the cantHit flag on.");
 } else {
@@ -2370,20 +2377,20 @@ if (!Net.IsRunning) return false;
 if (SuppressBodyDamage) return true;
 
 
-if (ScavMPBuildingSynchronizer.BuildingHasActivePhysics(building)) {
+bool hostCombat = ScavMPBuildingSynchronizer.NeedsHostCombat(building);
+if (hostCombat || ScavMPBuildingSynchronizer.BuildingHasActivePhysics(building)) {
 
-if (NetObjectRegistry.TryGetSyncInfo(building.gameObject, out var si)) {
+bool registered = hostCombat && LastActiveShooter != null && !HitOnlyStatic
+    ? ScavMPBuildingSynchronizer.TryGetCombatSync(building, out var si)
+    : NetObjectRegistry.TryGetSyncInfo(building.gameObject, out si);
+if (registered) {
 if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(building.transform.position, $"Shoot: Noted hit building", Color.green);
 
 JustHitBuildings.Add(si);
 }
 
-if (LastActiveShooter != null) {
-return true; // dont damage it because im doing it in the gun fire patch
-}
-
-if (HitOnlyStatic) {
-return true;// dont damage it because i wanna only do the effects
+if (LastActiveShooter != null || HitOnlyStatic || (hostCombat && Net.IsClient)) {
+return true; // Reported player hits and client replays use host health.
 }
 }
 
@@ -2560,11 +2567,16 @@ dmg.Key.SetNetHealthSyncIgnoreTime();
 }
 
 foreach (var building in hitBuildings) {
+var target = building.building;
+if (target == null) continue;
+bool hostCombat = ScavMPBuildingSynchronizer.NeedsHostCombat(target);
+if (hostCombat && (!Net.IsServer || target.cantHit || target.GetHealth() < 0.5f)) continue;
 
 var dmg = TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageBuilding(building.building, gst);
 
 if (Net.IsServer) {
-//netObjectRegistry.Server_QueueSync(building);
+if (hostCombat && building.go != null && !building.IsDestroyed)
+    building.WriteObjectIntoPacket();
 } else {
 if (attackerIsLocal)
 building.SetIgnoreTimeForRoundTrip();

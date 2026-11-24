@@ -50,6 +50,8 @@ foreach ($file in Get-ChildItem $managed -Recurse -Filter '*.dll' | Where-Object
 $libsSkip = @('opus.dll','steam_api64.dll')
 if ($isFullgame) { $libsSkip += 'Steamworks.NET.dll' }
 foreach ($file in Get-ChildItem (Join-Path $repo 'libs\dlls') -Filter '*.dll' | Where-Object Name -NotIn $libsSkip) { $paths[$file.Name] = $file.FullName }
+# Match the project's nested CUCoreLib reference used by the skin sources.
+$paths['CUCoreLib.dll'] = Join-Path $repo 'libs\dlls\CUCoreLib\CUCoreLib.dll'
 foreach ($file in Get-ChildItem 'F:\cu-port\CU_Fullgame\BepInEx\core' -Filter '*.dll' | Where-Object Name -NE '0Harmony20.dll') {
     $paths[$file.Name] = $file.FullName
 }

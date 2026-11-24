@@ -741,6 +741,9 @@ public class SpriteReplacerPlugin : MonoBehaviour {
 
         foreach (string file in Directory.GetFiles(path, "*.png")) {
             string spriteName = Path.GetFileNameWithoutExtension(file);
+            // Match the package's Head > Body > WoundView precedence for tails.
+            if (subfolder == "WoundView" && SkinTailAlignment.IsTailName(spriteName) && LoadedSprites.ContainsKey(spriteName))
+                continue;
             byte[] data = File.ReadAllBytes(file);
             Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
             tex.filterMode = FilterMode.Point;
@@ -750,9 +753,7 @@ public class SpriteReplacerPlugin : MonoBehaviour {
                 continue;
             }
 
-            Sprite sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 8f);
-            sprite.name = spriteName;
-            LoadedSprites[spriteName] = sprite;
+            LoadedSprites[spriteName] = SkinImporter.CreateSourceSprite(tex, spriteName);
 
             if (subfolder == "WoundView" && HasColorPixels(tex)) {
                 ColoredWoundSprites.Add(spriteName);
@@ -848,14 +849,8 @@ public class SpriteReplacerPlugin : MonoBehaviour {
             return;
         }
 
-        SpriteRenderer sr = tail.GetComponent<SpriteRenderer>();
-        if (sr != null && sr.sprite != null) {
-            DefaultSpriteExport.Capture(sr.sprite);
-
-            if (LoadedSprites.TryGetValue(sr.sprite.name, out Sprite replacement)) {
-                sr.sprite = replacement;
-            }
-        }
+        if (tail.TryGetComponent(out SpriteRenderer renderer) && renderer.sprite != null)
+            SkinSpriteReplacer.Attach(renderer, LoadedSprites).Apply();
     }
 
     public static void ApplyReplacementToFace(FacialExpression face) {

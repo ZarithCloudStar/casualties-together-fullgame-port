@@ -9,6 +9,12 @@ public sealed class SkinSpriteReplacer : MonoBehaviour {
     public bool Active { get; private set; }
     public IReadOnlyDictionary<string, Sprite> Sprites { get; private set; }
 
+    internal bool IsTail { get; private set; }
+    private Sprite _tailSource;
+    private Sprite _tailStock;
+    private Sprite _alignedTail;
+    private Texture2D _tailPadding;
+
     public static SkinSpriteReplacer Attach(SpriteRenderer renderer,
         IReadOnlyDictionary<string, Sprite> sprites) {
         SkinSpriteReplacer replacer = renderer.GetComponent<SkinSpriteReplacer>();
@@ -35,6 +41,7 @@ public sealed class SkinSpriteReplacer : MonoBehaviour {
         }
 
         replacer.Renderer = renderer;
+        replacer.IsTail = renderer.GetComponent<TailScript>() != null;
         replacer.Sprites = sprites;
         return replacer;
     }
@@ -51,6 +58,11 @@ public sealed class SkinSpriteReplacer : MonoBehaviour {
         }
 
         Sprite stock = ResolveStock();
+        if (IsTail && stock != null) {
+            Renderer.sprite = ReplaceTail(stock);
+            return;
+        }
+
         if (stock != null) {
             Renderer.sprite = stock;
         }
@@ -96,12 +108,40 @@ public sealed class SkinSpriteReplacer : MonoBehaviour {
         return null;
     }
 
+    internal Sprite ReplaceTail(Sprite stock) {
+        if (stock == _alignedTail && _alignedTail != _tailStock) return stock;
+        if (Sprites == null || !Sprites.TryGetValue(stock.name, out var source) || source == null) {
+            ReleaseTail();
+            return stock;
+        }
+
+        if (_tailSource != source || _tailStock != stock || _alignedTail == null) {
+            ReleaseTail();
+            _tailSource = source;
+            _tailStock = stock;
+            _alignedTail = SkinTailAlignment.Align(stock, source, out _tailPadding);
+        }
+        return _alignedTail;
+    }
+
+    private void ReleaseTail() {
+        if (_alignedTail != null && _alignedTail != _tailStock) Destroy(_alignedTail);
+        if (_tailPadding != null) Destroy(_tailPadding);
+        _alignedTail = null;
+        _tailPadding = null;
+        _tailSource = null;
+        _tailStock = null;
+    }
+
     private static bool IsDestroyed(Sprite sprite) {
         // unity fake-null for destroyed objects.
         return sprite == null;
     }
 
-    private void OnDestroy() => Restore();
+    private void OnDestroy() {
+        Restore();
+        ReleaseTail();
+    }
 }
 
 [HarmonyPatch(typeof(SpriteRenderer), nameof(SpriteRenderer.sprite), MethodType.Setter)]
@@ -111,6 +151,11 @@ internal static class SkinSpritePatch {
 
         SkinSpriteReplacer replacer = __instance.GetComponent<SkinSpriteReplacer>();
         if (replacer == null || !replacer.Active || value == null || replacer.Sprites == null) {
+            return;
+        }
+
+        if (replacer.IsTail) {
+            value = replacer.ReplaceTail(value);
             return;
         }
 

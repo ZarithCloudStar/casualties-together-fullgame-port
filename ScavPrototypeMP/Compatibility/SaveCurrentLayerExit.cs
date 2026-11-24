@@ -76,8 +76,11 @@ internal static class SaveCurrentLayerExit {
         bool enabled = GUI.enabled;
         try {
             GUI.enabled = enabled && !IsSaving;
-            if (GUILayout.Button(new GUIContent(Text("save_current_exit_button", "Save and exit (current layer)"),
-                Text("save_current_exit_hint", "Continue from the beginning of this layer when you load.")), GUILayout.Height(height))) Request();
+            var content = new GUIContent(Text("save_current_exit_button", "Save and exit (current layer)"),
+                Text("save_current_exit_hint", "Continue from the beginning of this layer when you load."));
+            // height <= 0 lets the side panel use the same natural button height as its other actions.
+            bool clicked = height > 0f ? GUILayout.Button(content, GUILayout.Height(height)) : GUILayout.Button(content);
+            if (clicked) Request();
         } finally { GUI.enabled = enabled; }
     }
 

@@ -1,5 +1,6 @@
 using HarmonyLib;
 using CasualtiesTogetherUtils;
+using KrokV5Optimization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -344,7 +345,16 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
 
         return true;
     }
-    static void Postfix(ref bool __state) {
+    static void Postfix(ref bool __state, bool __runOriginal) {
+        // The loader writes liquid fields directly, after the item's Awake has run.
+        if (__runOriginal && __state && PlayerCamera.main != null && PlayerCamera.main.body != null) {
+            foreach (var item in PlayerCamera.main.body.GetComponentsInChildren<Item>(true)) {
+                if (item.TryGetComponent(out WaterContainerItem water))
+                    LiquidSanitize.Clean(water, "SaveSystem.TryLoadGame");
+                if (item.TryGetComponent(out NonDescriptCan can))
+                    LiquidSanitize.Clean(can);
+            }
+        }
         // the per-player load. the lobby walk calls back in with force set, and this is the pass that applied the body.
         if (force)
             PlayerCheckpoint.ReadCrafted(SavesystemPatch.savedatapathreplacement);
