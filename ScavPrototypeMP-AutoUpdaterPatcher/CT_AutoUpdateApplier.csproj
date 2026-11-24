@@ -13,8 +13,9 @@
 		<TargetFramework>net48</TargetFramework>
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
 		<AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+		<LangVersion>latest</LangVersion>
 		<Version>1.0.3</Version>
-		<AssemblyName>autoupdater_patcher</AssemblyName>
+		<AssemblyName>TogetherAutoUpdaterPatcher</AssemblyName>
 		<Product>autoupdater_patcher</Product>
 		<Authors>autoupdater_patcher</Authors>
 		<PackageId>autoupdater_patcher</PackageId>

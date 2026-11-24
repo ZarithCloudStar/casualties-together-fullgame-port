@@ -7,6 +7,17 @@ KNOWN ISSUES:
  - This mod is ass :crying_emoji:
  
 
+ --- 5.5.4-cu-port-bugfix6 --- 24.11.2026 --- GCE 配套 + 通用模组同步 ---
+- 游戏内容扩展与优化配套
+	新增 GameContentExpansion 桥接（API v2）：规则页底部管理区、Teams 后的「按分队在不同位置降落」、玩家快照/传送/改色。
+	TeamSpawnPositions 只同步规则值；OtherMods 与 TeamSpawns 的实际行为在 GCE 内实现。
+- 通用模组同步
+	入房「模组不同步」提示改为：无视并继续 / 确认 / 取消。
+	确认打开居中模组列表，方形勾选；勾选后下载，SHA256/大小校验；已加载的写 .new，下次启动由 Patcher 应用。
+	所有 BepInEx/plugins 下的插件都可勾选；Together 本体与更新器除外。
+- 版本
+	网络版本升级 V1.0.2_MPv5.5.4-cu-port-fix6；与 bugfix5 不兼容。
+
  --- 5.5.4-cu-port-bugfix5 --- 24.11.2026 --- 离线联机大厅修复 ---
 - 联机大厅
 	Steam 未加载时页面不再整页隐藏，保留 IP 直连输入框与“连接客户端”，离线玩家可照常加入 IP 房间

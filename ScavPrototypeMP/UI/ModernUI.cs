@@ -87,8 +87,9 @@ multiplayerTabButton = inst;
 var newbutton = inst.GetComponent<Button>();
 var buttonrect = newbutton.transform as RectTransform;
 sm.buttons.Add(inst);
-var index = sm.buttons.Count();
-multiplayerSettingsMenuTabIndex = index;
+// Keep the sentinel out of the real button range. Other plugins may append
+// their own native tabs after this one; SelectTab(100) must never select one.
+multiplayerSettingsMenuTabIndex = 100;
 newbutton.onClick.RemoveAllListeners();
 
 buttonrect.anchoredPosition = lastPos + asV2 * 0.5f;
