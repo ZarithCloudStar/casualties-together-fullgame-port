@@ -29,4 +29,8 @@ internal enum PortMsgId : ushort {
     CLIENT_SpeciesSwap = 281,
     SERVER_RequestModDetails = 282,
     CLIENT_ModDetails = 283,
+    SERVER_ModSyncRequest = 284,
+    CLIENT_ModSyncStart = 285,
+    CLIENT_ModSyncChunk = 286,
+    CLIENT_ModSyncError = 287,
 }

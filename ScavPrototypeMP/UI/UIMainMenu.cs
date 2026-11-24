@@ -1764,9 +1764,24 @@ if (groups.Count == 0) {
                 log.error($"_GUI___ConnectionSecondPanel_ContentRender_RenderRulesList: {fld}\n{e}");
             }
             GUILayout.EndHorizontal();
+            if (!searching) {
+                try {
+                    Together.Integration.GameContentExpansionBridge.DrawRuleRowAfter?.Invoke(
+                        fld.Name, _GUI____RenderRuleField_last_max_width, can_edit);
+                } catch (Exception e) {
+                    log.error("GameContentExpansion rule row: " + e);
+                }
+            }
         }
     }
     _GUI____RenderRuleField_last_max_width = Mathf.Min(r2.width * 0.5f, _GUI____RenderRuleField_cur_max_width);
+}
+if (!searching) {
+    try {
+        Together.Integration.GameContentExpansionBridge.DrawRulesBottomSection?.Invoke();
+    } catch (Exception e) {
+        log.error("GameContentExpansion rules section: " + e);
+    }
 }
 GUILayout.EndScrollView();
 
@@ -1801,6 +1816,13 @@ internal static int _GUI____RenderRuleField_PresetChosen = 0;
 internal static string _GUI____RenderRuleField_PresetName = "";
 static float _GUI____RenderRuleField_last_max_width = 300;
 static float _GUI____RenderRuleField_cur_max_width = 0;
+
+// GCE's native-looking extra row reports its label width here so the whole
+// rules list aligns on the next frame.
+internal static void ReportExternalRuleLabelWidth(float width) {
+    if (width > _GUI____RenderRuleField_cur_max_width)
+        _GUI____RenderRuleField_cur_max_width = width;
+}
 
 static void _GUI____RenderRuleField(FieldInfo fld, bool can_edit, in Rect r2) {
 

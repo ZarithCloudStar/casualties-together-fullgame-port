@@ -183,6 +183,9 @@ public bool CharacterYapPublic = true; // broadcast whatever the character is fe
 
 
 public bool Teams = false;
+// Synced owner flag for GCE's first-layer team spawn behavior. Together only
+// carries the value; GCE implements the sites and teleports.
+public bool TeamSpawnPositions = false;
 public bool PVP = false;
 public bool PVPCombatDismember = true;
 public float PVPMoodDebuff = 0.5f;
@@ -1318,7 +1321,9 @@ return false;
 
 if (!userHasMasterKey) {
 if (Multiplayer.SERVER_TOGGLE_ENFORCE_MODLIST && !userHasMasterKey) {
-if (!(new HashSet<string>(GetModGUIDs()).SetEquals(userInfo.modlist))) {
+var hostRequired = GetRequiredModGUIDs();
+var clientRequired = RequiredOnly(userInfo.modlist).ToArray();
+if (!(new HashSet<string>(hostRequired).SetEquals(clientRequired))) {
 #if FULLGAME
                         if (Util.GameIsFull()) {
                             var details = ModListDiagnostics.LocalDetails();
@@ -1814,6 +1819,37 @@ return l;
 [MethodImpl(MethodImplOptions.AggressiveInlining)]
 public static string[] GetModGUIDs() {
 return GetBepinPlugins().Select(x => x.Metadata.GUID).ToArray();
+}
+
+// Plugins under BepInEx/plugins can be served by the companion mod-sync flow.
+// They are excluded from the strict required set so a client can join, see the
+// sync dialog and choose what to download. Together itself and its updater are
+// already removed by GetBepinPlugins.
+public static HashSet<string> SyncableModGUIDs() {
+var result = new HashSet<string>(StringComparer.Ordinal);
+try {
+var root = Path.GetFullPath(Paths.PluginPath)
+.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+foreach (var info in GetBepinPlugins()) {
+if (info?.Metadata == null || string.IsNullOrEmpty(info.Location)) continue;
+string full;
+try { full = Path.GetFullPath(info.Location); } catch { continue; }
+if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+if (!full.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) continue;
+result.Add(info.Metadata.GUID);
+}
+} catch { }
+return result;
+}
+
+public static string[] GetRequiredModGUIDs() {
+var syncable = SyncableModGUIDs();
+return GetModGUIDs().Where(guid => !syncable.Contains(guid)).ToArray();
+}
+
+public static IEnumerable<string> RequiredOnly(IEnumerable<string> guids) {
+var syncable = SyncableModGUIDs();
+return (guids ?? Array.Empty<string>()).Where(guid => !syncable.Contains(guid));
 }
 
 

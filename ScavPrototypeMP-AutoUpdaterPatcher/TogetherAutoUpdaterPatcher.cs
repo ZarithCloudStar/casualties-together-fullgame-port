@@ -1,9 +1,9 @@
-using BepInEx.Logging;
 using Mono.Cecil;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Security.Cryptography;
 
 namespace Together.AutoUpdate;
 
@@ -21,6 +21,46 @@ public static class TogetherAutoUpdaterPatcher {
     public static void Patch(AssemblyDefinition assembly) {
         try { Apply(); }
         catch (Exception ex) { WriteLog("FATAL " + ex); }
+        try { ApplyPendingModSync(); }
+        catch (Exception ex) { WriteLog("FATAL mod sync: " + ex); }
+    }
+
+    // ModSync writes target.dll.new + target.dll.new.sha256 when the plugin is
+    // already loaded. Patchers run before Chainloader, so this is the safe point
+    // to verify and replace the target file.
+    static void ApplyPendingModSync() {
+        var pluginsRoot = Path.Combine(GameRoot, "BepInEx", "plugins");
+        if (!Directory.Exists(pluginsRoot)) return;
+        int applied = 0;
+        foreach (string newPath in Directory.GetFiles(pluginsRoot, "*.dll.new", SearchOption.AllDirectories)) {
+            string sidecar = newPath + ".sha256";
+            if (!File.Exists(sidecar)) {
+                WriteLog("mod sync: missing sha sidecar " + newPath);
+                continue;
+            }
+            string target = newPath.Substring(0, newPath.Length - 4);
+            try {
+                string expected = File.ReadAllText(sidecar).Trim().ToLowerInvariant();
+                if (expected.Length != 64) {
+                    WriteLog("mod sync: invalid sha sidecar " + sidecar);
+                    continue;
+                }
+                string actual = BitConverter.ToString(SHA256.Create().ComputeHash(File.ReadAllBytes(newPath)))
+                    .Replace("-", "").ToLowerInvariant();
+                if (!string.Equals(expected, actual, StringComparison.Ordinal)) {
+                    WriteLog("mod sync: sha mismatch, skipped " + newPath);
+                    continue;
+                }
+                if (File.Exists(target)) File.Delete(target);
+                File.Move(newPath, target);
+                File.Delete(sidecar);
+                WriteLog("mod sync applied " + target);
+                applied++;
+            } catch (Exception ex) {
+                WriteLog("mod sync failed " + newPath + ": " + ex.Message);
+            }
+        }
+        if (applied > 0) WriteLog("Applied " + applied + " pending mod sync file(s).");
     }
 
     static void Apply() {
