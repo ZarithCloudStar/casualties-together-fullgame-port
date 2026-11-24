@@ -23,6 +23,8 @@ internal static class JoinModNotice {
     static readonly Dictionary<knetid, ScavPlayer> notified = new();
     internal static bool IsOpen => !string.IsNullOrEmpty(notice);
 
+    internal static string T(string key, string fallback) => Lang.Get(key, true) ?? fallback;
+
     internal static void Reset() {
         requested = false;
         notified.Clear();
@@ -108,8 +110,8 @@ internal static class JoinModNotice {
             notice = ModListDiagnostics.Describe(host, client, hostDetails, ModListDiagnostics.LocalDetails(), enforced);
             var versionText = ModSync.DescribeVersionDifferences(manifest);
             if (!string.IsNullOrEmpty(versionText)) notice += "\n\n" + versionText;
-            notice += "\n\n可以从主机同步缺失或版本不同的插件；带资源或依赖的模组可能需要手动安装。" +
-                      "\n选择「无视并继续」不会改变本机文件。";
+            notice += "\n\n" + T("mod_sync_hint",
+                "可以从主机同步缺失或版本不同的插件；带资源或依赖的模组可能需要手动安装。\n选择「无视并继续」不会改变本机文件。");
             if (truncated || client.Length > MaxPlugins)
                 notice += "\n插件超过显示上限，请同时核对完整插件清单。";
             scroll = Vector2.zero;
@@ -149,6 +151,10 @@ internal static class JoinModNotice {
 
     internal static void Draw() {
         if (!IsOpen) return;
+        if (ModSyncUI.DisclaimerOpen) {
+            ModSyncUI.DrawDisclaimer();
+            return;
+        }
         if (ModSyncUI.Open) {
             ModSyncUI.Draw();
             return;
@@ -162,7 +168,8 @@ internal static class JoinModNotice {
         GUI.color = color;
         GUI.Box(box, "");
         var title = new GUIStyle(GUI.skin.label) { fontSize = 24, alignment = TextAnchor.MiddleCenter };
-        GUI.Label(new Rect(box.x + 12, box.y + 10, width - 24, 38), "模组不同步", title);
+        GUI.Label(new Rect(box.x + 12, box.y + 10, width - 24, 38),
+            T("mod_sync_title", "模组不同步"), title);
         var area = new Rect(box.x + 18, box.y + 56, width - 36, height - 156);
         var style = new GUIStyle(GUI.skin.label) {
             fontSize = 18, wordWrap = true, richText = false,
@@ -178,17 +185,48 @@ internal static class JoinModNotice {
             fontSize = 18, fixedHeight = 0, alignment = TextAnchor.MiddleCenter,
             padding = new RectOffset(8, 8, 4, 4), wordWrap = false
         };
-        float gap = 10f;
-        float buttonWidth = (width - 36f - gap * 2f) / 3f;
-        float buttonY = box.yMax - 68f;
-        if (GUI.Button(new Rect(box.x + 18, buttonY, buttonWidth, 52), "无视并继续", button)) Close();
-        if (GUI.Button(new Rect(box.x + 18 + buttonWidth + gap, buttonY, buttonWidth, 52), "确认", button)) {
-            ModSyncUI.OpenList();
-        }
-        if (GUI.Button(new Rect(box.x + 18 + (buttonWidth + gap) * 2f, buttonY, buttonWidth, 52), "取消", button)) {
+        var labels = new[] {
+            T("mod_sync_ignore", "无视并继续"),
+            T("mod_sync_confirm", "同步主机模组"),
+            T("mod_sync_disconnect", "断开连接"),
+        };
+        var rects = LayoutButtons(box, box.yMax - 68f, 52f, button, labels);
+        if (GUI.Button(rects[0], labels[0], button)) Close();
+        if (GUI.Button(rects[1], labels[1], button)) ModSyncUI.OpenDisclaimer();
+        if (GUI.Button(rects[2], labels[2], button)) {
             Close();
             Multiplayer.ShutdownNetwork();
         }
+    }
+
+    // Width follows the actual text length; the row is centered and shrinks
+    // proportionally if the three labels cannot fit.
+    internal static Rect[] LayoutButtons(Rect box, float y, float height, GUIStyle style, string[] labels) {
+        const float gap = 10f;
+        float available = Mathf.Max(1f, box.width - 36f);
+        var widths = new float[labels.Length];
+        float total = 0f;
+        for (int i = 0; i < labels.Length; i++) {
+            widths[i] = Mathf.Max(96f, style.CalcSize(new GUIContent(labels[i])).x + 30f);
+            total += widths[i];
+        }
+        total += gap * (labels.Length - 1);
+        if (total > available) {
+            float fixedGaps = gap * (labels.Length - 1);
+            float factor = Mathf.Max(0.5f, (available - fixedGaps) / Mathf.Max(1f, total - fixedGaps));
+            total = fixedGaps;
+            for (int i = 0; i < widths.Length; i++) {
+                widths[i] *= factor;
+                total += widths[i];
+            }
+        }
+        var rects = new Rect[labels.Length];
+        float x = box.center.x - total * 0.5f;
+        for (int i = 0; i < labels.Length; i++) {
+            rects[i] = new Rect(x, y, widths[i], height);
+            x += widths[i] + gap;
+        }
+        return rects;
     }
 }
 #endif

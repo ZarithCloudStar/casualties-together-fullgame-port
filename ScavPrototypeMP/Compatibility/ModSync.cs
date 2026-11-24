@@ -181,10 +181,13 @@ internal static class ModSync {
             if (!Chainloader.PluginInfos.TryGetValue(entry.Guid, out var info)) continue;
             string clientVersion = info.Metadata?.Version?.ToString() ?? "";
             if (string.Equals(clientVersion, entry.Version, StringComparison.Ordinal)) continue;
-            lines.Add("- " + (string.IsNullOrWhiteSpace(entry.Name) ? entry.Guid : entry.Name)
-                + "：本机 " + clientVersion + "，主机 " + entry.Version);
+            string line = Lang.Get("mod_sync_version_line", true) ?? "- {0}：本机 {1}，主机 {2}";
+            lines.Add(string.Format(line,
+                string.IsNullOrWhiteSpace(entry.Name) ? entry.Guid : entry.Name,
+                clientVersion, entry.Version));
         }
-        return lines.Count == 0 ? "" : "版本不同：\n" + string.Join("\n", lines);
+        string header = Lang.Get("mod_sync_version_header", true) ?? "版本不同：";
+        return lines.Count == 0 ? "" : header + "\n" + string.Join("\n", lines);
     }
 
     internal static void Begin(Entry entry) {
