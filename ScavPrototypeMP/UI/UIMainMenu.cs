@@ -1748,8 +1748,14 @@ if (groups.Count == 0) {
         var category = group.category;
         var fields = group.fields;
         bool open = searching || RuleCategories.IsExpanded(category);
-        int changed = fields.Count(f => !RuleCategories.IsDefault(f, f.GetValue(Multiplayer.rules)));
-        string header = string.Format("{0} {1} ({2}{3})", open ? "[-]" : "[+]", category.Title, fields.Count,
+        // GCE draws an extra native-looking row after Teams; include it in the
+        // category count while the row hook is registered (module 1 on).
+        bool hasGceTeamRow = category.ruleNames.Contains(nameof(MultiplayerGameRules.Teams))
+            && Together.Integration.GameContentExpansionBridge.DrawRuleRowAfter != null;
+        int ruleCount = fields.Count + (hasGceTeamRow ? 1 : 0);
+        int changed = fields.Count(f => !RuleCategories.IsDefault(f, f.GetValue(Multiplayer.rules)))
+            + (hasGceTeamRow && Together.Integration.GameContentExpansionBridge.TeamSpawnPositions ? 1 : 0);
+        string header = string.Format("{0} {1} ({2}{3})", open ? "[-]" : "[+]", category.Title, ruleCount,
             changed > 0 ? ", " + (Lang.Get("mmct_rules_changed", true) ?? "changed") + ": " + changed : "");
         if (GUILayout.Button(header) && !searching) {
             Util.PlayUISound(PlayerCamera.UISoundType.MiniClick);
