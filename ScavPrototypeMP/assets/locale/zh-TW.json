@@ -161,6 +161,7 @@
   "casualtiestogether_mmct_disconnect_server": "停止伺服器",
   "casualtiestogether_mmct_last_status_msg": "最後狀態訊息：",
   "casualtiestogether_mmct_directconnecttitle": "直接連接至 IP",
+  "casualtiestogether_mmct_offline_hint": "Steam 未載入：無法瀏覽聯機大廳列表，但仍可透過 IP 直連加入房間。建立 IP 房間請到「房間管理」。",
   "casualtiestogether_mmct_gotorunsettings": "冒險選單",
   "casualtiestogether_mmct_gotomainmenu": "回到主選單",
   "casualtiestogether_mmct_colornotvalid": "無法使用！",

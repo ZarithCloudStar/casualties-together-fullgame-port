@@ -294,7 +294,9 @@ static void _GUI_RenderServerBrowser(Rect r) {
         GUI.skin.label.alignment = TextAnchor.UpperLeft;
 #if RELEASE
         if( !KSteam.Loaded ) {
-            UIBullshit._GUI_BiggerLabel("Steam not loaded", 1.4f);
+            // Offline builds still need this page: IP direct connect lives here,
+            // and hiding the whole tab locked those players out of joining rooms.
+            _GUI_RenderOfflineDirectConnect();
             return;
         }
 #endif
@@ -782,6 +784,43 @@ static void _GUI_RenderServerBrowser(Rect r) {
 
 
     }
+
+// Shown when Steam is not loaded. Only the IP direct-connect panel is useful
+// without Steam lobbies, but it must stay reachable or offline players cannot
+// join a room at all.
+static void _GUI_RenderOfflineDirectConnect() {
+        GUI.skin.label.alignment = TextAnchor.UpperCenter;
+        UIBullshit._GUI_BiggerLabel(Lang.Get("mmtb_serverbrowser"), 1.4f);
+        GUI.skin.label.alignment = TextAnchor.UpperLeft;
+
+        GUILayout.Space(16 * GetMenuUIScale());
+        var hintStyle = new GUIStyle(GUI.skin.label) { wordWrap = true };
+        GUILayout.Label(Lang.Get("mmct_offline_hint"), hintStyle);
+
+        GUILayout.Space(20 * GetMenuUIScale());
+        GUILayout.Label(Lang.Get("mmct_directconnecttitle"));
+        GUILayout.Space(6 * GetMenuUIScale());
+        GUILayout.BeginHorizontal();
+        {
+            GUILayout.Label(Lang.Get("mmct_ipportfield") + "：", GUILayout.ExpandWidth(false));
+            GUILayout.Space(4 * GetMenuUIScale());
+            var ipTextStyle = new GUIStyle(GUI.skin.textField);
+            ipTextStyle.padding = new RectOffset(8, 8, 2, 2);
+            UIMainMenu.USERINPUT_IPPORT = GUILayout.TextField(UIMainMenu.USERINPUT_IPPORT, ipTextStyle, GUILayout.MinWidth(80 * GetMenuUIScale()), GUILayout.MaxWidth(320 * GetMenuUIScale()));
+            GUILayout.FlexibleSpace();
+        }
+        GUILayout.EndHorizontal();
+        GUILayout.Space(6 * GetMenuUIScale());
+        {
+            var og_ipconnect_enabled = GUI.enabled;
+            GUI.enabled = og_ipconnect_enabled && !Multiplayer.IsNetworkActiveOrIsInGame();
+            if (GUILayout.Button(Lang.Get("mmct_startclient"), GUILayout.Width(260 * GetMenuUIScale()), GUILayout.Height(40 * GetMenuUIScale()))) {
+                UIMainMenu.ConnectClientViaIp();
+            }
+            GUI.enabled = og_ipconnect_enabled;
+        }
+}
+
 public static int _LOBBY_ENTRY_HEIGHT = 90;
 public static int _LOBBY_ERROR_HEIGHT = 30;
 
