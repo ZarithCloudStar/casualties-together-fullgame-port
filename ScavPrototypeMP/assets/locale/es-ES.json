@@ -161,6 +161,7 @@
   "casualtiestogether_mmct_disconnect_server": "Cerrar servidor",
   "casualtiestogether_mmct_last_status_msg": "Último mensaje de estado:",
   "casualtiestogether_mmct_directconnecttitle": "Conexión directa por IP",
+  "casualtiestogether_mmct_offline_hint": "Steam no está cargado: la lista de salas no está disponible, pero aún puedes unirte por conexión directa IP. Para crear una sala IP, usa Gestión de salas.",
   "casualtiestogether_mmct_gotorunsettings": "Menú de partida",
   "casualtiestogether_mmct_gotomainmenu": "Volver al menú principal",
   "casualtiestogether_mmct_colornotvalid": "¡Color no válido!",

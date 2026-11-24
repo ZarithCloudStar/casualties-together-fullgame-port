@@ -173,6 +173,7 @@
   "casualtiestogether_mmct_disconnect_server": "Stop Server",
   "casualtiestogether_mmct_last_status_msg": "Last Status Message:",
   "casualtiestogether_mmct_directconnecttitle": "Direct Connect over IP",
+  "casualtiestogether_mmct_offline_hint": "Steam is not loaded: the lobby list is unavailable, but you can still join a room by IP direct connect. To create an IP room, use Room Management.",
   "casualtiestogether_mmct_gotorunsettings": "Run menu",
   "casualtiestogether_mmct_gotomainmenu": "Go back to Main Menu",
   "casualtiestogether_mmct_colornotvalid": "Not valid!",

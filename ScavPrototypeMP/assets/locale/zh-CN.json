@@ -164,6 +164,7 @@
   "casualtiestogether_mmct_disconnect_server": "停止服务器",
   "casualtiestogether_mmct_last_status_msg": "上一条状态消息：",
   "casualtiestogether_mmct_directconnecttitle": "通过 IP 直接连接",
+  "casualtiestogether_mmct_offline_hint": "Steam 未加载：无法浏览联机大厅列表，但仍可通过 IP 直连加入房间。创建 IP 房间请到「房间管理」。",
   "casualtiestogether_mmct_gotorunsettings": "本局菜单",
   "casualtiestogether_mmct_gotomainmenu": "返回主菜单",
   "casualtiestogether_mmct_colornotvalid": "无效！",
