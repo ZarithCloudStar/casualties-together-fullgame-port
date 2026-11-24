@@ -102,9 +102,12 @@ internal static class JoinModNotice {
             ModSyncUI.SetHostManifest(manifest);
 
             var client = Multiplayer.GetModGUIDs();
-            if (!truncated && new HashSet<string>(host, StringComparer.Ordinal).SetEquals(client)) return;
+            bool versionDifference = ModSync.HasDifferences(manifest);
+            if (!truncated && new HashSet<string>(host, StringComparer.Ordinal).SetEquals(client) && !versionDifference) return;
 
             notice = ModListDiagnostics.Describe(host, client, hostDetails, ModListDiagnostics.LocalDetails(), enforced);
+            var versionText = ModSync.DescribeVersionDifferences(manifest);
+            if (!string.IsNullOrEmpty(versionText)) notice += "\n\n" + versionText;
             notice += "\n\n可以从主机同步缺失或版本不同的插件；带资源或依赖的模组可能需要手动安装。" +
                       "\n选择「无视并继续」不会改变本机文件。";
             if (truncated || client.Length > MaxPlugins)
