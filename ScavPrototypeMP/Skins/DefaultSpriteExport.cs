@@ -183,6 +183,13 @@ internal static class DefaultSpriteExport {
         return false;
     }
 
+    internal static Sprite GetStockTail(int species) {
+        if (species < 0 || species >= PrefabPaths.Length) return null;
+        var prefab = Resources.Load<GameObject>(PrefabPaths[species]);
+        var tail = prefab != null ? prefab.GetComponentInChildren<TailScript>(true) : null;
+        return tail != null && tail.TryGetComponent(out SpriteRenderer renderer) ? renderer.sprite : null;
+    }
+
     internal static int ExportPrefabs() {
         int written = 0;
 

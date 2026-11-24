@@ -24,6 +24,21 @@ public static class BagSleep
 	static readonly HashSet<int> Ids = new HashSet<int>();
 	static readonly HashSet<int> Holds = new HashSet<int>();
 	internal static bool IsSleeping(GameObject go) => go != null && Holds.Contains(go.GetInstanceID());
+
+	// MP3 audio components live on the item (or on a child monitor). Sleeping
+	// the item game object therefore stops local output and the network frame
+	// producer. Keep the item awake while any playback path is active.
+	static bool KeepAudible(Item item) {
+		if (item == null)
+			return false;
+		if (item.TryGetComponent(out MP3PlayerServerAudioStreamer server) && server.IsPlaying)
+			return true;
+		if (item.GetComponent<MP3PlayerClientAudioStreamer>() != null)
+			return true;
+		if (item.GetComponent<MP3PlayerAudioStreamPlayer_ClientOnly>() != null)
+			return true;
+		return item.transform.Find("mp3_host_monitor")?.GetComponent<MP3HostAudioMonitor>() != null;
+	}
 	static readonly Dictionary<int, bool> Lights = new Dictionary<int, bool>();
 	static readonly Dictionary<int, List<Behaviour>> Paused = new Dictionary<int, List<Behaviour>>();
 	static int _sleepLeft;
@@ -95,7 +110,7 @@ public static class BagSleep
 				DropAt(i);
 				continue;
 			}
-			if (HeldOpen(box) || Breaking(box) || MoveCommit.Busy(item) || KeepLit(item, box))
+			if (HeldOpen(box) || Breaking(box) || MoveCommit.Busy(item) || KeepLit(item, box) || KeepAudible(item))
 			{
 				Wake(item);
 				continue;
@@ -168,7 +183,7 @@ public static class BagSleep
 				continue;
 			Track(child);
 			// a move still in flight has to stay on. sleeping it here dropped the seat and left the bag icon behind.
-			if (MoveCommit.Busy(child) || KeepLit(child, box))
+			if (MoveCommit.Busy(child) || KeepLit(child, box) || KeepAudible(child))
 			{
 				Wake(child);
 				continue;

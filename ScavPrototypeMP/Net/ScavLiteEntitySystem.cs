@@ -1137,7 +1137,15 @@ public class SyncInfo : PredictableEntityLogic {
         }
 
         // create the object 
-		var instantiatedObject = ((GameObject)UnityEngine.Object.Instantiate(resource, (Vector3)pos, Quaternion.identity));
+        // The vines' Climbable.Start transforms prefab endpoints into world space once.
+        bool isSpiceVine = resourceId == ScavMPBuildingSynchronizer.SpiceVineGround ||
+            resourceId == ScavMPBuildingSynchronizer.SpiceVineCeiling;
+        var initialRotation = isSpiceVine ? Quaternion.Euler(0f, 0f, _rotation.Value.Degrees) : Quaternion.identity;
+        var instantiatedObject = UnityEngine.Object.Instantiate(resource, (Vector3)pos, initialRotation);
+        if (isSpiceVine) {
+            Vector2 scale = _scale.Value;
+            instantiatedObject.transform.localScale = new Vector3(scale.x, scale.y, resource.transform.localScale.z);
+        }
 #if FULLGAME
         if (Net.IsClient) WorldSnapshotTransfer.MarkNetworkInstance(instantiatedObject, checkpointKey.Value);
         if (Util.GameIsFull() && BackgroundSnapshot.IsResourceId(resourceId)) BackgroundSnapshot.StripNestedBackgrounds(instantiatedObject);
@@ -1631,44 +1639,25 @@ public class SyncInfo : PredictableEntityLogic {
         if (!_waterLive || _water == null) {
             return false;
         }
-        if (_water.stack == null) {
-            return true;
-        }
-        System.Collections.Generic.IList<LiquidStack> stack = _water.stack;
-        System.Collections.Generic.Dictionary<string, byte> reg = Item_SetupItems_Listener.LiquidIdRegistry;
+        LiquidSanitize.Clean(_water, "LiquidDirty");
+        var stack = _water.stack;
+        var reg = Item_SetupItems_Listener.LiquidIdRegistry;
         if (reg == null) {
             return true;
         }
         for (int i = 0; i < _liquidStack.Count; i++) {
             byte id = _liquidStack[i].LiquidId;
-            if (!LastMl(stack, reg, id, out float ml) || ml != _liquidStack[i].LiquidMl) {
+            if (!LastLiquidMl(stack, reg, id, out float ml) || ml != _liquidStack[i].LiquidMl) {
                 return true;
             }
         }
         for (int i = 0; i < stack.Count; i++) {
             string key = stack[i].liquidId;
-            if (key == null || !reg.TryGetValue(key, out byte id) || !LiquidListed(id)) {
+            if (reg.TryGetValue(key, out byte id) && !LiquidListed(id)) {
                 return true;
             }
         }
         return false;
-    }
-
-    private static bool LastMl(System.Collections.Generic.IList<LiquidStack> stack, System.Collections.Generic.Dictionary<string, byte> reg, byte id, out float ml) {
-        ml = 0f;
-        bool found = false;
-        for (int i = 0; i < stack.Count; i++) {
-            string key = stack[i].liquidId;
-            if (key == null || !reg.TryGetValue(key, out byte cur) || cur != id) {
-                continue;
-            }
-            ml = stack[i].amount;
-            if (ml < 0f) {
-                ml = 0f;
-            }
-            found = true;
-        }
-        return found;
     }
 
     private bool PoseDirty(bool onBody, bool hasRb, Rigidbody2D rb) {
@@ -1863,6 +1852,13 @@ public class SyncInfo : PredictableEntityLogic {
                 specialdata1.Value = cannon.spent.ToByte();
                 if (cannon.spent)
                     specialdata2.Value = cannon.endAngle;
+#if FULLGAME
+            } else if (b.TryGetComponent(out PistonScript piston)) {
+                specialdata1.Value = piston.up.ToByte();
+            } else if (b.TryGetComponent(out LaserDroneScript drone)) {
+                specialdata1.Value = drone.open.ToByte();
+                specialdata2.Value = TrapClaim.CryoState(drone, b);
+#endif
             } else if (b.TryGetComponent(out FanTrap fan)) {
                 FanTrap_OnWillRenderObject_HostSim_MultiplayerPatch.Write(fan, this);
             } else  {
@@ -1878,8 +1874,11 @@ public class SyncInfo : PredictableEntityLogic {
     // a water stack is a few liquids. the old dictionaries, Except, and Intersect were discarded every packet.
     // remove then add is what marks the synclist. writing the millilitres in place would not.
     private void SyncLiquidStack(WaterContainerItem wci) {
+        LiquidSanitize.Clean(wci, "SyncLiquidStack");
         var stack = wci.stack;
         var reg = Item_SetupItems_Listener.LiquidIdRegistry;
+        if (reg == null)
+            return;
         for (int i = _liquidStack.Count - 1; i >= 0; i--) {
             byte id = _liquidStack[i].LiquidId;
             if (!LastLiquidMl(stack, reg, id, out float ml) || (ml != _liquidStack[i].LiquidMl)) {
@@ -1887,63 +1886,69 @@ public class SyncInfo : PredictableEntityLogic {
             }
         }
         for (int i = stack.Count - 1; i >= 0; i--) {
-            byte id = (byte)reg[stack[i].liquidId];
+            if (!reg.TryGetValue(stack[i].liquidId, out byte id))
+                continue;
             if (LiquidListed(id))
                 continue;
-            float amount = stack[i].amount;
-            if (amount < 0f) {
-                amount = 0f;
-            }
             _liquidStack.Add(new LiquidStackPart {
                 LiquidId = id,
-                LiquidMl = amount
+                LiquidMl = stack[i].amount
             });
         }
     }
 
-    // functions for syncing nondesc liquids across the network
-    // might be messy and not ideal, but this should only run once. i think
     private void SyncNonDesc(NonDescriptCan can) {
+        LiquidSanitize.Clean(can);
         var ids = can.liquidIds;
         var weights = can.liquidWeights;
         var reg = Item_SetupItems_Listener.LiquidIdRegistry;
 
-        nondesc_liquids.Clear(); // yes, this is necessary
+        nondesc_liquids.Clear();
 
+        if (ids == null || weights == null || reg == null)
+            return;
         for (int i = 0; i < ids.Count; i++) {
-            byte id = (byte)reg[ids[i]];
+            if (!reg.TryGetValue(ids[i], out byte id))
+                continue;
             nondesc_liquids.Add(new LiquidStackPart {
-            LiquidId = id,
-            LiquidMl = weights[i]
+                LiquidId = id,
+                LiquidMl = weights[i]
             });
         }
     }
 
     private void UpdateNonDesc(NonDescriptCan can) {
+        if (Item_SetupItems_Listener.LiquidNetIdToId == null)
+            return;
+        can.liquidIds ??= new List<string>();
+        can.liquidWeights ??= new List<float>();
         can.liquidIds.Clear();
         can.liquidWeights.Clear();
 
         for (int i = 0; i < nondesc_liquids.Count; i++) {
-            can.liquidIds.Add(Item_SetupItems_Listener.LiquidNetIdToId[nondesc_liquids[i].LiquidId]);
-            can.liquidWeights.Add(nondesc_liquids[i].LiquidMl);
+            var liquid = nondesc_liquids[i];
+            if (!LiquidSanitize.TryDecode(liquid.LiquidId, liquid.LiquidMl, out string id))
+                continue;
+            can.liquidIds.Add(id);
+            can.liquidWeights.Add(liquid.LiquidMl);
         }
     }
 
     // the dictionary kept the last row when one liquid was listed twice.
     private static bool LastLiquidMl(System.Collections.Generic.IList<LiquidStack> stack, System.Collections.Generic.Dictionary<string, byte> reg, byte id, out float ml) {
         ml = 0f;
-        bool found = false;
-        for (int i = 0; i < stack.Count; i++) {
-            if ((byte)reg[stack[i].liquidId] != id) {
+        if (stack == null || reg == null)
+            return false;
+        for (int i = stack.Count - 1; i >= 0; i--) {
+            var entry = stack[i];
+            if (entry == null || string.IsNullOrEmpty(entry.liquidId) || !LiquidSanitize.IsValidAmount(entry.amount)
+                || !reg.TryGetValue(entry.liquidId, out byte stackId) || stackId != id) {
                 continue;
             }
-            ml = stack[i].amount;
-            if (ml < 0f) {
-                ml = 0f;
-            }
-            found = true;
+            ml = entry.amount;
+            return true;
         }
-        return found;
+        return false;
     }
 
     bool LiquidListed(byte id) {
@@ -1969,9 +1974,14 @@ public class SyncInfo : PredictableEntityLogic {
 
     void UpdateLiquids() {
         if (go.TryGetComponent(out WaterContainerItem wci)) {
+            LiquidSanitize.Clean(wci, "UpdateLiquids");
+            if (Item_SetupItems_Listener.LiquidNetIdToId == null)
+                return;
             CraftCommit.ClearSeenLiquids();
             for (int n = 0; n < _liquidStack.Count; n++) {
-                CraftCommit.SeeLiquid(_liquidStack[n].LiquidId, LiquidStackPart.Pack(_liquidStack[n].LiquidMl));
+                var liquid = _liquidStack[n];
+                if (LiquidSanitize.TryDecode(liquid.LiquidId, liquid.LiquidMl, out _))
+                    CraftCommit.SeeLiquid(liquid.LiquidId, LiquidStackPart.Pack(liquid.LiquidMl));
             }
             if (CraftCommit.SkipSeenLiquids(syncId))
                 return;
@@ -1979,8 +1989,8 @@ public class SyncInfo : PredictableEntityLogic {
             for (int i = 0; i < _liquidStack.Count; i++) {
                 var liquid = _liquidStack[i];
 
-                var liquidid = Item_SetupItems_Listener.LiquidNetIdToId[liquid.LiquidId];
-                wci.stack.Add(new LiquidStack(liquidid, liquid.LiquidMl));
+                if (LiquidSanitize.TryDecode(liquid.LiquidId, liquid.LiquidMl, out string liquidId))
+                    wci.stack.Add(new LiquidStack(liquidId, liquid.LiquidMl));
             }
         }
     }
@@ -2096,6 +2106,13 @@ public class SyncInfo : PredictableEntityLogic {
         Vector2 pos;
         float angle;
         bool poseSnap = GlidePose(out pos, out angle);
+#if FULLGAME
+        if (Net.IsClient && isRigid && go.GetComponent<LaserDroneScript>() != null) {
+            rb.position = pos;
+            rb.rotation = angle;
+            return;
+        }
+#endif
 
         // repeat 100 0 spawn_bandage
         shouldApplyPos = true;
@@ -2537,6 +2554,10 @@ public class SyncInfo : PredictableEntityLogic {
         } else if (b.TryGetComponent(out SoundCannon _)) {
             if (specialdata1.Value != 0)
                 b.GetOrAddComponent<TrackerSoundCannon>().soundcannon_spent(specialdata2.Value);
+#if FULLGAME
+        } else if (b.TryGetComponent(out LaserDroneScript drone)) {
+            TrapClaim.PrepareClientCryo(drone, b);
+#endif
         } else if (b.TryGetComponent(out FanTrap fan)) {
             FanTrap_OnWillRenderObject_HostSim_MultiplayerPatch.Apply(fan, specialdata1.Value, specialdata2.Value);
         } else {
@@ -2595,6 +2616,8 @@ public class SyncInfo : PredictableEntityLogic {
             return item.id;
         }
         if ( go.TryGetComponent(out BuildingEntity b) ) {
+            if (ScavMPBuildingSynchronizer.IsSpiceVine(b) && b.transform.up.y < 0f)
+                return ScavMPBuildingSynchronizer.SpiceVineCeiling;
             return b.id;
         }
         return null;

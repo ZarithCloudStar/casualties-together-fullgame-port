@@ -28,6 +28,8 @@ internal static class SnapshotPrefabCatalog {
     }
     internal static void Initialize() {
         if (ready) return;
+        RememberSpiceVinePrefab(ScavMPBuildingSynchronizer.SpiceVineGround);
+        RememberSpiceVinePrefab(ScavMPBuildingSynchronizer.SpiceVineCeiling);
         foreach (var root in Resources.LoadAll<GameObject>("")) {
             var path = PathFor(root);
             if (path == null) continue;
@@ -41,6 +43,17 @@ internal static class SnapshotPrefabCatalog {
         }
         ready = true;
     }
+    static void RememberSpiceVinePrefab(string path) {
+        var prefab = Resources.Load<GameObject>(path);
+        if (prefab == null || !prefab.TryGetComponent<Climbable>(out _) ||
+            !prefab.TryGetComponent<BuildingEntity>(out var building) ||
+            !ScavMPBuildingSynchronizer.IsSpiceVine(building)) {
+            log.warn($"[spicevine] Expected climbable building prefab at {path}");
+            return;
+        }
+        (prefab.GetComponent<SnapshotPrefabReference>() ?? prefab.AddComponent<SnapshotPrefabReference>()).resource = path;
+    }
+
     internal static void RegisterEntityPrefab(GameObject root) {
         var path = PathFor(root);
         if (path == null) throw new InvalidOperationException("Structure resource path unresolved: " + root.name);

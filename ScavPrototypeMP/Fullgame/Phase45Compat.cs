@@ -501,7 +501,7 @@ static class PusSackScript_OnWillRenderObject_HostSim_MultiplayerPatch {
     static bool Prefix() => true;
 }
 
-// cryodrone: host owns AI/chase/FireShot; clients follow open bit; hits are victim-TrapClaim.
+// Cryodrone: host owns targeting, movement and damage. Clients follow its pose and shot cues.
 [HarmonyPatch(typeof(LaserDroneScript), "Update")]
 static class LaserDroneScript_Update_HostAuth_MultiplayerPatch {
     static bool Prefix(LaserDroneScript __instance) {
@@ -513,13 +513,15 @@ static class LaserDroneScript_Update_HostAuth_MultiplayerPatch {
             return false;
         }
         BodyGetterOverrider bgo = __instance.GetOrAddComponent<BodyGetterOverrider>();
-        bgo.SetNearestBody();
-        if (bgo.body == null && PlayerCamera.main != null) {
-            bgo.body = PlayerCamera.main.body;
+        bgo.body = __instance.hidden
+            ? TrapClaim.SelectCryoTarget(__instance.transform.position, 10f)
+            : TrapClaim.SelectCryoTarget(__instance.transform.position);
+        if (bgo.body == null) {
+            __instance.Close();
+            return false;
         }
-        // wake when any player is close - don't wait for host camera OnWillRender
-        if (__instance.hidden && bgo.body != null
-            && Vector2.Distance(__instance.transform.position, bgo.body.transform.position) < 10f) {
+        // Wake even when the drone is offscreen for the host.
+        if (__instance.hidden) {
             __instance.Open();
         }
         return true;
@@ -527,6 +529,29 @@ static class LaserDroneScript_Update_HostAuth_MultiplayerPatch {
 
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase __originalMethod) {
         return BodyGetterOverrider.TranspileAll(instructions, generator, __originalMethod.DeclaringType);
+    }
+}
+
+[HarmonyPatch]
+static class LaserDroneScript_Transition_HostAuth_MultiplayerPatch {
+    static IEnumerable<MethodBase> TargetMethods() {
+        yield return AccessTools.Method(typeof(LaserDroneScript), nameof(LaserDroneScript.Open));
+        yield return AccessTools.Method(typeof(LaserDroneScript), nameof(LaserDroneScript.Close));
+    }
+
+    static bool Prefix(LaserDroneScript __instance, MethodBase __originalMethod, out bool __state) {
+        __state = __instance.open;
+        if (Net.IsClient)
+            return false;
+        return !Net.IsRunning || !__instance.hidden
+            || __originalMethod.Name != nameof(LaserDroneScript.Open)
+            || TrapClaim.SelectCryoTarget(__instance.transform.position, 10f) != null;
+    }
+
+    static void Postfix(LaserDroneScript __instance, bool __state) {
+        if (Net.IsRunning && Net.IsServer && __instance.open != __state &&
+            NetObjectRegistry.TryGetSyncInfo(__instance, out var si))
+            si.WriteObjectIntoPacket();
     }
 }
 
@@ -540,11 +565,8 @@ static class LaserDroneScript_FixedUpdate_HostSim_MultiplayerPatch {
             return false;
         }
         BodyGetterOverrider bgo = __instance.GetOrAddComponent<BodyGetterOverrider>();
-        bgo.SetNearestBody();
-        if (bgo.body == null && PlayerCamera.main != null) {
-            bgo.body = PlayerCamera.main.body;
-        }
-        return true;
+        bgo.body = TrapClaim.SelectCryoTarget(__instance.transform.position);
+        return bgo.body != null;
     }
 
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase __originalMethod) {
@@ -568,6 +590,13 @@ static class LaserDroneScript_FireShot_TrapClaim_MultiplayerPatch {
 
 [HarmonyPatch(typeof(LaserDroneScript), "OnWillRenderObject")]
 static class LaserDroneScript_OnWillRenderObject_Bgo_MultiplayerPatch {
+    static bool Prefix(LaserDroneScript __instance) {
+        // The stock hidden-state wake check dereferences a body before updating the art.
+        if (!Net.IsRunning || !__instance.hidden || (PlayerCamera.main != null && PlayerCamera.main.body != null))
+            return true;
+        return __instance.TryGetComponent(out BodyGetterOverrider bgo) && bgo.body != null;
+    }
+
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator, MethodBase __originalMethod) {
         return BodyGetterOverrider.TranspileAll(instructions, generator, __originalMethod.DeclaringType);
     }
@@ -596,6 +625,11 @@ static class PistonScript_Update_HostAuth_MultiplayerPatch {
             return false;
         }
         return true;
+    }
+
+    static void Postfix(PistonScript __instance) {
+        if (Net.IsRunning && Net.IsServer && NetObjectRegistry.TryGetSyncInfo(__instance, out var si))
+            si.specialdata1.Value = (byte)(__instance.up ? 1 : 0);
     }
 }
 

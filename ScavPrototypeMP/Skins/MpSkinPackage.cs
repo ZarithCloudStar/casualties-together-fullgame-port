@@ -151,10 +151,7 @@ internal sealed class MpSkinPackage {
                     continue;
                 }
 
-                Sprite sprite = Sprite.Create(texture,
-                    new Rect(0, 0, texture.width, texture.height),
-                    new Vector2(0.5f, 0.5f), 8f);
-                sprite.name = name;
+                Sprite sprite = SkinImporter.CreateSourceSprite(texture, name);
 
                 package.Sprites[name] = sprite;
                 package.Textures.Add(texture);

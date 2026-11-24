@@ -206,7 +206,8 @@ return (nearestAny, nearestAnyDist);
 }
 
 public static (NetBody, float) GetNearestBodyPrioritizeAlive(Vector2 pos) {
-float nearest = float.PositiveInfinity;
+float nearestScore = float.PositiveInfinity;
+float nearestDist = float.PositiveInfinity;
 NetBody nearestnpc = null;
 foreach (var npc in NetBody.all_instances) {
 
@@ -221,12 +222,13 @@ if (!npc.body.conscious) {
 d2 += 200;
 }
 
-if (d2 < nearest) {
-nearest = dist;
+if (d2 < nearestScore) {
+nearestScore = d2;
+nearestDist = dist;
 nearestnpc = npc;
 }
 }
-return (nearestnpc, nearest);
+return (nearestnpc, nearestDist);
 }
 
 

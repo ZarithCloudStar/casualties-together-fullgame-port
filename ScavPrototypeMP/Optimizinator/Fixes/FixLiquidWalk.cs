@@ -14,13 +14,22 @@ internal static class FixLiquidWalk
 	// this file's counters on the 10s report.
 	internal static string Evidence() => "liquidWalk=" + Hits;
 
+	[HarmonyPatch("Start")]
+	[HarmonyPrefix]
+	static void Start(WaterContainerItem __instance) => LiquidSanitize.Clean(__instance, "WaterContainerItem.Start");
+
 	// false skips the getter. stock foreach on List<LiquidStack> boxed an enumerator.
 	[HarmonyPatch("CurrentTotal", MethodType.Getter)]
 	[HarmonyPrefix]
 	static bool Total(WaterContainerItem __instance, ref float __result)
 	{
+		LiquidSanitize.Clean(__instance, "FixLiquidWalk.Total");
 		float sum = 0f;
 		var stack = __instance.stack;
+		if (stack == null) {
+			__result = 0f;
+			return false;
+		}
 		for (int i = 0; i < stack.Count; i++)
 			sum += stack[i].amount;
 		__result = sum;
@@ -33,7 +42,12 @@ internal static class FixLiquidWalk
 	[HarmonyPrefix]
 	static bool Has(WaterContainerItem __instance, string id, ref bool __result)
 	{
+		LiquidSanitize.Clean(__instance, "FixLiquidWalk.Has");
 		var stack = __instance.stack;
+		if (stack == null) {
+			__result = false;
+			return false;
+		}
 		for (int i = 0; i < stack.Count; i++)
 		{
 			if (stack[i].liquidId == id)
@@ -59,6 +73,11 @@ internal static class FixLiquidWalk
 			return false;
 		}
 		var stack = __instance.stack;
+		if (stack == null)
+		{
+			__result = 0f;
+			return false;
+		}
 		for (int i = 0; i < stack.Count; i++)
 		{
 			if (stack[i].liquidId == liquid)
@@ -78,6 +97,14 @@ internal static class FixLiquidWalk
 	[HarmonyPrefix]
 	static bool Add(WaterContainerItem __instance, string liquidId, float amount, ref float __result)
 	{
+		// AutoFill passes an empty liquid id for lava. Returning zero leaves the tile intact.
+		if (__instance == null || !LiquidSanitize.IsKnownId(liquidId) ||
+			!LiquidSanitize.IsValidAmount(amount))
+		{
+			__result = 0f;
+			return false;
+		}
+		LiquidSanitize.Clean(__instance, "FixLiquidWalk.Add");
 		float num = UnityEngine.Mathf.Min(__instance.SpaceLeft, amount);
 		if (num <= 0f)
 		{
@@ -86,6 +113,11 @@ internal static class FixLiquidWalk
 		}
 		LiquidStack found = null;
 		var stack = __instance.stack;
+		if (stack == null)
+		{
+			__result = 0f;
+			return false;
+		}
 		for (int i = 0; i < stack.Count; i++)
 		{
 			if (stack[i].liquidId == liquidId)

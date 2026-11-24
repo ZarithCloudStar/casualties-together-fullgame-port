@@ -15,6 +15,11 @@ namespace Together;
 internal static class FreshDropRelevance {
     static bool Prepare() => Util.GameIsFull();
 
+    // Native health setters and seating checks can also reach this method.
+    // Replicas use SyncInfo's health/death presentation and server-spawned loot.
+    static bool Prefix(BuildingEntity __instance) =>
+        !Net.IsClient || !ScavMPBuildingSynchronizer.NeedsHostCombat(__instance);
+
     // A remote player may legitimately finish a capsule keypad farther than
     // the native eight-metre loot radius (the keypad's reach is normally 14m).
     // Scope this exception to the validated opening and its own spawned loot.

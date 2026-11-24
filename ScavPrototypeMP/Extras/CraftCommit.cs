@@ -591,6 +591,8 @@ public static class CraftCommit {
     static void AddItem(List<Item> list, Item item, PoolMode mode) {
         if (item == null)
             return;
+        if (item.TryGetComponent(out WaterContainerItem water))
+            LiquidSanitize.Clean(water, "CraftCommit.Collect");
         bool synced = ItemSync.TryGetSyncInfo(item, out SyncInfo si) && si != null;
         if (synced && (si.ItemUnavailable || si.go != item.gameObject))
             return;
@@ -614,7 +616,7 @@ public static class CraftCommit {
             var used = new List<Item>();
             for (int i = 0; i < recipe.items.Count; i++) {
                 RecipeItem ingredient = recipe.items[i];
-                Item found = ingredient.GetMatchingItem(working, used);
+                Item found = MatchIngredient(ingredient, working, used);
                 if (found != null) {
                     result.Add(found);
                     if (ingredient.destroyItem && !ingredient.isLiquid)
@@ -636,6 +638,28 @@ public static class CraftCommit {
         }
     }
 
+    internal static Item MatchIngredient(RecipeItem ingredient, List<Item> items, List<Item> used) {
+        try {
+            return ingredient.GetMatchingItem(items, used);
+        } catch (Exception ex) when (ex is NullReferenceException || ex is ArgumentNullException || ex is KeyNotFoundException) {
+            // Retry only when a candidate broke the stock matcher, keeping the original order.
+            var candidate = new List<Item>(1) { null };
+            for (int i = 0; i < items.Count; i++) {
+                if (items[i] == null)
+                    continue;
+                candidate[0] = items[i];
+                try {
+                    Item match = ingredient.GetMatchingItem(candidate, used);
+                    if (match != null)
+                        return match;
+                } catch (Exception itemError) when (itemError is NullReferenceException || itemError is ArgumentNullException || itemError is KeyNotFoundException) {
+                    // Continue with the next candidate.
+                }
+            }
+            return null;
+        }
+    }
+
     static List<Item> Filter(List<Item> pool, bool reserve) {
         var working = new List<Item>();
         SavedItems.Clear();
@@ -643,6 +667,8 @@ public static class CraftCommit {
             Item item = pool[i];
             if (item == null)
                 continue;
+            if (item.TryGetComponent(out WaterContainerItem water))
+                LiquidSanitize.Clean(water, "CraftCommit.Filter");
             if (ItemSync.TryGetSyncInfo(item, out SyncInfo si) && si != null) {
                 ushort id = (ushort)si.syncId;
                 if (Tombstoned(id))
@@ -773,6 +799,7 @@ public static class CraftCommit {
                 claim.exclusive = true;
                 return;
             }
+            LiquidSanitize.Clean(wci, "CraftCommit.FillLiquid");
             if (ingredient.specific) {
                 List<float> drains = wci.CalculateDrainSingleLiquid(ingredient.specificId, ingredient.minimumCondition);
                 float take = 0f;
@@ -907,6 +934,8 @@ public static class CraftCommit {
             knetid syncId = ids[i];
             if (!ItemSync.TryGetItem(syncId, out _, out Item ingredient))
                 return Store(crafts, Deny(session, attempt, CraftReason.Taken, new[] { ids[i] }, pb, recipe));
+            if (ingredient.TryGetComponent(out WaterContainerItem water))
+                LiquidSanitize.Clean(water, "CraftCommit.Commit");
             if (!ItemSync.CheckIfBodyReachThisItem(ingredient, pb.body))
                 return Store(crafts, Deny(session, attempt, CraftReason.Unreachable, ids, pb, recipe));
             resolved.Add(ingredient);
@@ -1098,6 +1127,7 @@ public static class CraftCommit {
     static Snap TakeSnap(Item item) {
         var snap = new Snap { item = item, condition = item != null ? item.condition : 0f };
         if (item != null && item.TryGetComponent(out WaterContainerItem wci)) {
+            LiquidSanitize.Clean(wci, "CraftCommit.TakeSnap");
             snap.liquid = true;
             snap.ids = new List<string>();
             snap.amounts = new List<float>();
@@ -1143,6 +1173,7 @@ public static class CraftCommit {
     static List<Liq> ReadLiquids(Item item) {
         if (item == null || !item.TryGetComponent(out WaterContainerItem wci) || Item_SetupItems_Listener.LiquidIdRegistry == null)
             return null;
+        LiquidSanitize.Clean(wci, "CraftCommit.ReadLiquids");
         var list = new List<Liq>();
         for (int i = 0; i < wci.stack.Count; i++) {
             if (!Item_SetupItems_Listener.LiquidIdRegistry.TryGetValue(wci.stack[i].liquidId, out byte netId))
@@ -1298,8 +1329,11 @@ public static class CraftCommit {
             if ((flags & 2) != 0) {
                 int n = reader.GetByte();
                 spend.liquids = new List<Liq>(n);
-                for (int j = 0; j < n; j++)
-                    spend.liquids.Add(new Liq { id = reader.GetByte(), ml = reader.GetUShort() });
+                for (int j = 0; j < n; j++) {
+                    var liquid = new Liq { id = reader.GetByte(), ml = reader.GetUShort() };
+                    if (LiquidSanitize.TryDecode(liquid.id, liquid.ml, out _))
+                        spend.liquids.Add(liquid);
+                }
             }
             receipt.spends.Add(spend);
         }
@@ -1340,17 +1374,14 @@ public static class CraftCommit {
     static void ApplyLiquids(Item item, List<Liq> liquids) {
         if (liquids == null || !item.TryGetComponent(out WaterContainerItem wci))
             return;
-        string[] names = Item_SetupItems_Listener.LiquidNetIdToId;
-        if (names == null)
-            return;
-        wci.stack.Clear();
+        if (wci.stack == null)
+            wci.stack = new List<LiquidStack>();
+        else
+            wci.stack.Clear();
         for (int i = 0; i < liquids.Count; i++) {
-            if (liquids[i].id >= names.Length)
-                continue;
-            string liquidId = names[liquids[i].id];
-            if (string.IsNullOrEmpty(liquidId))
-                continue;
-            wci.stack.Add(new LiquidStack(liquidId, liquids[i].ml));
+            var liquid = liquids[i];
+            if (LiquidSanitize.TryDecode(liquid.id, liquid.ml, out string liquidId))
+                wci.stack.Add(new LiquidStack(liquidId, liquid.ml));
         }
     }
 
@@ -1546,7 +1577,7 @@ static class CraftCommit_Refresh {
             CraftCommit.OpenPool();
     }
 
-    static void Postfix() {
+    static void Finalizer() {
         CraftCommit.ClosePool();
     }
 }
