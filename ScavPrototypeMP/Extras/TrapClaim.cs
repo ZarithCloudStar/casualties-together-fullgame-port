@@ -1122,49 +1122,93 @@ return true;
 }
 
 #if FULLGAME
-// cryodrone (LaserDroneScript): host AI + FireShot; body hits are victim-authoritative.
-static readonly Dictionary<int, float> cryoClaimed = new Dictionary<int, float>();
+static float nextCryoShotLog;
+
+internal static Body SelectCryoTarget(Vector2 origin, float reach = CryoReach) {
+    Body target = null;
+    float reachSquared = reach * reach;
+    float nearest = reachSquared;
+    bool targetConscious = false;
+    foreach (ScavPlayer player in ScavPlayer.AllPlayers) {
+        if (player == null || !player.IsAlive())
+            continue;
+        Body body = player.body;
+        float distance = KM.DistanceSqr(body.transform.position, origin);
+        bool conscious = body.conscious;
+        if (distance >= reachSquared || (targetConscious && !conscious))
+            continue;
+        if (distance >= nearest && conscious == targetConscious)
+            continue;
+        target = body;
+        nearest = distance;
+        targetConscious = conscious;
+    }
+    return target;
+}
+
+internal static float CryoState(LaserDroneScript drone, BuildingEntity building) {
+    int flags = 1 + (drone.hidden ? 1 : 0) + (building.cantHit ? 2 : 0);
+    if (!drone.open || drone.barrel == null)
+        return flags;
+    // Old peers truncate specialdata2 to read the flags. Zero fraction is the old format.
+    return flags + 0.25f + Mathf.Repeat(drone.barrel.eulerAngles.z, 360f) / 720f;
+}
+
+static void SetClientCryoAim(LaserDroneScript drone, float angle, float maxDelta) {
+    if (drone.barrel == null)
+        return;
+    float current = drone.barrel.eulerAngles.z;
+    float delta = Mathf.Clamp(Mathf.DeltaAngle(current, angle), -maxDelta, maxDelta);
+    if (drone.laser != null && drone.laser != drone.barrel)
+        drone.laser.Rotate(0f, 0f, delta, Space.World);
+    drone.barrel.rotation = Quaternion.Euler(0f, 0f, current + delta);
+}
+
+internal static void PrepareClientCryo(LaserDroneScript drone, BuildingEntity building) {
+    building.ignoreBodyOptimize = true;
+    if (drone.TryGetComponent(out Rigidbody2D rb) && rb.bodyType != RigidbodyType2D.Kinematic) {
+        rb.bodyType = RigidbodyType2D.Kinematic;
+        rb.velocity = Vector2.zero;
+        rb.angularVelocity = 0f;
+    }
+    if (rb != null && !rb.simulated)
+        rb.simulated = true;
+}
 
 internal static void ClientCryoFollowHost(LaserDroneScript drone) {
-if (drone == null || !NetObjectRegistry.TryGetSyncInfo(drone, out var si)) {
-return;
-}
-// host FixedUpdate owns the chase. the client copy was drifting, so shots landed off the host's drone.
-Vector2 hostPos = si._position.InterpolatedValue;
-drone.transform.position = hostPos;
-if (drone.TryGetComponent(out Rigidbody2D rb) && rb != null) {
-rb.simulated = false;
-rb.position = hostPos;
-rb.velocity = Vector2.zero;
-}
-bool hostOpen = si.specialdata1.Value != 0;
-if (drone.open != hostOpen) {
-ApplyCryoOpenVisual(drone, hostOpen);
-}
-drone.openAmount = Mathf.MoveTowards(drone.openAmount, hostOpen ? 1f : 0f, Time.deltaTime * 2f);
-}
+    if (!NetObjectRegistry.TryGetSyncInfo(drone, out var si) || si == null)
+        return;
 
-static void ApplyCryoOpenVisual(LaserDroneScript drone, bool open) {
-if (drone == null) {
-return;
-}
-if (open && drone.hidden) {
-drone.hidden = false;
-if (drone.render != null && drone.openSprite != null) {
-drone.render.sprite = drone.openSprite;
-}
-BuildingEntity bld = drone.GetComponent<BuildingEntity>();
-if (bld != null) {
-bld.ignoreBodyOptimize = true;
-bld.fullName = Locale.GetBuilding("laserdrone2");
-bld.description = Locale.GetBuilding("laserdronedsc2");
-}
-LookTarget look = drone.GetComponent<LookTarget>();
-if (look != null) {
-look.enabled = true;
-}
-}
-drone.open = open;
+    bool hostOpen = si.specialdata1.Value != 0;
+    float state = si.specialdata2.Value;
+    int flags = (int)state - 1;
+    BuildingEntity building = si.building;
+    if (flags >= 0)
+        building.cantHit = (flags & 2) != 0;
+    bool hostHidden = flags >= 0 ? (flags & 1) != 0 : drone.hidden && !hostOpen;
+
+    // Stock hidden only clears once, on the first wake. Closing later retains the revealed art.
+    if (drone.hidden && !hostHidden) {
+        if (drone.render != null && drone.openSprite != null)
+            drone.render.sprite = drone.openSprite;
+        building.fullName = Locale.GetBuilding("laserdrone2");
+        building.description = Locale.GetBuilding("laserdronedsc2");
+        if (drone.TryGetComponent(out LookTarget look))
+            look.enabled = true;
+    }
+
+    drone.hidden = hostHidden;
+    drone.open = hostOpen;
+    drone.openAmount = Mathf.MoveTowards(drone.openAmount, hostOpen ? 1f : 0f, Time.deltaTime * 2f);
+    if (!hostOpen || drone.barrel == null)
+        return;
+    float aim = state - (int)state;
+    if (aim >= 0.25f && aim <= 0.75f) {
+        SetClientCryoAim(drone, (aim - 0.25f) * 720f, Time.deltaTime * 360f);
+    } else if (SelectCryoTarget(drone.transform.position) is Body target && target != null) {
+        Vector2 direction = target.transform.position - drone.barrel.position;
+        SetClientCryoAim(drone, Vector2.SignedAngle(Vector2.up, direction), Time.deltaTime * 75f);
+    }
 }
 
 internal static void HostCryoFire(LaserDroneScript drone) {
@@ -1183,7 +1227,8 @@ Vector2 end = origin + dir * CryoReach;
 float roll = Random.Range(0.85f, 1.15f);
 float buildDmg = roll * 50f;
 float limbDmg = roll * 15f;
-Body localVictim = null;
+Body victim = null;
+NetBody victimNetBody = null;
 for (int i = 0; i < hits.Length; i++) {
 RaycastHit2D hit = hits[i];
 if (hit.transform == drone.transform) {
@@ -1205,55 +1250,27 @@ break;
 if (hit.rigidbody) {
 hit.rigidbody.AddForceAtPosition(dir * buildDmg, hit.point, ForceMode2D.Impulse);
 }
-Body hitBody = null;
-if (hit.collider.TryGetComponent(out Limb limbHit)) {
-hitBody = limbHit.body;
-}
-if (hitBody == null) {
-hit.collider.TryGetComponent(out hitBody);
-}
-if (hitBody != null) {
+if (Util.TryGetBodyFromObject(hit.collider, out var hitBody) && hitBody != null) {
 end = hit.point;
-if (Util.IsBodyLocal(hitBody)) {
 ApplyCryoLimbHit(hitBody, hit.point, limbDmg);
-localVictim = hitBody;
-}
+victim = hitBody;
+if (victim.TryGetNetBody(out victimNetBody))
+Publish(victimNetBody);
 break;
 }
 }
 SpawnCryoLine(origin, end);
 if (NetObjectRegistry.TryGetSyncInfo(drone, out var si)) {
-// open a claim window; remotes re-ray and ApplyCryoHurtLocal themselves
+// Legacy claims can request a fresh health snapshot. The cue carries the shot angle.
 OpenWindow(KindCryo, si.syncId, false, CryoWindow);
-Relay(KindCryo, si.syncId, 0f);
-if (localVictim != null && localVictim.TryGetNetBody(out var nb)) {
-Publish(nb);
+Relay(KindCryo, si.syncId, 1f + Mathf.Repeat(Vector2.SignedAngle(Vector2.up, dir), 360f));
 }
-}
-}
-
-internal static void ApplyCryoHurtLocal(LaserDroneScript drone, Body body, Vector2 hitPoint, float limbDmg) {
-if (drone == null || body == null || !Util.IsBodyLocal(body)) {
-return;
-}
-if (!NetObjectRegistry.TryGetSyncInfo(drone, out var si)) {
-return;
-}
-int key = si.syncId.id ^ body.GetInstanceID();
 float now = Time.unscaledTime;
-if (cryoClaimed.TryGetValue(key, out float until) && now < until) {
-return;
-}
-cryoClaimed[key] = now + CryoWindow;
-if (cryoClaimed.Count > 400) {
-cryoClaimed.Clear();
-}
-ApplyCryoLimbHit(body, hitPoint, limbDmg);
-Ignore(body);
-if (Net.IsClient) {
-Send(KindCryo, si.syncId, 0);
-} else if (body.TryGetNetBody(out var nb)) {
-Publish(nb);
+if (now >= nextCryoShotLog) {
+nextCryoShotLog = now + 2f;
+Body target = drone.GetComponent<BodyGetterOverrider>()?.body;
+NetBody targetNetBody = target != null ? target.GetNetBody() : null;
+Plugin.log.LogInfo($"[cryo-shot] drone={drone.GetInstanceID()} hostTarget={targetNetBody?.netId} targetLocal={target != null && Util.IsBodyLocal(target)} hitBody={(victim != null ? victim.name : "none")} hitNetBody={victimNetBody?.netId}");
 }
 }
 
@@ -1293,36 +1310,26 @@ obj.AddComponent<LaserDroneCryoLine>();
 }
 }
 
-static void ClientCryoShotCue(LaserDroneScript drone) {
+static void ClientCryoShotCue(LaserDroneScript drone, float cue) {
 if (drone == null || drone.barrel == null) {
 return;
 }
+if (cue >= 1f && cue <= 361f)
+SetClientCryoAim(drone, cue - 1f, 180f);
+else
+ClientCryoFollowHost(drone);
 Vector2 origin = drone.barrel.position;
 Vector2 dir = drone.barrel.up;
 RaycastHit2D[] hits = Physics2D.RaycastAll(origin, dir, CryoReach, LayerMask.GetMask("Ground", "Body", "Limb"));
 Vector2 end = origin + dir * CryoReach;
-float limbDmg = Random.Range(0.85f, 1.15f) * 15f;
 for (int i = 0; i < hits.Length; i++) {
 RaycastHit2D hit = hits[i];
 if (hit.transform == drone.transform) {
 continue;
 }
-if (hit.collider.gameObject.layer == 6) {
+if (hit.collider.gameObject.layer == 6 ||
+    (Util.TryGetBodyFromObject(hit.collider, out var hitBody) && hitBody != null)) {
 end = hit.point;
-break;
-}
-Body hitBody = null;
-if (hit.collider.TryGetComponent(out Limb limbHit)) {
-hitBody = limbHit.body;
-}
-if (hitBody == null) {
-hit.collider.TryGetComponent(out hitBody);
-}
-if (hitBody != null) {
-end = hit.point;
-if (Util.IsBodyLocal(hitBody)) {
-ApplyCryoHurtLocal(drone, hitBody, hit.point, limbDmg);
-}
 break;
 }
 }
@@ -1336,7 +1343,7 @@ return false;
 if (nb.body == null || !KM.DistanceCheck(drone.transform.position, nb.body.transform.position, CryoReach)) {
 return false;
 }
-if (!TakeWindow(KindCryo, id, nb.netId, false, CryoWindow)) {
+if (!TakeWindow(KindCryo, id, nb.netId, true, CryoWindow)) {
 return false;
 }
 Publish(nb);
@@ -1356,6 +1363,12 @@ if (kind == KindJump) {
 AcceptJump(id, nb);
 return;
 }
+#if FULLGAME
+if (kind == KindCryo) {
+AcceptCryo(id, nb);
+return;
+}
+#endif
 
 bool ok = false;
 if (kind == KindBear)
@@ -1372,10 +1385,6 @@ else if (kind == KindBoom)
 ok = AcceptBoom(id, nb, mask);
 else if (kind == KindManifest)
 ok = AcceptManifest(id, nb);
-#if FULLGAME
-else if (kind == KindCryo)
-ok = AcceptCryo(id, nb);
-#endif
 else if (kind == KindGlass)
 ok = AcceptGlass(id, nb, mask);
 else if (kind == KindTrader)
@@ -1564,7 +1573,7 @@ break;
 }
 #if FULLGAME
 else if (kind == KindCryo && si.go.TryGetComponent(out LaserDroneScript cryo)) {
-ClientCryoShotCue(cryo);
+ClientCryoShotCue(cryo, cooldown);
 }
 #endif
 }

@@ -115,6 +115,15 @@ internal static class SkinImporter {
             && (KnownNames.Contains(name) || WoundViewNames.Contains(name) || SpeciesLiveNames.Contains(name));
     }
 
+    // A decoded PNG is source art. Tail pivot and PPU are set against the
+    // target body's stock renderer when either a local or a received skin binds.
+    internal static Sprite CreateSourceSprite(Texture2D texture, string name) {
+        var sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height),
+            new Vector2(0.5f, 0.5f), 8f);
+        sprite.name = name;
+        return sprite;
+    }
+
     // which species folder the open menu tab is writing into. -1 is the live body.
     static int _species = -1;
 
@@ -249,7 +258,7 @@ internal static class SkinImporter {
 
                 HashSet<string> allowed = AllowedNamesFor(subfolder);
                 string[] knownPngs = pngs
-                    .Where(png => allowed.Contains(Path.GetFileNameWithoutExtension(png)))
+                    .Where(png => IsAllowedName(subfolder, allowed, Path.GetFileNameWithoutExtension(png)))
                     .ToArray();
                 if (knownPngs.Length == 0) {
                     continue;
@@ -374,7 +383,7 @@ internal static class SkinImporter {
             }
 
             string name = Path.GetFileNameWithoutExtension(file);
-            if (!allowed.Contains(name)) {
+            if (!IsAllowedName(subfolder, allowed, name)) {
                 result.Warnings.Add(SkinLocale.T("Unknown ", "未知 ") + subfolder + SkinLocale.T(" PNG skipped: ", " PNG 已跳过：") + name + ".");
                 continue;
             }
@@ -386,6 +395,9 @@ internal static class SkinImporter {
             CheckPng(file, name, subfolder, slot, result);
         }
     }
+
+    private static bool IsAllowedName(string subfolder, HashSet<string> allowed, string name) =>
+        allowed.Contains(name) || (subfolder == "Body" && SkinTailAlignment.IsTailName(name));
 
     private static HashSet<string> AllowedNamesFor(string subfolder) {
         if (subfolder == "Body") {
@@ -408,6 +420,19 @@ internal static class SkinImporter {
             if (!ImageConversion.LoadImage(tex, data) || tex.width <= 1 || tex.height <= 1) {
                 result.Errors.Add(SkinLocale.T("Cannot decode PNG: ", "无法解码 PNG：") + name + ".png");
                 return;
+            }
+
+            if (subfolder == "Body" && SkinTailAlignment.IsTailName(name)) {
+                if (!SkinTailAlignment.HasRoot(tex)) {
+                    result.Errors.Add(SkinLocale.T("Tail has no visible pixels (alpha >= 128): ",
+                        "尾巴没有可见像素（透明度须至少为 128）：") + name + ".png");
+                    return;
+                }
+
+                Sprite stock = DefaultSpriteExport.GetStockTail(_species < 0 ? SpriteReplacerPlugin.ActiveSpecies : _species);
+                if (stock != null && (stock.rect.width != tex.width || stock.rect.height != tex.height))
+                    result.Warnings.Add(SkinLocale.T("Tail canvas differs from the stock sprite. The rightmost opaque column defines the tail root.",
+                        "尾巴画布尺寸与原版不同。以最右侧不透明像素列的中心作为尾根。"));
             }
 
             int targetWidth;

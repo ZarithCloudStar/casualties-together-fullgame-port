@@ -1,6 +1,7 @@
 #if FULLGAME
 using CasualtiesTogetherUtils;
 using HarmonyLib;
+using KrokV5Optimization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -125,7 +126,7 @@ internal static class WorldObjectSnapshot {
         int foldedHeaters = 0;
         foreach (var record in document.objects) {
             try {
-                var prefab = SnapshotPrefabCatalog.Resolve(record.resource);
+                var prefab = ResolveSavedPrefab(record);
                 if (prefab == null || !SafeResource(prefab, record.resource, out _) ||
                     (prefab.GetComponent<BuildingEntity>() != null) != record.building ||
                     (prefab.GetComponent<Container>() != null) != record.container)
@@ -178,7 +179,7 @@ internal static class WorldObjectSnapshot {
         batch.traders = document.traders;
         if (Net.IsServer) TraderLoadRecovery.Begin(world, Net.ServerEntityManager);
         foreach (var record in document.objects) {
-            var prefab = SnapshotPrefabCatalog.Resolve(record.resource);
+            var prefab = ResolveSavedPrefab(record);
             string reason = "missing resource";
             if (prefab == null || !SafeResource(prefab, record.resource, out reason) ||
                 (prefab.GetComponent<BuildingEntity>() != null) != record.building ||
@@ -297,6 +298,15 @@ internal static class WorldObjectSnapshot {
         if (batch.criticalFailures != 0 || ready.Count == 0)
             throw new InvalidDataException($"Critical world object restore failed: restored={ready.Count} skipped={batch.skipped} criticalFailures={batch.criticalFailures}; {batch.firstCriticalFailure ?? "No world objects restored."}");
         if (batch.skipped != 0) log.warn($"LOAD: continuing after {batch.skipped} noncritical world object failures; terrain/background/container barriers passed.");
+    }
+
+    static GameObject ResolveSavedPrefab(WorldObjectRecord record) {
+        // Older saves stored the shared building ID. Ceiling generation starts
+        // at 180 degrees and adds at most 15 degrees of variation.
+        if (record.building && record.resource == ScavMPBuildingSynchronizer.SpiceVineGround &&
+            (Rotation(record) * Vector3.up).y < 0f)
+            record.resource = ScavMPBuildingSynchronizer.SpiceVineCeiling;
+        return SnapshotPrefabCatalog.Resolve(record.resource);
     }
 
     static IEnumerable<GameObject> Candidates() => Object.FindObjectsOfType<Item>(true).Select(x => x.gameObject)
@@ -507,6 +517,10 @@ internal static class WorldObjectSnapshot {
                     ? field.Value.ToObject<float[]>().Cast<object>().ToArray() : field.Value.ToObject(info.FieldType);
                 info.SetValue(component, value);
             }
+            if (component is WaterContainerItem water)
+                LiquidSanitize.Clean(water, "WorldObjectSnapshot.ApplyFields");
+            if (component is NonDescriptCan can)
+                LiquidSanitize.Clean(can);
         }
     }
     internal static void ValidateFields(GameObject prefab, List<WorldObjectComponent> components) {

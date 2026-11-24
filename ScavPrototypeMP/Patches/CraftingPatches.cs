@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using HarmonyLib;
+using KrokV5Optimization;
 using LiteNetLib.Utils;
 using UnityEngine;
 
@@ -23,7 +24,7 @@ public static class PlayerCamera_TryCraft_MultiplayerPatch
 		List<Item> used = new List<Item>();
 		foreach (RecipeItem ingredient in recipe.items)
 		{
-			Item matchingItem = ingredient.GetMatchingItem(items, used);
+			Item matchingItem = CraftCommit.MatchIngredient(ingredient, items, used);
 			if (matchingItem == null)
 				return null;
 			list.Add(matchingItem);
@@ -71,7 +72,10 @@ public static class PlayerCamera_TryCraft_MultiplayerPatch
 					bool filled = false;
 					foreach (Item item in i_am_steve.GetAllItemsThorough())
 					{
-						if (item.TryGetComponent<WaterContainerItem>(out var component) && component.stack.Count == 1 && component.stack[0].liquidId == rres.id && component.SpaceLeft >= rres.resultCondition * num2)
+						if (item == null || !item.TryGetComponent(out WaterContainerItem component))
+							continue;
+						LiquidSanitize.Clean(component, "CraftResult");
+						if (component.stack.Count == 1 && component.stack[0].liquidId == rres.id && component.SpaceLeft >= rres.resultCondition * num2)
 						{
 							component.AddLiquid(rres.id, rres.resultCondition * num2);
 							// 1.0.1: filling can push the carried bottle/container over weight.
@@ -144,3 +148,61 @@ public static class PlayerCamera_TryCraft_MultiplayerPatch
 		CraftCommit.OnReceipt(reader);
 	}
 }
+
+[HarmonyPatch(typeof(RecipeItem), nameof(RecipeItem.DoesUseItemType))]
+static class RecipeItem_LiquidFilterPatch
+{
+	static void Prefix(RecipeItem __instance, Item item)
+	{
+		if (__instance.isLiquid && item != null && item.TryGetComponent(out WaterContainerItem water))
+			LiquidSanitize.Clean(water, "RecipeItem.DoesUseItemType");
+	}
+}
+
+#if TESTING
+// Run with --mp-liquid-stack-test after Item.SetupItems initializes recipe ingredients.
+[HarmonyPatch(typeof(Item), nameof(Item.SetupItems))]
+static class EmptyLiquidStackRegression
+{
+	static bool ran;
+
+	static void Postfix()
+	{
+		if (ran || Array.IndexOf(Environment.GetCommandLineArgs(), "--mp-liquid-stack-test") < 0)
+			return;
+		ran = true;
+		var bad = new GameObject("legacy liquid container");
+		var good = new GameObject("valid liquid container");
+		bad.SetActive(false);
+		good.SetActive(false);
+		try
+		{
+			var badItem = bad.AddComponent<Item>();
+			var goodItem = good.AddComponent<Item>();
+			var badContainer = bad.AddComponent<WaterContainerItem>();
+			var goodContainer = good.AddComponent<WaterContainerItem>();
+			badContainer.stack = new List<LiquidStack> {
+				new LiquidStack("", 200f), new LiquidStack(null, 20f), null,
+				new LiquidStack("__unknown_liquid_test__", 20f), new LiquidStack("water", float.NaN)
+			};
+			goodContainer.stack = new List<LiquidStack> { new LiquidStack("water", 20f) };
+			var ingredient = new RecipeItem { isLiquid = true, quality = new CraftingQuality("water", 1f) };
+			var candidates = new List<Item> { badItem, goodItem };
+			var exclusions = new List<Item>();
+			if (LiquidSanitize.Clean(badContainer, nameof(EmptyLiquidStackRegression)) != 5 ||
+				ingredient.GetMatchingItem(candidates, exclusions) != goodItem)
+				throw new InvalidOperationException("A malformed liquid stack blocked a valid recipe match.");
+
+			badContainer.stack.Add(new LiquidStack("", 200f));
+			if (CraftCommit.MatchIngredient(ingredient, candidates, exclusions) != goodItem)
+				throw new InvalidOperationException("The recipe matcher failed to skip a malformed candidate.");
+			Plugin.log.LogInfo("[liquid-stack-test] PASS");
+		}
+		finally
+		{
+			UnityEngine.Object.Destroy(bad);
+			UnityEngine.Object.Destroy(good);
+		}
+	}
+}
+#endif

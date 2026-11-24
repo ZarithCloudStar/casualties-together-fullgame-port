@@ -1296,6 +1296,36 @@ public class TrackerSpiderHandler : BaseComponentTracker<SpiderHandler> {
 internal class ScavMPBuildingSynchronizer : CasualtiesTogetherSingleton {
 
 
+    internal const string SpiceVineGround = "spicevine";
+    internal const string SpiceVineCeiling = "spicevineceiling";
+
+    internal static bool IsSpiceVine(BuildingEntity building) =>
+        building.id == SpiceVineGround || building.id == SpiceVineCeiling;
+
+    internal static bool NeedsHostCombat(BuildingEntity building) =>
+        IsSpiceVine(building)
+#if FULLGAME
+        || building.GetComponent<LaserDroneScript>() != null
+#endif
+        ;
+
+    static readonly HashSet<string> missingCombatSync = new();
+
+    internal static bool TryGetCombatSync(BuildingEntity building, out SyncInfo sync) {
+        // Only the server can issue a SyncInfo. Never pass an untracked replica
+        // to NewGO on a client, where it would be treated as a generated copy.
+        if (NetObjectRegistry.TryGetSyncInfo(building, out sync) && sync != null && !sync.IsDestroyed)
+            return true;
+        if (Net.IsServer && !NetObjectRegistry.ObjectShouldNotBeSynced(building.gameObject)) {
+            sync = NetObjectRegistry.Server_EnsureItemIsNetworkRegistered(building.gameObject);
+            if (sync != null && !sync.IsDestroyed) return true;
+        }
+        string key = SyncInfo.GetItemID(building.gameObject);
+        if (missingCombatSync.Add(key))
+            log.warn($"[combat] Missing building SyncInfo for {key} at {building.transform.position}");
+        return false;
+    }
+
     public static bool BuildingHasActivePhysics(BuildingEntity building) {
         // btw dont check if its sleeping , i dont need it to affect this
         if (building.TryGetComponent(out Rigidbody2D rb) && rb.bodyType == RigidbodyType2D.Dynamic) {
