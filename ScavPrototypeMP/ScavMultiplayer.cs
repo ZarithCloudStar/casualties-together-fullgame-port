@@ -1,4 +1,4 @@
-
+﻿
 using BepInEx;
 using BepInEx.Logging;
 using CasualtiesMultiplayerAPI;
@@ -188,6 +188,8 @@ public bool Teams = false;
 // Synced owner flag for GCE's first-layer team spawn behavior. Together only
 // carries the value; GCE implements the sites and teleports.
 public bool TeamSpawnPositions = false;
+// GCE module mask: bit 7 = master switch, bits 0..6 = ModuleManager.All index.
+public byte GCEModules = 0;
 public bool PVP = false;
 public bool PVPCombatDismember = true;
 public float PVPMoodDebuff = 0.5f;
