@@ -78,6 +78,33 @@ public readonly List<(double, ScavPlayer)> last_shrapnel_movement = new();
 public override void Init() {
 base.Init();
 
+// If the shard module is not active, keep the old five-slot protocol:
+// native clients have exactly five UI objects and hide the unused ones.
+if (GameContentExpansionBridge.ShardTotal == null) {
+int visible = Mathf.Clamp(GameContentExpansionBridge.GetShardTotal(limb), 0, 5);
+int hidden = 5 - visible;
+for (int i = 0; i < 5; i++) {
+Vector2 pos = i switch {
+0 => new Vector2(-248f, -316.85f),
+1 => new Vector2(-143f, -316.85f),
+2 => new Vector2(0f, -316.85004f),
+3 => new Vector2(116f, -316.85004f),
+_ => new Vector2(208f, -316.85f),
+};
+pos += Random.insideUnitCircle * 20f;
+if (hidden > 0) {
+hidden--;
+pos += Vector2.up * 2500f;
+}
+shrapnel_locations.Add(pos);
+shrapnel_categories.Add(4);
+removed.Add(false);
+bled.Add(false);
+last_shrapnel_movement.Add((0.0, null));
+}
+return;
+}
+
 int total = GameContentExpansionBridge.GetShardTotal(limb);
 if (total <= 0) return;
 var categories = GameContentExpansionBridge.GetShardCategories(limb) ?? Array.Empty<int>();
@@ -2308,7 +2335,7 @@ if (owner == null || owner == ScavPlayer.LocalPlayer) {
 synctimer -= Time.deltaTime;
 
 // force send now if i just took out the last shrapeneeell
-if (currentlyHeld.anchoredPosition.y < 35f) {
+if (currentlyHeld != null && currentlyHeld.anchoredPosition.y < 35f) {
 Vector2 heldOffset = shtraverse.Field("heldOffset").GetValue<Vector2>();
 if (Minigame.game.handPos.y + heldOffset.y > 35f) {
 currentlyHeld.anchoredPosition = Minigame.game.handPos + heldOffset; // to gurantee that i will not spam this message every frame
