@@ -615,6 +615,8 @@ public static class SavesystemPatch {
     // set for map debug and the tutorial. those sessions neither read nor write mp_save.
     internal static bool PreserveSave;
     internal static bool DebugWorldUsesSave;
+    // map debug sessions write to mp_debug_save instead of the normal save root.
+    internal static bool InDebugMap;
     const string _mpsavefolder_name = "mp_save";
     public static string MultiplayerSaveRoot {
         get {

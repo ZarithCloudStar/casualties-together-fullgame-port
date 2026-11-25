@@ -252,6 +252,13 @@ public class SyncInfoGameObjectTracker : MonoBehaviour {
             return;
         }
 
+        // the level tool is dragging this. the pose must go out every step or the ghost lags.
+        if (syncInfo.placeGhost.Value) {
+            visualUpdateTimer = 0;
+            syncInfo.WriteObjectIntoPacket();
+            return;
+        }
+
         // worn and held items follow the body every physics step.
         if (HeldByBody()) {
             _wasLoose = false;
