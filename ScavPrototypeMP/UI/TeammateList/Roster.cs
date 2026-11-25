@@ -18,6 +18,11 @@ namespace Together.UI.TeammateList {
         // lost connection uses 3x wound-open distance; click-to-open still uses 1x.
         private const float RangeMult = 3f;
 
+        // GCE quick slots use Shift+digit while the cursor is over an item.
+        // Resolve the dependency softly so Together still works without GCE.
+        private static Type gceQuickSlotsType;
+        private static MethodInfo gceQuickSlotsHover;
+
         private static string LostConnection => SkinLocale.T("Lost Connection", "信号丢失");
 
         private static string ChipNotDetected => SkinLocale.T("Chip Not Detected", "未检测到芯片");
@@ -304,21 +309,22 @@ namespace Together.UI.TeammateList {
         }
 
         private void Hotkeys() {
-            if (Input.GetKey((KeyCode)304) || Input.GetKey((KeyCode)303)) {
-                int num = -1;
-                if (Input.GetKeyDown((KeyCode)49) || Input.GetKeyDown((KeyCode)257)) {
-                    num = 0;
-                } else if (Input.GetKeyDown((KeyCode)50) || Input.GetKeyDown((KeyCode)258)) {
-                    num = 1;
-                } else if (Input.GetKeyDown((KeyCode)51) || Input.GetKeyDown((KeyCode)259)) {
-                    num = 2;
-                } else if (Input.GetKeyDown((KeyCode)52) || Input.GetKeyDown((KeyCode)260)) {
-                    num = 3;
-                }
-                if (num >= 0) {
-                    OpenAt(_page * 4 + num);
-                }
+            if (!Input.GetKey((KeyCode)304) && !Input.GetKey((KeyCode)303)) return;
+            int num = -1;
+            if (Input.GetKeyDown((KeyCode)49) || Input.GetKeyDown((KeyCode)257)) {
+                num = 0;
+            } else if (Input.GetKeyDown((KeyCode)50) || Input.GetKeyDown((KeyCode)258)) {
+                num = 1;
+            } else if (Input.GetKeyDown((KeyCode)51) || Input.GetKeyDown((KeyCode)259)) {
+                num = 2;
+            } else if (Input.GetKeyDown((KeyCode)52) || Input.GetKeyDown((KeyCode)260)) {
+                num = 3;
             }
+            if (num < 0) return;
+            // When the cursor is on an item, GCE's Shift+digit binding owns the
+            // gesture. Without an item, the original teammate shortcut runs.
+            if (GceQuickSlotsHoveringItem()) return;
+            OpenAt(_page * 4 + num);
         }
 
         private void Drag() {
@@ -1007,6 +1013,25 @@ namespace Together.UI.TeammateList {
                 return line;
             }
             return line.Substring(0, num);
+        }
+
+        private static bool GceQuickSlotsHoveringItem() {
+            try {
+                if (gceQuickSlotsType == null) {
+                    foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies()) {
+                        var type = assembly.GetType("GameContentExpansion.Compatibility.QuickSlots", false);
+                        if (type == null) continue;
+                        gceQuickSlotsType = type;
+                        gceQuickSlotsHover = type.GetMethod("IsHoveringItemForHotkey",
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                        break;
+                    }
+                }
+                if (gceQuickSlotsHover == null) return false;
+                return gceQuickSlotsHover.Invoke(null, null) is bool hovering && hovering;
+            } catch {
+                return false;
+            }
         }
 
         private static bool Typing() {
