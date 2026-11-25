@@ -186,9 +186,9 @@ Plugin.log.LogWarning($" Server_DrillPodRepairTypeShit    IS WORKING   YAYYAAYAY
 #endif
 
 OnUseRewritten(body, drel);
-// if kit was already gone on host inventory, still force the pod working
+// the kit may have been gone on the host; do not repair without a kit.
 if (!drel.working) {
-ForceRepairDrill(drel);
+return;
 }
 ServerMain.Server_AnnounceSound(si.go.transform.position, "drillpodrepair", ServerMain.GetListOfClientIdsExceptThisAndHost(clientId));
 
