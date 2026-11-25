@@ -570,6 +570,11 @@ static readonly HashSet<knetid> _spawnBusy = new HashSet<knetid>();
 
 internal static bool SpawnPlacementBusy(knetid clientId) => _spawnBusy.Contains(clientId);
 
+// the spawn coroutine runs on the player, so it never reaches its own Remove when the player leaves first.
+internal static void ForgetSpawnBusy(knetid clientId) {
+    _spawnBusy.Remove(clientId);
+}
+
 #if FULLGAME
 static readonly Dictionary<string, (int layer, Vector2 position)> disconnectedPositions = new();
 
