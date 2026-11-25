@@ -217,6 +217,7 @@ public class SpriteReplacerPlugin : MonoBehaviour {
         SyncSpeciesCache();
         SkinMenuUI.EnsureCanvas();
         SkinMenuUI.SetVisible(false);
+        KeybindRecovery.Apply();
         ApplyToAll();
     }
 
