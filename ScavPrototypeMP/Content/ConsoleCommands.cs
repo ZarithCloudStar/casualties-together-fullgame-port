@@ -2164,18 +2164,31 @@ ConsoleScript.instance.LogToConsole($"snowbg {PlayerCamera.main.backgroundSnow.a
 
 RegisterCommand(new Command("map", "MP dev", (string[] splited) => {
 ConFailIfNetworkIsRunningAndIsClient();
-ConFailIfNotInMainMenu();
 
 var m = "debug";
 if (splited.Length > 1) {
 m = splited[1];
 }
+var sub = splited.Length > 2 ? splited[2] : "start";
+string mapName = splited.Length > 3 ? splited[3] : null;
+
+if (m == "debug" && sub == "save") {
+WorldMP.SaveDebugMapNow(mapName);
+return;
+}
+
+ConFailIfNotInMainMenu();
 
 var prs = PreRunScript.instance;
 
 if (m == "debug") {
-log.l("Loading debug world");
-WorldMP.LoadDebugWorld();
+if (sub == "load") {
+log.l("Loading saved debug world");
+WorldMP.LoadSavedDebugWorld(mapName);
+} else {
+log.l("Starting a new debug world");
+WorldMP.StartDebugWorld();
+}
 } else if (m == "tutorial") {
 log.l("Loading tutorial world");
 prs.StartTutorial();
@@ -2186,6 +2199,29 @@ prs.StartRun();
 }, new Dictionary<int, List<string>> { { 0,
 new List<string> { "debug", "tutorial", "vanilla" }
 } }));
+
+RegisterCommand_LocalOnly(new Command("setworldspawn", "MP - spawn new players at a point saved with this level", (string[] splited) => {
+ConFailIfNetworkIsRunningAndIsClient();
+ConFailIfCheatsDisabled();
+con.CheckForWorld();
+con.CheckArgumentCount(splited, 1);
+string which = splited[1].ToLowerInvariant();
+Vector2 pos;
+if (which == "self") {
+Body body = Util.GetLocalBody();
+if (body == null)
+throw new Exception("No local body.");
+pos = body.transform.position;
+} else if (which == "cursor") {
+pos = Util.GetCursorWorldPos();
+} else {
+throw new Exception("Expected self or cursor.");
+}
+WorldSpawn.Assign(pos);
+con.LogToConsole($"World spawn set to {pos.x:0.0}, {pos.y:0.0}");
+}, new Dictionary<int, List<string>> {
+{ 0, new List<string> { "self", "cursor" } },
+}, ("where", "self or cursor")));
 
 RegisterCommand_LocalOnly(new Command("novisioneffect", "MP", (string[] splited) => {
 ref bool val = ref _DEV_NO_VISION_EFFECT;
