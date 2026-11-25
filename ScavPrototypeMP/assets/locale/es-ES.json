@@ -222,6 +222,8 @@
   "casualtiestogether_ok": "Ok",
   "casualtiestogether_rule_name_LobbyTimeoutSeconds": "Tiempo de conexión de Steam",
   "casualtiestogether_rule_desc_LobbyTimeoutSeconds": "Tiempo que Steam mantiene la conexión de un jugador que se une antes de abandonar (5–120 s).",
+  "casualtiestogether_rule_name_RagdollImpact": "Impacto de ragdoll",
+  "casualtiestogether_rule_desc_RagdollImpact": "Las extremidades de un ragdoll en caída dañan a los jugadores a los que golpean por encima de la velocidad de caminata. Atrapar o llevar al ragdoll lo impide.",
   "casualtiestogether_wv_peerid": "PEER ID: ",
   "casualtiestogether_wv_deceased": "FALLECIDO",
   "casualtiestogether_wv_cpr": "RCP",

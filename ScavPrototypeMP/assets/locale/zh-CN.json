@@ -225,6 +225,8 @@
   "casualtiestogether_ok": "确定",
   "casualtiestogether_rule_name_LobbyTimeoutSeconds": "Steam 连接超时",
   "casualtiestogether_rule_desc_LobbyTimeoutSeconds": "Steam 等待加入玩家连接的最长时间（5–120 秒）。",
+  "casualtiestogether_rule_name_RagdollImpact": "倒地压伤",
+  "casualtiestogether_rule_desc_RagdollImpact": "倒地的玩家肢体在高速撞到其他玩家时会造成伤害；接住或抱着该玩家时不会触发。",
   "casualtiestogether_wv_peerid": "对等端 ID：",
   "casualtiestogether_wv_deceased": "已死亡",
   "casualtiestogether_wv_cpr": "心肺复苏",
