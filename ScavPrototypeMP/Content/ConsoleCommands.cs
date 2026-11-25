@@ -1,4 +1,4 @@
-using CasualtiesMultiplayerAPI;
+﻿using CasualtiesMultiplayerAPI;
 using CasualtiesTogetherUtils;
 using HarmonyLib;
 using KrokV5Optimization;
@@ -3324,27 +3324,40 @@ return false;
 
 static bool SanitizeClientAdminCommand(ScavPlayer plr, ref string[] args, Vector2 cursorpos) {
 var realcomm = ConsoleScript.SearchExact(args[0]);
-if (realcomm != null) {
-try {
-if (realcomm.name == "repeat") {
-var commands = args[3];
-foreach (var item in commands.Split(';')) {
-var splited = item.Replace('_', ' ').Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-if (splited.Length > 0) {
-if (Server_CheckBannedCommand(plr, splited[0])) {
+if (realcomm == null) {
+return true;
+}
+
+if (Server_CheckBannedCommand(plr, realcomm.name))
+return false;
+
+// Custom commands capture their command string, so a client could smuggle a banned command through them.
+if (realcomm.custom) {
+log.sus($"{plr} tried to execute a custom command: {realcomm.name}");
 return false;
 }
+
+// repeat/timedcommand/createvote carry another command; sanitize that one too.
+if (realcomm.name is "repeat" or "timedcommand" or "createvote") {
+var commandsArgIdx = realcomm.name == "createvote" ? 1 : 3;
+if (args.Length <= commandsArgIdx)
+return false;
+var commands = args[commandsArgIdx];
+
+var list = new List<string>();
+foreach (var item in commands.Split(';')) {
+var split = item.Replace('_', ' ').Split(' ', StringSplitOptions.RemoveEmptyEntries);
+if (split.Length <= 0)
+continue;
+if (!SanitizeClientAdminCommand(plr, ref split, cursorpos))
+return false;
+list.Add(string.Join('_', split));
 }
-}
+args[commandsArgIdx] = string.Join(';', list);
 } else if (realcomm.name == "spawn") {
 if (args.Length == 2) {
 args = args.AddToArray("cursor");
 }
-}
-
-} catch (Exception e) {
-log.error($"SERVER: REQUEST FROM {plr} TO TryExecuteCommand \n" + e.ToString());
-return false;
 }
 
 // just in case keep the old parser here
@@ -3382,8 +3395,6 @@ log.error($"SERVER: REQUEST FROM {plr} TO TryExecuteCommand \n" + e.ToString());
 return false;
 }
 
-
-}
 return true;
 }
 
