@@ -148,6 +148,10 @@ public class SyncBody : PredictableEntityLogic {
     private SyncVar<bool> _offHand;
 
     internal SyncVar<bool  > _standing;
+    // movetool size. a zero scale means the body has not reported a pose yet.
+    internal SyncVar<Vector2> _bodyScale;
+    // the host move tool is dragging this body. the owner follows that position.
+    internal SyncVar<bool> _moveHeld;
     internal SyncVar<bool  > _isPiggyback;
     private SyncVar<knetid> _piggyback;
 
@@ -614,6 +618,10 @@ public class SyncBody : PredictableEntityLogic {
         if (CreateCharacter()) {
             if (!nb.IsBodyLocal()) {
                 ApplyDataToBody();
+            } else if (!IsServer) {
+                ApplyBodyScale();
+                if (_moveHeld.Value)
+                    MoveTool.Follow(nb);
             }
         }
     }
@@ -631,7 +639,9 @@ public class SyncBody : PredictableEntityLogic {
         _crouching.Value = nb.body.crouching;
         _offHand.Value = nb.body.handSlot != 0;
         _standing.Value = nb.body.standing;
-        // Ragdoll syncgroup is handled in Player.SlowButFastUpdate 
+        _bodyScale.Value = nb.body.transform.localScale;
+        _moveHeld.Value = MoveTool.Dragging(nb.body);
+        // Ragdoll syncgroup is handled in Player.SlowButFastUpdate
 
         //if (!_standing.Value) 
         { // Write the ragdoll data
@@ -748,6 +758,18 @@ public class SyncBody : PredictableEntityLogic {
         if (!body.IsBodyLocal() && body.sleeping && body.moveDir != Vector2.zero) { // if theyre sleeping and moving, they probably woke up
             body.sleeping = false;
         }
+        ApplyBodyScale();
+    }
+
+    void ApplyBodyScale() {
+        if (nb == null || nb.body == null)
+            return;
+        Vector2 sc = _bodyScale.Value;
+        if (sc.sqrMagnitude < 0.0001f)
+            return;
+        Vector3 cur = nb.body.transform.localScale;
+        if (cur.x != sc.x || cur.y != sc.y)
+            nb.body.transform.localScale = new Vector3(sc.x, sc.y, cur.z);
     }
 
     internal bool readingRagdollData = false;
@@ -855,6 +877,8 @@ public class SyncInfo : PredictableEntityLogic {
     public SyncVar<byte> container_ver;
     public SyncVar<bool> rb_dynamic;
     public SyncVar<bool> itemLock;
+    // movetool is holding this prop. clients snap pose and drop colliders until it lets go.
+    public SyncVar<bool> placeGhost;
 
     public SyncVar<Vector2> _scale; // default is 1,1
 
@@ -2091,6 +2115,39 @@ public class SyncInfo : PredictableEntityLogic {
     }
 
     void ApplyTransform() {
+        // placement drag. the glide and the rigidbody would rubber-band a building the host already put down.
+        if (placeGhost.Value && go != null) {
+            Transform held = go.transform;
+            MoveTool.HoldColliders(go);
+            if (held.parent != null)
+                held.SetParent(null, true);
+            Vector2 ghostScale = _scale.Value;
+            ScaledLights.Remember(held);
+            if (ghostScale.x != held.localScale.x || ghostScale.y != held.localScale.y)
+                held.localScale = new Vector3(ghostScale.x, ghostScale.y, held.localScale.z);
+            ScaledLights.Apply(held);
+            Vector2 raw = _position.Value;
+            float rawAng = _rotation.Value.Degrees;
+            if (go.TryGetComponent(out Rigidbody2D ghostRb) && ghostRb != null) {
+                ghostRb.velocity = Vector2.zero;
+                ghostRb.angularVelocity = 0f;
+                ghostRb.interpolation = RigidbodyInterpolation2D.None;
+                if (ghostRb.bodyType != RigidbodyType2D.Kinematic)
+                    ghostRb.bodyType = RigidbodyType2D.Kinematic;
+                ghostRb.position = raw;
+                ghostRb.rotation = rawAng;
+            }
+            held.SetPositionAndRotation(raw, Quaternion.Euler(0f, 0f, rawAng));
+            // the release packet is the last turn. the glide has to start there, not at the pose from before the drag.
+            _poseGlide = true;
+            _poseFrom = _poseTo = raw;
+            _poseFromAng = _poseToAng = rawAng;
+            _poseDur = 0f;
+            _poseStart = Time.fixedTime;
+            return;
+        }
+        if (go != null)
+            MoveTool.ReleaseColliders(go);
 
         var trans = go.transform;
         Vector2 currentPos = trans.position;
@@ -2099,8 +2156,10 @@ public class SyncInfo : PredictableEntityLogic {
         var isRigid = go.TryGetComponent(out Rigidbody2D rb);
 
         if (scale.x != trans.localScale.x || scale.y != trans.localScale.y) {
+            ScaledLights.Remember(trans);
             var newscale = new Vector3(scale.x, scale.y, trans.localScale.z);
             trans.localScale = newscale;
+            ScaledLights.Apply(trans);
         }
 
         Vector2 pos;

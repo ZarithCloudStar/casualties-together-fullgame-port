@@ -452,6 +452,7 @@ internal static float _DEV_LAST_VOLUME = 1f;
 
 public static bool _DEV_TELEKINESIS = false;
 public static GameObject _DEV_TELEKINESIS_OBJECT = null;
+public static bool _DEV_MOVETOOL = false;
 
 
 public static GameObject SpawnThingOnPlayer(string resourceid, Body body = null, bool give_it_to_em = false, GameObject container = null) {
@@ -2210,9 +2211,29 @@ target = ParseBool01(splited[1]);
 if (target) {
 ConFailIfNetworkIsRunningAndIsClient();
 ConFailIfCheatsDisabled();
+_DEV_MOVETOOL = false;
+MoveTool.Drop();
 }
 val = target;
 ConsoleScript.instance.LogToConsole($"telekinesis {val}");
+}, null));
+
+RegisterCommand_LocalOnly(new Command("movetool", "MP dev - snap, rotate, and scale props", (string[] splited) => {
+ref bool val = ref _DEV_MOVETOOL;
+var target = !val;
+if (splited.Length > 1) {
+target = ParseBool01(splited[1]);
+}
+if (target) {
+ConFailIfNetworkIsRunningAndIsClient();
+ConFailIfCheatsDisabled();
+_DEV_TELEKINESIS = false;
+_DEV_TELEKINESIS_OBJECT = null;
+}
+val = target;
+if (!val)
+MoveTool.Drop();
+ConsoleScript.instance.LogToConsole($"movetool {val}");
 }, null));
 
 
