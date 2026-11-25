@@ -1,4 +1,4 @@
-using CasualtiesMultiplayerAPI;
+﻿using CasualtiesMultiplayerAPI;
 using CasualtiesTogetherUtils;
 using K4os.Compression.LZ4;
 using LiteEntitySystem;
@@ -723,6 +723,9 @@ public static class Net {
             if (Util.GameIsFull()) PendingCharacterAdmission.Tick();
 #endif
             ClientEntityManager?.Update();
+            // after this frame's physics. the marked object poses ship in the
+            // server entity update below.
+            if (IsServer) SyncInfoGameObjectTracker.FlushFrameSamples();
             ServerEntityManager?.Update();
 #if FULLGAME
             if (Util.GameIsFull()) { ClientStartupMessages.Flush(); JoinModNotice.Tick(); }
