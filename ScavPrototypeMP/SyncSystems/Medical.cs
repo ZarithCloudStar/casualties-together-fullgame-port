@@ -443,6 +443,11 @@ this.consciousness = 100;
 this.stamina = 100;
 this.happiness = 0;
 this.weightOffset = 0;
+this.weightVisualOffset = 0;
+this.chipHeight = 0;
+this.chipAge = 0;
+this.chipId = 0;
+this.chipVer = 0;
 this.radiationSickness = 0;
 this.internalBleeding = 0;
 this.hemothorax = 0;
@@ -538,6 +543,11 @@ public float energy { get { return compressednum4 / 2.55f; } set { compressednum
 
 public float happiness;
 public float weightOffset;// -80 to 100
+public float weightVisualOffset;
+public int chipHeight;
+public int chipAge;
+public int chipId;
+public int chipVer;
 public float radiationSickness;
 public float internalBleeding;
 public float hemothorax;
@@ -657,6 +667,19 @@ stamina = body.stamina;
 energy = body.energy;
 happiness = body.happiness;
 weightOffset = body.weightOffset;
+weightVisualOffset = body.weightVisualOffset;
+BodyChipInfo chip = body.GetComponent<BodyChipInfo>();
+if (chip != null && chip.has) {
+chipHeight = chip.height;
+chipAge = chip.age;
+chipId = chip.id;
+chipVer = chip.ver;
+} else {
+chipHeight = 0;
+chipAge = 0;
+chipId = 0;
+chipVer = 0;
+}
 radiationSickness = body.radiationSickness;
 internalBleeding = body.internalBleeding;
 hemothorax = body.hemothorax;
@@ -801,6 +824,15 @@ body.energy = energy;
 body.happiness = happiness;
 
 body.weightOffset = weightOffset;
+if (!is_local) {
+body.weightVisualOffset = weightVisualOffset;
+if (chipHeight > 0) {
+BodyChipInfo chip = body.GetComponent<BodyChipInfo>();
+if (chip == null) chip = body.gameObject.AddComponent<BodyChipInfo>();
+if (chip.Set(chipHeight, chipAge, chipId, chipVer))
+PlayerCamera_ToggleWoundView_MultiplayerPatch.RefreshChipDetails(body);
+}
+}
 body.radiationSickness = radiationSickness;
 body.internalBleeding = internalBleeding;
 body.hemothorax = hemothorax;
@@ -1654,11 +1686,7 @@ SetWoundviewSpeciesSprite(wv, b);
 if (looking_at_someone_else) {
 if (b.TryGetNetBody(out var nb)) {
 wv.nameText.text = nb.bodyName;
-// Keep the native height / age / specimen row instead of duplicating the name.
-// cInfo is the existing native chip metadata; no remote personal-data sync is invented here.
-if (wv.cInfo != null && wv.cInfo.Length >= 4)
-    wv.SetCharDetails(wv.cInfo[0], wv.cInfo[1], wv.cInfo[2], wv.cInfo[3]);
-
+ApplyChipDetails(b);
 } else { // thats a problem
 Plugin.log.LogError($"Couldnt get NetBody of a body, what??? {wv.body} ");
 wv.nameText.text = GetSpeciesName(b);
@@ -1667,10 +1695,46 @@ wv.bodyStatText.text = "ERROR";
 
 } else { // set it back to myself
 wv.nameText.text = GetSpeciesName(b);
-wv.SetCharDetails(wv.cInfo[0], wv.cInfo[1], wv.cInfo[2], wv.cInfo[3]);
+ChipInfoSync.EnsureLocal(b);
+ApplyChipDetails(b);
 }
 
 WoundView_AddImageToLimb_MultiplayerPatch.RefreshAllLimbImages();
+}
+
+// Height/age/specimen row comes from the inspected body's chip info, not the
+// local player's WoundView.cInfo. Remote values arrive via BodyChipInfo.
+static void ApplyChipDetails(Body b) {
+var wv = WoundView.view;
+if (wv == null) return;
+if (b != null && b.TryGetComponent(out BodyChipInfo chip) && chip.has) {
+if (b.IsBodyLocal()) {
+wv.SetCharDetails(chip.height, chip.age, chip.id, chip.ver);
+} else {
+// Do not overwrite WoundView.cInfo for a peer: native save/snapshot code
+// uses cInfo[2] as the local specimen save id. Display the peer's row only.
+wv.bodyStatText.text = chip.height + "cm | " + chip.age + "y | #" + chip.id;
+wv.versionText.text = "UNI-HEALTH v2.0" + chip.ver;
+}
+return;
+}
+if (b != null && b.IsBodyLocal()) {
+if (ChipInfoSync.HasLocal) {
+wv.SetCharDetails(ChipInfoSync.LocalHeight, ChipInfoSync.LocalAge, ChipInfoSync.LocalId, ChipInfoSync.LocalVer);
+return;
+}
+if (wv.cInfo != null && wv.cInfo.Length >= 4 && wv.cInfo[0] > 0) {
+wv.SetCharDetails(wv.cInfo[0], wv.cInfo[1], wv.cInfo[2], wv.cInfo[3]);
+return;
+}
+}
+wv.bodyStatText.text = "---";
+wv.versionText.text = "UNI-HEALTH v2.0";
+}
+
+internal static void RefreshChipDetails(Body b) {
+if (WoundView.view == null || b == null || WoundView.view.body != b) return;
+ApplyChipDetails(b);
 }
 
 static string WoundViewName(NetBody nb) {

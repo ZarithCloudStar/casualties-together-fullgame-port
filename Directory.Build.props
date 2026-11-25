@@ -4,12 +4,12 @@
 	<PropertyGroup>
 
 		<!-- Single-player / multiplayer split, separate save pages, room leave flow. -->
-		<ModVersion>5.5.4-cu-port-bugfix6</ModVersion>
+		<ModVersion>5.5.4-cu-port-bugfix7</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Wire/protocol identity; intentionally separate from the package version. -->
-		<NetworkVersion>5.5.4-cu-port-fix6</NetworkVersion>
+		<NetworkVersion>5.5.4-cu-port-fix7</NetworkVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
-		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.4-cu-port-bugfix6</UpdateReleaseVersion>
+		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.4-cu-port-bugfix7</UpdateReleaseVersion>
 
 		<!-- VS/solution builds set SolutionDir; direct `dotnet build <project>` does not. -->
 		<SlnRoot Condition="'$(SlnRoot)' == '' and '$(SolutionDir)' != ''">$(SolutionDir)</SlnRoot>

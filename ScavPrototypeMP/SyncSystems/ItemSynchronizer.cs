@@ -874,6 +874,29 @@ public static class Body_DropWearable_MultiplayerPatch{
 
 
 
+[HarmonyPatch(typeof(Body), nameof(Body.WearWearable))]
+static class Body_WearWearable_RemoteAlertPatch {
+    // The host runs AutoPickUpItem on the client's body copy for craft results.
+    // Native WearWearable then alerts on the host when a same-slot item is
+    // already worn. Keep the native refusal (do not swap), but send the alert
+    // only to the client whose body triggered it.
+    static bool Prefix(Body __instance, Item item) {
+        if (!Net.IsServer || __instance == null || item == null || item.Stats == null || !item.Stats.wearable)
+            return true;
+        if (__instance.IsBodyLocal()) return true;
+        Item worn = __instance.GetWearableBySlotID(item.Stats.wearSlotId);
+        if (worn == null || worn == item) return true;
+
+        if (__instance.TryGetNetBody(out var nb) && nb.plr != null) {
+            string msg = Locale.GetOther("alertalreadywearing")
+                .Replace("<1>", item.Stats.rec.recognizable ? item.fullName : Locale.GetOther("unknownobject"))
+                .Replace("<2>", worn.Stats.rec.recognizable ? worn.fullName : Locale.GetOther("unknownobject"));
+            nb.plr.Server_DoAlertSingle(msg);
+        }
+        return false;
+    }
+}
+
 [HarmonyPatch(typeof(Body), nameof(Body.WearWearable) )]
 public static class Body_WearWearable_MultiplayerPatch{
     
