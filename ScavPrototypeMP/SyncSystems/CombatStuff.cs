@@ -1,4 +1,4 @@
-using CasualtiesTogetherUtils;
+﻿using CasualtiesTogetherUtils;
 using HarmonyLib;
 using KrokV5Optimization;
 using LiteNetLib;
@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using Unity.VisualScripting;
 using UnityEngine;
+using Together.Integration;
 using static GunScript;
 using Random = UnityEngine.Random;
 
@@ -2100,7 +2101,7 @@ if (suicide && Net.IsServer) {
 if (!hitLimbs.Contains(npc.head)) {
 //log.l($"suicide gunshot didnt hit the head lol, forcing it. ");
 
-TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(npc.head, gst, false);
+TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(npc.head, gst, false, GameContentExpansionBridge.ShardCatPvP);
 }
 }
 
@@ -2499,7 +2500,7 @@ var hitLimbsDuplicateCount = hitLimbs.GroupBy(x => x, ReferenceEqualityComparer.
 
 Dictionary<NetBody, float> plrdamages = new();
 foreach (var limb in hitLimbs) {
-var dmg = TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(limb, gst, true);
+var dmg = TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(limb, gst, true, GameContentExpansionBridge.ShardCatPvP);
 
 if (limb.TryGetNetBody(out var nb)) {
 if (!plrdamages.ContainsKey(nb)) {
@@ -2616,7 +2617,7 @@ return damage;
 
 
 //OG: TurretScript.Shoot V5t4  the part where it applies damage to body // TODO TS IS OUTDATED  FireInfo.playerDamageMultiplier WAS ADDED, BUT IS IT USED THO?
-public static float Stolen_ShootApplyDamageLimb(Limb limb, TrackerGunScript gst, bool use_pvp_damage_model) {
+public static float Stolen_ShootApplyDamageLimb(Limb limb, TrackerGunScript gst, bool use_pvp_damage_model, int shardCategory = GameContentExpansionBridge.ShardCatPvP) {
 limb.body.adrenaline = 100f;
 
 var armor = limb.GetArmorReduction();
@@ -2637,8 +2638,10 @@ damage = gst.og.animalDamage / armor * 0.5f;
 
 limb.skinHealth -= damage;
 limb.muscleHealth -= damage;
+if (GameContentExpansionBridge.ShardHit == null) {
 limb.bleedAmount += Random.Range(30f, 40f) / armor;
 limb.shrapnel = Math.Max(limb.shrapnel, Random.Range(0, (int)Mathf.Clamp(5f * rule_mult, 1, 5)));
+}
 
 limb.DamageWearables(0.8f * rule_mult);
 }
@@ -2651,8 +2654,10 @@ damage = Random.Range(70f, 100f) / armor; // for completeness
 
 limb.skinHealth -= damage;
 limb.muscleHealth -= Random.Range(70f, 100f) / armor;
+if (GameContentExpansionBridge.ShardHit == null) {
 limb.bleedAmount += Random.Range(30f, 40f) / armor;
 limb.shrapnel = 5;
+}
 
 limb.DamageWearables(1f);
 }
@@ -2725,6 +2730,9 @@ CombatStuff.BetterDismember(limb, true);
 
 }
 
+if (GameContentExpansionBridge.ShardHit != null && (use_pvp_damage_model == false || rule_mult != 0)) {
+GameContentExpansionBridge.TryShardHit(limb, shardCategory);
+}
 return damage;
 }
 

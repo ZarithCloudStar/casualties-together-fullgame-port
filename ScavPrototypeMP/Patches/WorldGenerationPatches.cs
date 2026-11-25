@@ -319,6 +319,7 @@ public static class WorldGeneration_CreateExplosion_MultiplayerPatch {
     public static bool is_inside_CreateExplosion = false;
     static bool _forcerun_tempbool = false;
     static int hidRemote;
+    [HarmonyPriority(Priority.High)]
     static bool Prefix(ExplosionParams param) {
         is_inside_CreateExplosion = true;
         last_explosion_params = param;

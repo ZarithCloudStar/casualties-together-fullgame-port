@@ -1,4 +1,4 @@
-using CasualtiesTogetherUtils;
+﻿using CasualtiesTogetherUtils;
 using HarmonyLib;
 using LiteNetLib;
 using System;
@@ -15,6 +15,7 @@ using UnityEngine.PlayerLoop;
 using UnityEngine.UI;
 using static Mono.Security.X509.X520;
 using static WoundView;
+using Together.Integration;
 
 namespace Together;
 
@@ -52,7 +53,7 @@ set => pb1[5] = value;
 }
 
 
-private byte shrapnel;
+private int shrapnel;
 
 private byte compressednumfurBloodAmount;
 public float furBloodAmount { get { return compressednumfurBloodAmount / 25.5f; } set { compressednumfurBloodAmount = (byte)(Mathf.Clamp(value, 0f, 10f) * 25.5f); } }
@@ -93,7 +94,7 @@ prosthetic = new ProstheticHealthState(limb.prostheticInfo);
 #endif
 dismembered = limb.dismembered;
 
-shrapnel = (byte)limb.shrapnel;
+shrapnel = limb.shrapnel;
 infected = limb.infected;
 muscleHealth = limb.muscleHealth;
 skinHealth = limb.skinHealth;
@@ -269,6 +270,10 @@ MinigameMPManager.NoteSlow("health bandage by " + limb.bandageSlowAmount.ToStrin
 
 limb.furBloodAmount = furBloodAmount;
 limb.shrapnel = shrapnel;
+// If this peer does not have the shard module, collapse packed source data
+// back to a vanilla-safe count instead of letting the minigame see bit 30.
+if (GameContentExpansionBridge.ShardTotal == null && (shrapnel & (1 << 30)) != 0)
+limb.shrapnel = Mathf.Clamp(shrapnel & 0xFF, 0, 5);
 limb.infected = infected;
 limb.muscleHealth = muscleHealth;
 limb.skinHealth = skinHealth;

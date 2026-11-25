@@ -1,4 +1,4 @@
-using CasualtiesTogetherUtils;
+﻿using CasualtiesTogetherUtils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -15,7 +15,60 @@ namespace Together.Integration;
 // UI hooks and primitive player/team access.
 public static class GameContentExpansionBridge {
     public const string ModGuid = "com.cloudawolf.gamecontentexpansion";
-    public const int ApiVersion = 2;
+    public const int ApiVersion = 3;
+
+    public const int ShardCatNeedle = 0;
+    public const int ShardCatGlass = 1;
+    public const int ShardCatExplosion = 2;
+    public const int ShardCatGuard = 3;
+    public const int ShardCatPvP = 4;
+    public const int ShardCatGunmine = 5;
+    public const int ShardCatTurret = 6;
+
+    // GCE shard module hooks. All are optional; null means the module is not
+    // installed/enabled and the vanilla shrapnel path must run.
+    public static Func<Limb, int, bool> ShardHit;
+    public static Func<Limb, bool> ShardGlass;
+    public static Func<Limb, float, float, bool> ShardExplosion;
+    public static Func<Limb, bool> ShardNeedle;
+    public static Func<Limb, int> ShardTotal;
+    public static Func<Limb, int[]> ShardCategories;
+    public static Func<Limb, int, bool, bool> ShardRemoved;
+    public static Func<Limb, int, bool> ShardAdded;
+    public static Func<Limb, bool> ShardHasNeedle;
+
+    public static int GetShardTotal(Limb limb) =>
+        ShardTotal != null ? ShardTotal(limb) : Mathf.Clamp(limb != null ? limb.shrapnel : 0, 0, 5);
+
+    public static int[] GetShardCategories(Limb limb) {
+        var hook = ShardCategories;
+        if (hook != null) return hook(limb);
+        int total = GetShardTotal(limb);
+        var result = new int[total];
+        for (int i = 0; i < total; i++) result[i] = 3; // legacy generic metal
+        return result;
+    }
+
+    public static bool TryShardHit(Limb limb, int category) =>
+        ShardHit != null && ShardHit(limb, category);
+
+    public static bool TryShardGlass(Limb limb) =>
+        ShardGlass != null && ShardGlass(limb);
+
+    public static bool TryShardExplosion(Limb limb, float shrapnelChance, float bleedChance) =>
+        ShardExplosion != null && ShardExplosion(limb, shrapnelChance, bleedChance);
+
+    public static bool TryShardNeedle(Limb limb) =>
+        ShardNeedle != null && ShardNeedle(limb);
+
+    public static bool HasShardNeedle(Limb limb) =>
+        ShardHasNeedle != null ? ShardHasNeedle(limb) : limb != null && limb.shrapnel == 1;
+
+    public static bool RemoveShard(Limb limb, int category, bool addBleed) =>
+        ShardRemoved != null && ShardRemoved(limb, category, addBleed);
+
+    public static bool AddShard(Limb limb, int category) =>
+        ShardAdded != null && ShardAdded(limb, category);
 
     // Assigned by the optional plugin. Called inside the rules scroll view.
     public static Action DrawRulesBottomSection;
@@ -28,6 +81,7 @@ public static class GameContentExpansionBridge {
     public static bool CanEditRules => Con.CanExecuteAdminCommands();
     public static bool IsServer => Net.IsServer;
     public static bool IsClient => Net.IsClient;
+    public static bool IsRunning => Net.IsRunning;
 
     public static bool WorldSnapshotMode {
         get {
