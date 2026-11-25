@@ -835,6 +835,9 @@ public static class Net {
     }
 
     public static bool VerifyMyServerName() {
+        if (NsfwContentFilter.RejectCreateIfBlocked()) {
+            return false;
+        }
         var n = MyServerInfo.name;
         if (string.IsNullOrEmpty(n) || n.Length < 3 || n.Length > Net.MAX_SERVER_NAME_LENGTH) {
             return false;
@@ -1041,7 +1044,9 @@ public class TransportLiteNetLib : NetTransportBase, INetEventListener {
                 return false;
             }
             if (type != Net.NetType.Client && !Net.VerifyMyServerName()) {
-                Multiplayer.DoMultiplayerStatusMessageLog("Invalid Server name.");
+                if (!NsfwContentFilter.LastCreateWasRejected) {
+                    Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("net_invalid_server_name", true) ?? "Invalid Server name.");
+                }
                 return false;
             }
 

@@ -470,6 +470,7 @@
   "casualtiestogether_ok": "Ok",
   "casualtiestogether_nsfw_filter_blocked_title": "Content Filter",
   "casualtiestogether_nsfw_filter_blocked_alert": "NSFW Content (titles, desc, etc) is not allowed in Multiplayer. Please do not try to bypass the content filter, or you may be banned from hosting.",
+  "casualtiestogether_net_invalid_server_name": "Invalid server name.",
   "casualtiestogether_accept": "Accept",
   "casualtiestogether_decline": "Decline",
   "casualtiestogether_accepted": "accepted",

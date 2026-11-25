@@ -2316,7 +2316,9 @@ public class TransportSteamworks : NetTransportBase {
         }
 
         if ( !Net.VerifyMyServerName()) {
-            Multiplayer.DoMultiplayerStatusMessageLog("Invalid Server name.");
+            if (!NsfwContentFilter.LastCreateWasRejected) {
+                Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("net_invalid_server_name", true) ?? "Invalid Server name.");
+            }
             return false;
         }
 
