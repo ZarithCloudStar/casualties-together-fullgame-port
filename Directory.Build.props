@@ -7,7 +7,8 @@
 		<ModVersion>5.5.4-cu-port-bugfix7</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Wire/protocol identity; intentionally separate from the package version. -->
-		<NetworkVersion>5.5.4-cu-port-fix7</NetworkVersion>
+		<!-- fix8: LobbyTimeoutSeconds extends the memcpy rule struct. Package version awaits the release naming decision. -->
+		<NetworkVersion>5.5.4-cu-port-fix8</NetworkVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
 		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.4-cu-port-bugfix7</UpdateReleaseVersion>
 

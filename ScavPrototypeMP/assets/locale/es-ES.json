@@ -220,6 +220,8 @@
   "casualtiestogether_nsfw_filter_blocked_alert": "El contenido NSFW (nombres, descripciones, etc.) no está permitido en el multijugador. No intentes eludir el filtro o podrían vetarte del alojamiento.",
   "casualtiestogether_net_invalid_server_name": "Nombre de servidor no válido.",
   "casualtiestogether_ok": "Ok",
+  "casualtiestogether_rule_name_LobbyTimeoutSeconds": "Tiempo de conexión de Steam",
+  "casualtiestogether_rule_desc_LobbyTimeoutSeconds": "Tiempo que Steam mantiene la conexión de un jugador que se une antes de abandonar (5–120 s).",
   "casualtiestogether_wv_peerid": "PEER ID: ",
   "casualtiestogether_wv_deceased": "FALLECIDO",
   "casualtiestogether_wv_cpr": "RCP",
