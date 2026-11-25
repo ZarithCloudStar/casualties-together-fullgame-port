@@ -1,4 +1,4 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using CasualtiesTogetherUtils;
 using LiteNetLib;
 using LiteNetLib.Utils;
@@ -189,10 +189,12 @@ public class SyncInfoGameObjectTracker : MonoBehaviour {
 	}
 
     static int VisualUpdateSlowerWhenNotVisible = 15;
+    static readonly List<SyncInfoGameObjectTracker> _frameSamples = new List<SyncInfoGameObjectTracker>(128);
     int visualUpdateTimer = 0;
     Transform _heldParent;
     bool _held;
     bool _wasLoose;
+    bool _frameSample;
 
     // parent walk is only when the parent changes. a ground item stays on the chunk stamp.
     bool HeldByBody() {
@@ -252,18 +254,20 @@ public class SyncInfoGameObjectTracker : MonoBehaviour {
             return;
         }
 
-        // the level tool is dragging this. the pose must go out every step or the ghost lags.
+        // the level tool is dragging this. the pose is sampled after the last
+        // physics step of the frame, so catch-up steps only mark it.
         if (syncInfo.placeGhost.Value) {
             visualUpdateTimer = 0;
-            syncInfo.WriteObjectIntoPacket();
+            MarkFrameSample();
             return;
         }
 
-        // worn and held items follow the body every physics step.
+        // worn and held items follow the body. send where they are after the
+        // last physics step, not the first one of a catch-up frame.
         if (HeldByBody()) {
             _wasLoose = false;
             visualUpdateTimer = 0;
-            syncInfo.WriteObjectIntoPacket();
+            MarkFrameSample();
             return;
         }
 
@@ -274,7 +278,7 @@ public class SyncInfoGameObjectTracker : MonoBehaviour {
         _wasLoose = loose;
         if (released || LooseAwake()) {
             visualUpdateTimer = 0;
-            syncInfo.WriteObjectIntoPacket();
+            MarkFrameSample();
             return;
         }
 
@@ -292,6 +296,33 @@ public class SyncInfoGameObjectTracker : MonoBehaviour {
             return;
         visualUpdateTimer = 0;
         syncInfo.WriteObjectIntoPacket();
+    }
+
+    void MarkFrameSample() {
+        if (_frameSample) return;
+        _frameSample = true;
+        _frameSamples.Add(this);
+    }
+
+    // One write per marked object after this frame's physics, before the server
+    // entity update consumes the packet. The function branch keeps its own
+    // object serialization and crystal handling; this only removes duplicate
+    // writes from multiple FixedUpdate steps in one frame.
+    internal static void FlushFrameSamples() {
+        int count = _frameSamples.Count;
+        for (int i = 0; i < count; i++) {
+            var tracker = _frameSamples[i];
+            if (tracker == null) continue;
+            tracker._frameSample = false;
+            var info = tracker.syncInfo;
+            if (info == null || info.go == null) continue;
+            info.WriteObjectIntoPacket();
+        }
+        if (count == _frameSamples.Count) {
+            _frameSamples.Clear();
+        } else {
+            _frameSamples.RemoveRange(0, count);
+        }
     }
 
 	void OnDestroy() {
