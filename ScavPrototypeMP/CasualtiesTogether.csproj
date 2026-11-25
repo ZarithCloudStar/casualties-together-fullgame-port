@@ -75,8 +75,10 @@
 		<EmbeddedResource Include="assets\cooltextshader.bundle" />
 		<EmbeddedResource Include="assets\locale\EN.json" />
 		<EmbeddedResource Include="assets\locale\es-ES.json" />
+		<EmbeddedResource Include="assets\locale\ru-RU.json" />
 		<EmbeddedResource Include="assets\locale\zh-CN.json" />
 <EmbeddedResource Include="assets\locale\zh-TW.json" />
+		<EmbeddedResource Include="assets\name-filter-words.txt" />
 		<EmbeddedResource Include="assets\retrogaming.bundle" />
 		<EmbeddedResource Include="assets\textures\dune_stare.png" />
 		<EmbeddedResource Include="assets\textures\alertthing.png" />
@@ -103,6 +105,7 @@
 		<EmbeddedResource Include="assets\textures\mp_green.png" />
 		<EmbeddedResource Include="assets\textures\recruit.png" />
 		<EmbeddedResource Include="assets\textures\shittycross.png" />
+		<EmbeddedResource Include="assets\textures\shittycheck.png" />
 		<EmbeddedResource Include="assets\textures\shop\1.png" />
 		<EmbeddedResource Include="assets\textures\shop\2.png" />
 		<EmbeddedResource Include="assets\textures\shop\3.png" />
