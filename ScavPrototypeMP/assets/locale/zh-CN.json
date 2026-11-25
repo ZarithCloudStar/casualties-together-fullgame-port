@@ -223,6 +223,8 @@
   "casualtiestogether_nsfw_filter_blocked_alert": "多人游戏中不允许出现 NSFW 内容（名称、描述等）。请勿绕过内容过滤，否则可能被禁止创建房间。",
   "casualtiestogether_net_invalid_server_name": "服务器名称无效。",
   "casualtiestogether_ok": "确定",
+  "casualtiestogether_rule_name_LobbyTimeoutSeconds": "Steam 连接超时",
+  "casualtiestogether_rule_desc_LobbyTimeoutSeconds": "Steam 等待加入玩家连接的最长时间（5–120 秒）。",
   "casualtiestogether_wv_peerid": "对等端 ID：",
   "casualtiestogether_wv_deceased": "已死亡",
   "casualtiestogether_wv_cpr": "心肺复苏",
