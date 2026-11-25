@@ -28,6 +28,7 @@ public static class GameContentExpansionBridge {
     public static bool CanEditRules => Con.CanExecuteAdminCommands();
     public static bool IsServer => Net.IsServer;
     public static bool IsClient => Net.IsClient;
+    public static bool IsRunning => Net.IsRunning;
 
     public static bool WorldSnapshotMode {
         get {
