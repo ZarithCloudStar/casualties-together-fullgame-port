@@ -277,13 +277,74 @@ public class WorldMP : CasualtiesTogetherSingleton {
     }
 
 
+    public static void StartDebugWorld() {
+        SavesystemPatch.DebugMapName = null;
+        SavesystemPatch.DeleteDebugSave();
+        log.l("Debug map: cleared the default slot");
+        LoadDebugWorld(false);
+    }
+
+    public static void LoadSavedDebugWorld(string name = null) {
+        if (!string.IsNullOrEmpty(name) && !SavesystemPatch.ValidDebugMapName(name)) {
+            if (ConsoleScript.instance != null)
+                ConsoleScript.instance.LogToConsole("Map name must be letters and numbers only.");
+            return;
+        }
+        if (!SavesystemPatch.HasDebugSave(name)) {
+            string label = string.IsNullOrEmpty(name) ? "the default slot" : name;
+            log.l("Debug map: no save for " + label);
+            if (ConsoleScript.instance != null)
+                ConsoleScript.instance.LogToConsole("No debug map save for " + label + ".");
+            return;
+        }
+        SavesystemPatch.DebugMapName = string.IsNullOrEmpty(name) ? null : name;
+        LoadDebugWorld(true);
+    }
+
+    public static void SaveDebugMapNow(string name = null) {
+        if (WorldGeneration.world == null || WorldGeneration.world.biomeOverride != WorldGeneration.OverrideSceneType.Debug) {
+            log.l("Debug map save: not in the debug map");
+            if (ConsoleScript.instance != null)
+                ConsoleScript.instance.LogToConsole("Not in the debug map.");
+            return;
+        }
+        if (!string.IsNullOrEmpty(name) && !SavesystemPatch.ValidDebugMapName(name)) {
+            if (ConsoleScript.instance != null)
+                ConsoleScript.instance.LogToConsole("Map name must be letters and numbers only.");
+            return;
+        }
+        SavesystemPatch.InDebugMap = true;
+        SavesystemPatch.DebugMapName = string.IsNullOrEmpty(name) ? null : name;
+        string label = string.IsNullOrEmpty(name) ? "the default slot" : name;
+        if (Multiplayer.rules.DebugWorldSaveSystem) {
+            SaveSystem.SaveGame();
+            if (ConsoleScript.instance != null)
+                ConsoleScript.instance.LogToConsole("Saved " + label + " with player inventories.");
+        } else {
+            SavesystemPatch.WriteDebugWorld();
+            if (ConsoleScript.instance != null)
+                ConsoleScript.instance.LogToConsole("Saved " + label + ". Inventories stay in this session only.");
+        }
+    }
+
     public static void LoadDebugWorld() {
+        LoadDebugWorld(false);
+    }
+
+    public static void LoadDebugWorld(bool loadSave) {
         _CheckIfCanLoadAWorld();
         SetTutorialPlayerPrefs(false);
         bool useSave = Multiplayer.rules.DebugWorldSaveSystem;
+        SavesystemPatch.InDebugMap = true;
         SavesystemPatch.DebugWorldUsesSave = useSave;
         SavesystemPatch.PreserveSave = !useSave;
-        SaveSystem.loadedRun = useSave;
+        SavesystemPatch.PendingLoadMpSave = loadSave;
+        SaveSystem.loadedRun = loadSave && useSave;
+        WorldSpawn.Read();
+        if (loadSave)
+            SavesystemPatch.ReadDebugWorld();
+        else
+            MapPoses.Clear();
         log.l(useSave ? "Debug world: multiplayer saves enabled" : "Debug world: saves preserved and skipped");
 
         if (Multiplayer.IsNetworkActiveAndIsServer()) {
@@ -299,6 +360,10 @@ public class WorldMP : CasualtiesTogetherSingleton {
     }
 
     public static void LoadVanillaGeneratedWorld(bool loadsave = false) {
+        SavesystemPatch.InDebugMap = false;
+        SavesystemPatch.PendingLoadMpSave = false;
+        WorldSpawn.Clear();
+        MapPoses.Clear();
 #if FULLGAME
         if (loadsave && Net.IsServer && SaveSlots.Enabled && !SaveSlots.LoadPrepared) { SaveSlots.RequestLoad(); return; }
 #endif
@@ -330,6 +395,10 @@ public class WorldMP : CasualtiesTogetherSingleton {
         LoadWorldScene(loadsave);
     }
     public static void LoadVanillaTutorialWorld(bool fadeout = true) {
+        SavesystemPatch.InDebugMap = false;
+        SavesystemPatch.PendingLoadMpSave = false;
+        WorldSpawn.Clear();
+        MapPoses.Clear();
         _CheckIfCanLoadAWorld();
         // same as map debug. the tutorial button must not apply or replace mp_save.
         SavesystemPatch.PreserveSave = true;
@@ -567,7 +636,16 @@ public class WorldMP : CasualtiesTogetherSingleton {
         log.l("WorldGeneration.GenerateWorld");
         yield return WorldGeneration_GenerateWorld_MultiplayerPatch.GenerateWorld(world);
 
-
+#if FULLGAME
+        // debug maps: apply the saved tile/fluid blobs and prop/player poses after generation.
+        if (SavesystemPatch.InDebugMap && !Net.IsClient) {
+            if (aaaaaaaaaaaaaaaaaaaaaaaaaaa != null)
+                SavesystemPatch.DeserializeWorldBlocks(aaaaaaaaaaaaaaaaaaaaaaaaaaa);
+            if (ccccccccccccccccccccccccccc != null)
+                SavesystemPatch.DeserializeWorldFluids(ccccccccccccccccccccccccccc);
+            MapPoses.ApplyProps();
+        }
+#endif
 
     }
 

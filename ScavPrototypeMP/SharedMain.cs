@@ -50,7 +50,7 @@ return false;
 List<ScavPlayer> plrs = new List<ScavPlayer>(ScavPlayer.AllLivingPlayers);
 plrs.RemoveAll(x => (
 // || x.body.isCriticallyDying // commented cuz i wanna make them euthanize dying comrades
-x.levelPlayTime < 20
+x.body == null || x.levelPlayTime < 20
 ));
 if (Net.IsServer) {
 plrs.RemoveAll(
@@ -77,7 +77,8 @@ float presqr = Util.MetersToTiles(Multiplayer.rules.ScatterPunishDistance);
 presqr *= presqr;
 Vector3 pos = plr.body.transform.position;
 count_plrs_in_range = 0;
-foreach (var x in ScavPlayer.AllLivingPlayers) {
+// count from the same filtered list the required count came from
+foreach (var x in plrs) {
 if (x == null || x.body == null) continue;
 var d = KM.DistanceSqr(x.body.transform.position, pos);
 if (d < presqr) {

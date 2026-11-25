@@ -897,6 +897,10 @@ public const int LabLayerDepth = 11;
 
 public static bool TestLobbySearchFilters(NetPublicServerInfo info, out string dropReason) {
 dropReason = null;
+if (info != null && NsfwContentFilter.IsListingBlocked(info.name, info.description)) {
+dropReason = "nsfw-filter";
+return false;
+}
 
 
 if (!String.IsNullOrEmpty(_LOBBY_SEARCH_FILTER)) {

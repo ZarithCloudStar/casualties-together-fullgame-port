@@ -4,6 +4,7 @@ using System.Reflection.Emit;
 using HarmonyLib;
 using Together;
 using UnityEngine;
+using UnityEngine.Tilemaps;
 
 namespace KrokV5Optimization;
 
@@ -14,6 +15,9 @@ namespace KrokV5Optimization;
 /// </summary>
 internal static class FixSimRange {
 internal static long Grids;
+
+// vanilla draws about two chunks out and forces the next ring off. four covers that window around a client who is not the host.
+internal const int WindowRadius = 4;
 
 static FieldInfo _table;
 static bool _gateMiss;
@@ -78,6 +82,14 @@ static IEnumerable<CodeInstruction> Plant(IEnumerable<CodeInstruction> instructi
 return Gate(instructions, "GrabberPlant.Update");
 }
 
+// tentacle lines bail out when the chunk renderer flips off, then the stale points stretch.
+// keep the solve if the creature is in sim range. a renderer that is already on still counts.
+[HarmonyPatch(typeof(IKHandle), "Update")]
+[HarmonyTranspiler]
+static IEnumerable<CodeInstruction> Handle(IEnumerable<CodeInstruction> instructions) {
+return GateEither(instructions, "IKHandle.Update");
+}
+
 // Rebuild runs on every visible-chunk update, including generation/layer changes/teleports.
 internal static void Fit(WorldGeneration world) {
 if (world == null || !world.worldExists) return;
@@ -100,10 +112,10 @@ internal static void Mark(bool[,] table, WorldGeneration world, Vector2 pos) {
 Vector2Int chunk = world.BlockToChunkPos(world.WorldToBlockPos(pos));
 int maxX = table.GetLength(0) - 1;
 int maxY = table.GetLength(1) - 1;
-for (int y = chunk.y - 1; y <= chunk.y + 1; y++) {
+for (int y = chunk.y - WindowRadius; y <= chunk.y + WindowRadius; y++) {
 if ((uint)y > (uint)maxY)
 continue;
-for (int x = chunk.x - 1; x <= chunk.x + 1; x++) {
+for (int x = chunk.x - WindowRadius; x <= chunk.x + WindowRadius; x++) {
 if ((uint)x > (uint)maxX)
 continue;
 table[x, y] = true;
@@ -137,5 +149,118 @@ _gateMiss = true;
 OptimizerMain.Log.LogWarning("[KrokV5Opt] sim range gate missed " + name);
 }
 return list;
+}
+
+// leave the chunk renderer bool, then OR WorldInSimRange. only the first Renderer.get_enabled.
+static IEnumerable<CodeInstruction> GateEither(IEnumerable<CodeInstruction> instructions, string name) {
+var list = new List<CodeInstruction>(instructions);
+for (int i = 0; i < list.Count; i++) {
+if (list[i].opcode != OpCodes.Callvirt || list[i].operand is not MethodInfo method)
+continue;
+if (method.Name != "get_enabled" || method.DeclaringType != typeof(Renderer))
+continue;
+list.Insert(i + 1, new CodeInstruction(OpCodes.Ldarg_0));
+list.Insert(i + 2, new CodeInstruction(OpCodes.Call, AccessTools.PropertyGetter(typeof(Component), "transform")));
+list.Insert(i + 3, new CodeInstruction(OpCodes.Callvirt, AccessTools.PropertyGetter(typeof(Transform), "position")));
+list.Insert(i + 4, new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(Vector2), "op_Implicit", new[] { typeof(Vector3) })));
+list.Insert(i + 5, new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(SharedMain), nameof(SharedMain.WorldInSimRange))));
+list.Insert(i + 6, new CodeInstruction(OpCodes.Or));
+return list;
+}
+if (!_gateMiss) {
+_gateMiss = true;
+OptimizerMain.Log.LogWarning("[KrokV5Opt] sim range gate missed " + name);
+}
+return list;
+}
+}
+
+// the line is local. spider legs and vines outside this machine's 3x3 keep their last pose.
+[HarmonyPatch(typeof(IKHandle), "Update")]
+static class IKHandle_LocalSolve_MultiplayerPatch {
+static bool Prefix(IKHandle __instance) {
+if (!Net.IsRunning || __instance == null)
+return true;
+return Near(__instance.transform.position);
+}
+
+static bool Near(Vector2 pos) {
+WorldGeneration world = WorldGeneration.world;
+if (world == null || !world.worldExists)
+return true;
+if (!CasualtiesTogetherUtils.Util.TryGetLocalBody(out Body body) || body == null)
+return false;
+Vector2Int mine = world.BlockToChunkPos(world.WorldToBlockPos(body.transform.position));
+Vector2Int chunk = world.BlockToChunkPos(world.WorldToBlockPos(pos));
+int dx = chunk.x - mine.x;
+int dy = chunk.y - mine.y;
+if (dx < 0)
+dx = -dx;
+if (dy < 0)
+dy = -dy;
+return dx <= 1 && dy <= 1;
+}
+}
+
+// vanilla UpdateChunkVisibility only walks mainCam, so a client's chunks stay dark on the host and ChunkScript.Update never runs.
+[HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.UpdateChunkVisibility))]
+static class UpdateChunkVisibility_ClientWindows_MultiplayerPatch {
+static HashSet<long> Now = new HashSet<long>();
+static HashSet<long> Prev = new HashSet<long>();
+
+static void Postfix(WorldGeneration __instance) {
+if (!Net.IsRunning || !Net.IsServer || __instance == null || __instance.generatingWorld)
+return;
+TilemapRenderer[,] chunks = __instance.renderChunks;
+if (chunks == null)
+return;
+
+Now.Clear();
+if (__instance.mainCam != null)
+Cover(__instance, __instance.mainCam.transform.position);
+foreach (KeyValuePair<Body, ScavPlayer> pair in ScavPlayer.BodyToPlayerDict) {
+if (pair.Value == null)
+continue;
+Cover(__instance, pair.Value.pos);
+}
+
+int maxX = chunks.GetLength(0);
+int maxY = chunks.GetLength(1);
+foreach (long key in Now)
+Set(chunks, key, maxX, maxY, true);
+foreach (long key in Prev) {
+if (!Now.Contains(key))
+Set(chunks, key, maxX, maxY, false);
+}
+
+HashSet<long> swap = Prev;
+Prev = Now;
+Now = swap;
+}
+
+static void Cover(WorldGeneration world, Vector2 pos) {
+Vector2Int chunk = world.BlockToChunkPos(world.WorldToBlockPos(pos));
+int maxX = world.renderChunks.GetLength(0) - 1;
+int maxY = world.renderChunks.GetLength(1) - 1;
+int radius = FixSimRange.WindowRadius;
+for (int y = chunk.y - radius; y <= chunk.y + radius; y++) {
+if ((uint)y > (uint)maxY)
+continue;
+for (int x = chunk.x - radius; x <= chunk.x + radius; x++) {
+if ((uint)x > (uint)maxX)
+continue;
+Now.Add(((long)x << 32) | (uint)y);
+}
+}
+}
+
+static void Set(TilemapRenderer[,] chunks, long key, int maxX, int maxY, bool enabled) {
+int x = (int)(key >> 32);
+int y = (int)key;
+if ((uint)x >= (uint)maxX || (uint)y >= (uint)maxY)
+return;
+TilemapRenderer renderer = chunks[x, y];
+if (renderer != null && renderer.enabled != enabled)
+renderer.enabled = enabled;
 }
 }
