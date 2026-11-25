@@ -24,7 +24,7 @@
 
 ### 游戏内容扩展与优化（GCE）
 
-本分支是 GCE 0.3.9 的配套 Together 构建（5.5.5 同步线 + 破片/设置同步 fix2）。GCE 单独安装也能运行，但没有 Together 时模块 1 置灰；配套时规则页出现 GCE 管理区和「按分队在不同位置降落」，并可从主机同步缺失/版本不同的插件。GCE 仓库：<https://github.com/Cloudawolf/->（`function` 分支）。
+本分支是 GCE 0.3.10 的配套 Together 构建（5.5.5 同步线 + 破片/设置同步 fix2）。GCE 单独安装也能运行，但没有 Together 时模块 1 置灰；配套时规则页出现 GCE 管理区和「按分队在不同位置降落」，并可从主机同步缺失/版本不同的插件。GCE 仓库：<https://github.com/Cloudawolf/->（`function` 分支）。
 
 ## 安装
 
