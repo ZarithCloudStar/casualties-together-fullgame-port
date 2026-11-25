@@ -15,7 +15,7 @@ namespace Together.Integration;
 // UI hooks and primitive player/team access.
 public static class GameContentExpansionBridge {
     public const string ModGuid = "com.cloudawolf.gamecontentexpansion";
-    public const int ApiVersion = 4;
+    public const int ApiVersion = 6;
 
     public const int ShardCatNeedle = 0;
     public const int ShardCatGlass = 1;
@@ -82,6 +82,16 @@ public static class GameContentExpansionBridge {
     public static bool IsServer => Net.IsServer;
     public static bool IsClient => Net.IsClient;
     public static bool IsRunning => Net.IsRunning;
+
+    // Spectator/ending cameras can point at a body the local player does not
+    // own. GCE checks this before offering inventory gestures on the camera
+    // body. Standalone/single-player is always true.
+    public static bool IsLocalCameraBody {
+        get {
+            var cam = PlayerCamera.main;
+            return cam != null && cam.body != null && Util.IsBodyLocal(cam.body);
+        }
+    }
 
     public static bool WorldSnapshotMode {
         get {
@@ -196,4 +206,41 @@ public static class GameContentExpansionBridge {
     public static void SetTooltip(string name, string desc) => UIBullshit._GUI_SetTooltip(name, desc);
     public static bool CheckCursorOverlap(Rect screenRect) => UIBullshit.CheckCursorOverlap(screenRect);
     public static void ReportRuleLabelWidth(float width) => UIMainMenu.ReportExternalRuleLabelWidth(width);
+
+    // GCE quick pickup can consume a middle-click point-finger press when the
+    // pointer is over an item it actually picks up or drops. UIBullshit checks
+    // this for the current frame; GCE clears it on its next update.
+    public static bool SuppressPointFinger;
+    public static int SuppressPointFingerFrame = -1;
+    public static int PointFingerKey => (int)KeyBinds.GetBind(CoopKeybinds.pointfingerat);
+
+    // GCE quick access moves items through Body/Container directly instead of
+    // PlayerCamera.HandleReleaseDragging. Hold the same flag the native release
+    // path holds so Container.LoadItem/UnloadItem announce their new parent.
+    public static void BeginLocalContainerAction() {
+        PlayerCamera_TryPerformInventoryAction_MultiplayerPatch.is_inside_LocalContainerAction = true;
+    }
+
+    public static void EndLocalContainerAction() {
+        PlayerCamera_TryPerformInventoryAction_MultiplayerPatch.is_inside_LocalContainerAction = false;
+    }
+
+    // A GCE batch detaches an item from a body slot and seats it in another
+    // slot in the same frame. MoveCommit.Push/EndDrag make that one gesture so
+    // the intermediate "on the ground" parent is never announced.
+    static bool gceItemGesturePushed;
+
+    public static void BeginItemGesture() {
+        // Only the client side needs MoveCommit; the host already owns the
+        // move and re-applying it as a local attempt would be redundant.
+        if (!Net.IsClient || gceItemGesturePushed) return;
+        MoveCommit.Push();
+        gceItemGesturePushed = true;
+    }
+
+    public static void EndItemGesture(Item item) {
+        if (!gceItemGesturePushed) return;
+        gceItemGesturePushed = false;
+        MoveCommit.EndDrag(item);
+    }
 }
