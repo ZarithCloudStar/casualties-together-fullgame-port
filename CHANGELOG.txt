@@ -8,6 +8,22 @@ KNOWN ISSUES:
  
 
 
+ --- 5.5.5-cu-port --- 26.11.2026 --- 上游 5.5.5 同步 + 优化版 ---
+- 上游 5.5.5
+	名字过滤/屏蔽词、键位恢复、timedcommand 与命令安全加固
+	scatter 计数、钻探舱免修、IK/液体性能、sim 范围
+	ru-RU、新背包图标、缺失翻译合并
+- 优化版新增
+	主机可调 Steam 连接超时
+	倒地压伤（RagdollImpact，默认关）
+	movetool / 玩家缩放 / 地图姿态锚点
+	debug 地图存档（mp_debug_save）、map debug、setworldspawn
+- 兼容性
+	网络版本 5.5.5-cu-port-fix1；旧 fix7/fix8 不能混连
+- 保留
+	HostTransfer v3、皮肤协议、SP/MP 双存档、GCE API v2、离线大厅
+
+
  --- 5.5.4-cu-port-bugfix7 --- 25.11.2026 --- 医疗面板与装备同步修复 ---
 - 医疗面板
 	检查其他玩家时，身高/年龄/样本编号改为读取对方芯片资料；体重使用的视觉偏移一并同步。

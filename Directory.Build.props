@@ -4,13 +4,13 @@
 	<PropertyGroup>
 
 		<!-- Single-player / multiplayer split, separate save pages, room leave flow. -->
-		<ModVersion>5.5.4-cu-port-bugfix7</ModVersion>
+		<ModVersion>5.5.5-cu-port</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Wire/protocol identity; intentionally separate from the package version. -->
-		<!-- fix8: LobbyTimeoutSeconds extends the memcpy rule struct. Package version awaits the release naming decision. -->
-		<NetworkVersion>5.5.4-cu-port-fix8</NetworkVersion>
+		<!-- 5.5.5 base plus the movetool/ragdoll/debug-map wire additions. -->
+		<NetworkVersion>5.5.5-cu-port-fix1</NetworkVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
-		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.4-cu-port-bugfix7</UpdateReleaseVersion>
+		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.5-cu-port</UpdateReleaseVersion>
 
 		<!-- VS/solution builds set SolutionDir; direct `dotnet build <project>` does not. -->
 		<SlnRoot Condition="'$(SlnRoot)' == '' and '$(SolutionDir)' != ''">$(SolutionDir)</SlnRoot>
