@@ -15,7 +15,7 @@ namespace Together.Integration;
 // UI hooks and primitive player/team access.
 public static class GameContentExpansionBridge {
     public const string ModGuid = "com.cloudawolf.gamecontentexpansion";
-    public const int ApiVersion = 3;
+    public const int ApiVersion = 4;
 
     public const int ShardCatNeedle = 0;
     public const int ShardCatGlass = 1;
@@ -90,6 +90,18 @@ public static class GameContentExpansionBridge {
 #else
             return false;
 #endif
+        }
+    }
+
+    // GCE module mask. Host writes; clients read it from the synced rules.
+    public static int GCEModules {
+        get => Multiplayer.rules.GCEModules;
+        set {
+            if (!Net.IsServer) return;
+            byte next = (byte)Mathf.Clamp(value, 0, 255);
+            if (Multiplayer.rules.GCEModules == next) return;
+            Multiplayer.rules.GCEModules = next;
+            Multiplayer.ApplyGameRules();
         }
     }
 

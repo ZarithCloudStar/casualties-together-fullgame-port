@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -88,6 +88,7 @@ public static class RuleCategories {
     // of Together's automatic rule list; GCE draws the row itself.
     public static readonly HashSet<string> HiddenRuleNames = new(StringComparer.Ordinal) {
         nameof(MultiplayerGameRules.TeamSpawnPositions),
+        nameof(MultiplayerGameRules.GCEModules),
     };
 
     // The defaults the struct's field initializers give; what a rule's reset button restores.
