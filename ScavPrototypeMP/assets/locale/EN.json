@@ -470,6 +470,8 @@
   "casualtiestogether_ok": "Ok",
   "casualtiestogether_rule_name_LobbyTimeoutSeconds": "Steam Connect Timeout",
   "casualtiestogether_rule_desc_LobbyTimeoutSeconds": "How long Steam keeps a joining player's connection alive before giving up (5–120 s).",
+  "casualtiestogether_rule_name_RagdollImpact": "Ragdoll Impact",
+  "casualtiestogether_rule_desc_RagdollImpact": "A falling ragdoll's limbs damage players they hit above walking speed. Catching or carrying the ragdoll prevents it.",
   "casualtiestogether_nsfw_filter_blocked_title": "Content Filter",
   "casualtiestogether_nsfw_filter_blocked_alert": "NSFW Content (titles, desc, etc) is not allowed in Multiplayer. Please do not try to bypass the content filter, or you may be banned from hosting.",
   "casualtiestogether_net_invalid_server_name": "Invalid server name.",
