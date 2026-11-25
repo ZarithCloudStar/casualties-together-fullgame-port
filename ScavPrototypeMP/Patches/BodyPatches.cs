@@ -372,6 +372,7 @@ public static bool ShouldKeepLayerXOffset() => !Util.GameIsFull() && Multiplayer
                 if (Util.GameIsFull() && (!body.alive || !IsValidLayerSpawn(body.transform.position))) return;
 #endif
                 has_spawn_location = true;
+                MapPoses.TryApply(body);
                 foreach (var item in NetBody.all_instances) {
                     if (item.IsPlayer && !item.IsBodyLocal()) {
 #if FULLGAME
@@ -380,8 +381,10 @@ public static bool ShouldKeepLayerXOffset() => !Util.GameIsFull() && Multiplayer
                         item.plr.ResetEntropy();
 #if FULLGAME
                         if (Util.GameIsFull()) {
-                            item.plr.Server_TeleportCharacter(body.transform.position);
-                            log.l($"[spawn] server placed player={item.plr.GetPersistentId()} layer={WorldGeneration.world.biomeDepth} at={body.transform.position}");
+                            if (MapPoses.TryApply(item.body)) continue;
+                            Vector2 spawn = WorldSpawn.Applies(WorldGeneration.world) ? WorldSpawn.Pos : (Vector2)body.transform.position;
+                            item.plr.Server_TeleportCharacter(spawn);
+                            log.l($"[spawn] server placed player={item.plr.GetPersistentId()} layer={WorldGeneration.world.biomeDepth} at={spawn}");
                             continue;
                         }
 #endif

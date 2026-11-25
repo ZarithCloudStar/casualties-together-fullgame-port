@@ -79,14 +79,18 @@ namespace Together {
             if (!Net.IsRunning || !Util.IsWorldGenerated()) {
                 return;
             }
-            if (!NetBody.TryGetLocalNetBody(out NetBody me) || me.body == null || me.plr == null || !me.body.alive) {
-                return;
+            if (NetBody.TryGetLocalNetBody(out NetBody me) && me.body != null && me.plr != null && me.body.alive) {
+                ArmSelf(me);
+                TryBreak(me);
+                Brace(me);
+                DropLatch(me.body);
+                DropSlam(me.body);
             }
-            ArmSelf(me);
-            TryBreak(me);
-            Brace(me);
-            DropLatch(me.body);
-            DropSlam(me.body);
+            PlayerFallCrate.Tick();
+        }
+
+        internal static bool IsArmed(ushort id) {
+            return armedUntil.TryGetValue(id, out float until) && Time.time <= until;
         }
 
         static void ArmSelf(NetBody me) {

@@ -43,11 +43,13 @@ static class PauseHandler_Update_MultiplayerPatch {
 [HarmonyPatch(typeof(Locale), nameof(Locale.LoadLanguage))]
 static class Locale_LoadLanguage_MultiplayerPatch {
     static void Postfix() {
+        if (Locale.currentLang?.other == null)
+            return;
         // make the local text for keybinds work
         foreach (var keybind_label in Lang.EN.Where(x => x.Key.StartsWith("gameset_"))) {
             var key = "gameset" + keybind_label.Key.TrimStart("gameset_");
             if (!Locale.currentLang.other.ContainsKey(key)) {
-                Locale.currentLang.other[key] = keybind_label.Value;
+                Locale.currentLang.other[key] = Lang.Get(keybind_label.Key);
             }
         }
     }
@@ -569,5 +571,73 @@ static class LiquidAffect_FixedUpdate_NullGuard_MultiplayerPatch {
             return false;
         }
         return true;
+    }
+}
+
+// dry sleepers and anything outside the kept chunks still receive FixedUpdate.
+// a body already in liquid keeps running, or it sleeps and sinks.
+[HarmonyPatch(typeof(LiquidAffect), "FixedUpdate")]
+static class LiquidAffect_FixedUpdate_SkipIdle_MultiplayerPatch {
+    static readonly AccessTools.FieldRef<LiquidAffect, Rigidbody2D> Rb =
+        AccessTools.FieldRefAccess<LiquidAffect, Rigidbody2D>("rb");
+    static readonly AccessTools.FieldRef<LiquidAffect, bool> WasWater =
+        AccessTools.FieldRefAccess<LiquidAffect, bool>("wasWater");
+
+    static bool Prefix(LiquidAffect __instance) {
+        if (__instance == null || !Net.IsRunning)
+            return true;
+        Rigidbody2D rb = Rb(__instance);
+        if (rb == null)
+            return true;
+        if (!Kept(__instance.transform.position))
+            return false;
+        if (rb.IsSleeping() && !WasWater(__instance))
+            return false;
+        return true;
+    }
+
+    // host owns water for every player. a client only needs the chunks around itself.
+    static bool Kept(Vector2 pos) {
+        if (SimKeep.Covers(pos))
+            return true;
+        WorldGeneration world = WorldGeneration.world;
+        if (world == null || !world.worldExists)
+            return true;
+        if (Net.IsServer)
+            return SharedMain.PositionIsInSimulatedChunk(pos);
+        if (!Util.TryGetLocalBody(out Body body) || body == null)
+            return true;
+        Vector2Int mine = world.BlockToChunkPos(world.WorldToBlockPos(body.transform.position));
+        Vector2Int chunk = world.BlockToChunkPos(world.WorldToBlockPos(pos));
+        int dx = chunk.x - mine.x;
+        int dy = chunk.y - mine.y;
+        if (dx < 0)
+            dx = -dx;
+        if (dy < 0)
+            dy = -dy;
+        return dx <= 1 && dy <= 1;
+    }
+}
+
+// stock builds a fresh tuple on every call. the eight rows never change.
+[HarmonyPatch(typeof(FluidManager), nameof(FluidManager.WaterInfo))]
+static class FluidManager_WaterInfo_Table_MultiplayerPatch {
+    static readonly ValueTuple<float, float, int>[] Row = {
+        new ValueTuple<float, float, int>(0f, 0f, 0),
+        new ValueTuple<float, float, int>(0.6f, 0.915f, 1),
+        new ValueTuple<float, float, int>(2f, 0.8f, 2),
+        new ValueTuple<float, float, int>(0.5f, 0.75f, 3),
+        new ValueTuple<float, float, int>(1f, 0.8f, 4),
+        new ValueTuple<float, float, int>(0.6f, 0.915f, 5),
+        new ValueTuple<float, float, int>(3f, 0.7f, 6),
+        new ValueTuple<float, float, int>(1.5f, 0.65f, 7),
+    };
+
+    static bool Prefix(FluidManager __instance, Vector2Int pos, ref ValueTuple<float, float, int> __result) {
+        if (__instance == null)
+            return true;
+        int id = __instance.GetLiquid(pos.x, pos.y);
+        __result = (uint)id < (uint)Row.Length ? Row[id] : Row[0];
+        return false;
     }
 }

@@ -148,6 +148,8 @@ public bool AllowSpectatorFreecam = true;
 public bool AllowPush = true;
 
 public bool AlwaysAllowCarry = false;
+// a ragdolled player who runs into someone shares speed like a catch, in every direction, and can smash them.
+public bool RagdollImpact = false;
 public bool AllowPiggyback => PiggybackMaxStack > 0;
 [MultiplayerRuleByte(254, "")]
 #if RELEASE
@@ -192,6 +194,9 @@ public float PVPMoodDebuff = 0.5f;
 public float PVPDamageMultiplier = 1f;
 
 public bool LateJoinAllowed = true;
+// Steam's unset connect timeout is 10s. Hosts raise this when a join dies before the handshake finishes.
+[MultiplayerRuleFloat(5, 120, "s")]
+public float LobbyTimeoutSeconds = 10f;
 public bool LateJoinSpectate = false;
 public bool SpawnOnPlayer = true;
 

@@ -642,6 +642,7 @@ public class KSteam : MonoBehaviour {
     public const string LOBBYDATAKEY_RUNSETTINGS = _LOBBYDATAKEYPREFIX + "RUNSETTINGS";
     public const string LOBBYDATAKEY_MODS = _LOBBYDATAKEYPREFIX + "MODS";
     public const string LOBBYDATAKEY_LANGUAGE = _LOBBYDATAKEYPREFIX + "LANGUAGE";
+    public const string LOBBYDATAKEY_CONNECT_TIMEOUT = _LOBBYDATAKEYPREFIX + "CONNECTTIMEOUT";
 
     // Build identity of the local CasualtiesMP.dll.
     // We ship several hotfix builds under the same ModVersion, so the version string
@@ -707,6 +708,7 @@ public class KSteam : MonoBehaviour {
         SteamMatchmaking.SetLobbyData(LobbyId, LOBBYDATAKEY_MIDJOIN_LOCKED, (Net.MyServerInfo.midjoin_lock_active) ? "1" : "0");
         SteamMatchmaking.SetLobbyData(LobbyId, LOBBYDATAKEY_RUNSETTINGS, WorldMP.CompileRunSettings());
         SteamMatchmaking.SetLobbyData(LobbyId, LOBBYDATAKEY_LANGUAGE, Locale.currentLangName);
+        SteamMatchmaking.SetLobbyData(LobbyId, LOBBYDATAKEY_CONNECT_TIMEOUT, TransportSteamworks.LobbyTimeoutMs().ToString());
         SteamMatchmaking.SetLobbyData(LobbyId, LOBBYDATAKEY_MODS, GetMyModListAsString());
 #if FULLGAME
         if (Util.GameIsFull()) SteamMatchmaking.SetLobbyData(LobbyId, ModListDiagnostics.MetadataKey, ModListDiagnostics.WriteLobbyMetadata());
@@ -1527,6 +1529,7 @@ public class KSteam : MonoBehaviour {
         }
 
         SteamMatchmaking.SetLobbyData(LobbyId, LOBBYDATAKEY_VERSION, Multiplayer.FULL_VERSION_TAG);
+        SteamMatchmaking.SetLobbyData(LobbyId, LOBBYDATAKEY_CONNECT_TIMEOUT, TransportSteamworks.LobbyTimeoutMs().ToString());
         SteamMatchmaking.SetLobbyData(LobbyId, "bucket", bucket.ToString());
         Util.DelayCallLambda(0.5f, () => { 
             if (!IS_IN_LOBBY) {
@@ -2091,6 +2094,54 @@ public class TransportSteamworks : NetTransportBase {
     private Callback<SteamNetConnectionStatusChangedCallback_t> onConnectionChange = null;
     public SteamNetworkingConfigValue_t[] options = new SteamNetworkingConfigValue_t[0];
     public HSteamListenSocket listenSocket { get; private set; }
+
+    // Steam leaves TimeoutInitial / TimeoutConnected at 10s when options is empty. The host rule replaces that.
+    public static int LobbyTimeoutMs() {
+        float seconds = 10f;
+        try {
+            seconds = Multiplayer.rules.LobbyTimeoutSeconds;
+        } catch {
+        }
+        if (seconds < 5f) seconds = 5f;
+        if (seconds > 120f) seconds = 120f;
+        return (int)(seconds * 1000f);
+    }
+
+    static int ConnectTimeoutMs() {
+        int ms = LobbyTimeoutMs();
+        try {
+            if (KSteam.CURRENT_LOBBY.metadata != null) {
+                foreach (var kv in KSteam.CURRENT_LOBBY.metadata) {
+                    if (kv.Key == null || !kv.Key.Equals(KSteam.LOBBYDATAKEY_CONNECT_TIMEOUT, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (int.TryParse(kv.Value, out int fromLobby) && fromLobby >= 5000 && fromLobby <= 120000) {
+                        ms = fromLobby;
+                    }
+                    break;
+                }
+            }
+        } catch {
+        }
+        return ms;
+    }
+
+    static void ApplySteamConnectTimeout(int ms) {
+        SetSteamInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_TimeoutInitial, ms);
+        SetSteamInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_TimeoutConnected, ms);
+    }
+
+    static void SetSteamInt(ESteamNetworkingConfigValue key, int value) {
+        GCHandle handle = GCHandle.Alloc(value, GCHandleType.Pinned);
+        try {
+            SteamNetworkingUtils.SetConfigValue(
+                key,
+                ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Global,
+                IntPtr.Zero,
+                ESteamNetworkingConfigDataType.k_ESteamNetworkingConfig_Int32,
+                handle.AddrOfPinnedObject());
+        } finally {
+            handle.Free();
+        }
+    }
     internal SteamConnectionData serverUser { get; private set; }
     // Client handshake (intro + OnTransportConnected) is deferred until the P2P
     // connection actually reports Connected; sending earlier gets dropped with
@@ -2153,6 +2204,8 @@ public class TransportSteamworks : NetTransportBase {
         if (options == null)
             options = new SteamNetworkingConfigValue_t[0];
 
+        ApplySteamConnectTimeout(LobbyTimeoutMs());
+
         if (is_steamserver)
             listenSocket = SteamGameServerNetworkingSockets.CreateListenSocketP2P(FixedP2PPort, options.Length, options);
         else
@@ -2191,6 +2244,7 @@ public class TransportSteamworks : NetTransportBase {
 
             SteamNetworkingIdentity smi = new SteamNetworkingIdentity();
             smi.SetSteamID(serverUser.id);
+            ApplySteamConnectTimeout(ConnectTimeoutMs());
             if (is_steamserver)
                 serverUser.connection = SteamGameServerNetworkingSockets.ConnectP2P(ref smi, FixedP2PPort, options.Length, options);
             else
@@ -2316,7 +2370,9 @@ public class TransportSteamworks : NetTransportBase {
         }
 
         if ( !Net.VerifyMyServerName()) {
-            Multiplayer.DoMultiplayerStatusMessageLog("Invalid Server name.");
+            if (!NsfwContentFilter.LastCreateWasRejected) {
+                Multiplayer.DoMultiplayerStatusMessageLog(Lang.Get("net_invalid_server_name", true) ?? "Invalid Server name.");
+            }
             return false;
         }
 

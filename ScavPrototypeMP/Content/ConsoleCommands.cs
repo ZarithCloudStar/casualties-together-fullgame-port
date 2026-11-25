@@ -1,4 +1,4 @@
-using CasualtiesMultiplayerAPI;
+﻿using CasualtiesMultiplayerAPI;
 using CasualtiesTogetherUtils;
 using HarmonyLib;
 using KrokV5Optimization;
@@ -452,6 +452,7 @@ internal static float _DEV_LAST_VOLUME = 1f;
 
 public static bool _DEV_TELEKINESIS = false;
 public static GameObject _DEV_TELEKINESIS_OBJECT = null;
+public static bool _DEV_MOVETOOL = false;
 
 
 public static GameObject SpawnThingOnPlayer(string resourceid, Body body = null, bool give_it_to_em = false, GameObject container = null) {
@@ -1801,6 +1802,50 @@ con.LogToConsole($"Spectator mode: {UIInGame.SpectatorModeActive}");
 }, null));
 
 
+RegisterCommand(new Command("timedcommand", "MP - announce a command that will run after a delay", (string[] splited) => {
+ConFailIfNetworkNotRunning();
+ConFailIfNetworkIsRunningAndIsClient();
+Con.con.CheckArgumentCount(splited, 3);
+
+if (!int.TryParse(splited[1], out var seconds) || seconds <= 0)
+throw new Exception("The delay must be a positive integer.");
+
+var title = splited[2].Replace('_', ' ');
+var command = splited[3].Replace('_', ' ');
+
+ConsoleScript.instance.StartCoroutine(CountdownCoro(seconds, title, command));
+
+return;
+
+static IEnumerator CountdownCoro(int seconds, string title, string command) {
+var deadline = Time.realtimeSinceStartup + seconds;
+var prevRemaining = seconds;
+
+Chat.Server_ChatAnnouncement($"{title} in {seconds} seconds!");
+
+while (true) {
+yield return null;
+if (!Net.IsRunning || Net.IsClient)
+yield break;
+
+var remaining = (int)Mathf.Ceil(deadline - Time.realtimeSinceStartup);
+if (remaining <= 0)
+break;
+
+if (remaining != prevRemaining) {
+prevRemaining = remaining;
+// Announcement every minute -> every 15 seconds -> every second
+if (remaining <= 10 || (remaining <= 60 ? remaining % 15 == 0 : remaining % 60 == 0)) {
+Chat.Server_ChatAnnouncement($"{title} in {remaining} seconds!");
+}
+}
+}
+
+Chat.Server_ChatAnnouncement($"{title}!!!");
+Con.con.RunCommandString(command);
+}
+}, null, ("delay", "execution delay in seconds"), ("title", "title to use for the chat announcements"), ("command", "command to run")));
+
 
 RegisterCommand(new Command("mpopenmenu", "MP", (string[] splited) => {
 ConFailIfNetworkIsRunningAndIsClient();
@@ -2119,18 +2164,31 @@ ConsoleScript.instance.LogToConsole($"snowbg {PlayerCamera.main.backgroundSnow.a
 
 RegisterCommand(new Command("map", "MP dev", (string[] splited) => {
 ConFailIfNetworkIsRunningAndIsClient();
-ConFailIfNotInMainMenu();
 
 var m = "debug";
 if (splited.Length > 1) {
 m = splited[1];
 }
+var sub = splited.Length > 2 ? splited[2] : "start";
+string mapName = splited.Length > 3 ? splited[3] : null;
+
+if (m == "debug" && sub == "save") {
+WorldMP.SaveDebugMapNow(mapName);
+return;
+}
+
+ConFailIfNotInMainMenu();
 
 var prs = PreRunScript.instance;
 
 if (m == "debug") {
-log.l("Loading debug world");
-WorldMP.LoadDebugWorld();
+if (sub == "load") {
+log.l("Loading saved debug world");
+WorldMP.LoadSavedDebugWorld(mapName);
+} else {
+log.l("Starting a new debug world");
+WorldMP.StartDebugWorld();
+}
 } else if (m == "tutorial") {
 log.l("Loading tutorial world");
 prs.StartTutorial();
@@ -2141,6 +2199,29 @@ prs.StartRun();
 }, new Dictionary<int, List<string>> { { 0,
 new List<string> { "debug", "tutorial", "vanilla" }
 } }));
+
+RegisterCommand_LocalOnly(new Command("setworldspawn", "MP - spawn new players at a point saved with this level", (string[] splited) => {
+ConFailIfNetworkIsRunningAndIsClient();
+ConFailIfCheatsDisabled();
+con.CheckForWorld();
+con.CheckArgumentCount(splited, 1);
+string which = splited[1].ToLowerInvariant();
+Vector2 pos;
+if (which == "self") {
+Body body = Util.GetLocalBody();
+if (body == null)
+throw new Exception("No local body.");
+pos = body.transform.position;
+} else if (which == "cursor") {
+pos = Util.GetCursorWorldPos();
+} else {
+throw new Exception("Expected self or cursor.");
+}
+WorldSpawn.Assign(pos);
+con.LogToConsole($"World spawn set to {pos.x:0.0}, {pos.y:0.0}");
+}, new Dictionary<int, List<string>> {
+{ 0, new List<string> { "self", "cursor" } },
+}, ("where", "self or cursor")));
 
 RegisterCommand_LocalOnly(new Command("novisioneffect", "MP", (string[] splited) => {
 ref bool val = ref _DEV_NO_VISION_EFFECT;
@@ -2166,9 +2247,29 @@ target = ParseBool01(splited[1]);
 if (target) {
 ConFailIfNetworkIsRunningAndIsClient();
 ConFailIfCheatsDisabled();
+_DEV_MOVETOOL = false;
+MoveTool.Drop();
 }
 val = target;
 ConsoleScript.instance.LogToConsole($"telekinesis {val}");
+}, null));
+
+RegisterCommand_LocalOnly(new Command("movetool", "MP dev - snap, rotate, and scale props", (string[] splited) => {
+ref bool val = ref _DEV_MOVETOOL;
+var target = !val;
+if (splited.Length > 1) {
+target = ParseBool01(splited[1]);
+}
+if (target) {
+ConFailIfNetworkIsRunningAndIsClient();
+ConFailIfCheatsDisabled();
+_DEV_TELEKINESIS = false;
+_DEV_TELEKINESIS_OBJECT = null;
+}
+val = target;
+if (!val)
+MoveTool.Drop();
+ConsoleScript.instance.LogToConsole($"movetool {val}");
 }, null));
 
 
@@ -3280,27 +3381,40 @@ return false;
 
 static bool SanitizeClientAdminCommand(ScavPlayer plr, ref string[] args, Vector2 cursorpos) {
 var realcomm = ConsoleScript.SearchExact(args[0]);
-if (realcomm != null) {
-try {
-if (realcomm.name == "repeat") {
-var commands = args[3];
-foreach (var item in commands.Split(';')) {
-var splited = item.Replace('_', ' ').Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-if (splited.Length > 0) {
-if (Server_CheckBannedCommand(plr, splited[0])) {
+if (realcomm == null) {
+return true;
+}
+
+if (Server_CheckBannedCommand(plr, realcomm.name))
+return false;
+
+// Custom commands capture their command string, so a client could smuggle a banned command through them.
+if (realcomm.custom) {
+log.sus($"{plr} tried to execute a custom command: {realcomm.name}");
 return false;
 }
+
+// repeat/timedcommand/createvote carry another command; sanitize that one too.
+if (realcomm.name is "repeat" or "timedcommand" or "createvote") {
+var commandsArgIdx = realcomm.name == "createvote" ? 1 : 3;
+if (args.Length <= commandsArgIdx)
+return false;
+var commands = args[commandsArgIdx];
+
+var list = new List<string>();
+foreach (var item in commands.Split(';')) {
+var split = item.Replace('_', ' ').Split(' ', StringSplitOptions.RemoveEmptyEntries);
+if (split.Length <= 0)
+continue;
+if (!SanitizeClientAdminCommand(plr, ref split, cursorpos))
+return false;
+list.Add(string.Join('_', split));
 }
-}
+args[commandsArgIdx] = string.Join(';', list);
 } else if (realcomm.name == "spawn") {
 if (args.Length == 2) {
 args = args.AddToArray("cursor");
 }
-}
-
-} catch (Exception e) {
-log.error($"SERVER: REQUEST FROM {plr} TO TryExecuteCommand \n" + e.ToString());
-return false;
 }
 
 // just in case keep the old parser here
@@ -3338,8 +3452,6 @@ log.error($"SERVER: REQUEST FROM {plr} TO TryExecuteCommand \n" + e.ToString());
 return false;
 }
 
-
-}
 return true;
 }
 

@@ -1,15 +1,16 @@
-<Project>
+﻿<Project>
 	<Import Project="CasualtiesTogether.Local.props" Condition="Exists('CasualtiesTogether.Local.props')" />
   
 	<PropertyGroup>
 
 		<!-- Single-player / multiplayer split, separate save pages, room leave flow. -->
-		<ModVersion>5.5.4-cu-port-bugfix8</ModVersion>
+		<ModVersion>5.5.5-cu-port</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Wire/protocol identity; intentionally separate from the package version. -->
-		<NetworkVersion>5.5.4-cu-port-fix8</NetworkVersion>
+		<!-- 5.5.5 base + shard-optimization wire change. -->
+		<NetworkVersion>5.5.5-cu-port-fix2</NetworkVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
-		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.4-cu-port-bugfix8</UpdateReleaseVersion>
+		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.5-cu-port</UpdateReleaseVersion>
 
 		<!-- VS/solution builds set SolutionDir; direct `dotnet build <project>` does not. -->
 		<SlnRoot Condition="'$(SlnRoot)' == '' and '$(SolutionDir)' != ''">$(SolutionDir)</SlnRoot>
