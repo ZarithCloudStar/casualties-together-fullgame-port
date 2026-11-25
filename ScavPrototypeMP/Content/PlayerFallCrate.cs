@@ -143,13 +143,12 @@ namespace Together {
         }
 
         static void KnockDown(Body body) {
-            if (body == null) {
+            if (body == null || !body.standing) {
                 return;
             }
+            // Ragdoll() already raises shock to its minimum. Do not force a higher
+            // value or a second hit resets the get-up timer and stretches the ragdoll.
             body.Ragdoll();
-            if (body.shock < 40f) {
-                body.shock = 40f;
-            }
         }
 
         static bool Carried(NetBody nb) {
