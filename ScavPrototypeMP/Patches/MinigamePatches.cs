@@ -1,4 +1,4 @@
-using CasualtiesTogetherUtils;
+﻿using CasualtiesTogetherUtils;
 using HarmonyLib;
 using KrokV5Optimization;
 using LiteNetLib;
@@ -15,6 +15,7 @@ using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using static BandageMinigame;
 using static Together.MinigameMPManager;
+using Together.Integration;
 using Random = UnityEngine.Random;
 
 
@@ -66,14 +67,10 @@ maxdist = SharedMain.max_player_interaction_distance * 1.7f;
 }
 
 public class ShrapnelMinigameSession : _LimbMedicalMinigameSession {
-public readonly List<Vector2> shrapnel_locations = new List<Vector2> {
-//OG: ShrapnelMinigame.prefab V5t4
-new Vector2 (x: -248f, y: -316.85f),
-new Vector2 (x: -143f, y: -316.85f),
-new Vector2 (x: 0f, y: -316.85004f),
-new Vector2 (x: 116f, y: -316.85004f),
-new Vector2 (x: 208f, y: -316.85f),
-};
+public readonly List<Vector2> shrapnel_locations = new();
+public readonly List<int> shrapnel_categories = new();
+public readonly List<bool> removed = new();
+public readonly List<bool> bled = new();
 
 public readonly List<(double, ScavPlayer)> last_shrapnel_movement = new();
 
@@ -81,21 +78,30 @@ public readonly List<(double, ScavPlayer)> last_shrapnel_movement = new();
 public override void Init() {
 base.Init();
 
-//OG: ShrapnelMinigame.Start V5t4
-int num = shrapnel_locations.Count() - limb.shrapnel;
-for (int i = 0; i < shrapnel_locations.Count(); i++) {
-Vector2 pos = shrapnel_locations[i];
-pos += Random.insideUnitCircle * 20f;
-if (num > 0) {
-num--;
-pos += Vector2.up * 2500f;
+int total = GameContentExpansionBridge.GetShardTotal(limb);
+if (total <= 0) return;
+var categories = GameContentExpansionBridge.GetShardCategories(limb) ?? Array.Empty<int>();
+for (int i = 0; i < total; i++) {
+Vector2 pos;
+if (i < 5) {
+pos = i switch {
+0 => new Vector2(-248f, -316.85f),
+1 => new Vector2(-143f, -316.85f),
+2 => new Vector2(0f, -316.85004f),
+3 => new Vector2(116f, -316.85004f),
+_ => new Vector2(208f, -316.85f),
+};
+} else {
+pos = new Vector2(-248f + (i % 5) * 104f, -316.85f + (i / 5) * 60f);
 }
-shrapnel_locations[i] = pos;
-
-
+pos += Random.insideUnitCircle * 20f;
+if (pos.y >= 35f) pos.y = 30f;
+shrapnel_locations.Add(pos);
+shrapnel_categories.Add(i < categories.Length ? categories[i] : 4);
+removed.Add(false);
+bled.Add(false);
 last_shrapnel_movement.Add((0.0, null));
 }
-
 }
 
 float synctimer = 0f;
@@ -139,7 +145,7 @@ Net.Server_SendToClients(DeliveryMethod.Unreliable, writer, clientIds: InvolvedP
 }
 
 
-public static List<ScavPlayer> client_shrapnel_owners = new List<ScavPlayer> { null, null, null, null, null };
+public static List<ScavPlayer> client_shrapnel_owners = new();
 [ClientReceiver((byte)NetmsgId.CLIENT_MinigameSchrapnelLocations, false)]
 static void ClientReceiver_MinigameSchrapnelLocations(knetid _, LiteNetLib.Utils.NetDataReader reader) {
 
@@ -151,13 +157,14 @@ reader.Get(out ushort shracount); // guranteed 5
 if (MinigameBase.main.currentMinigame && MinigameBase.main.currentMinigame is ShrapnelMinigame sm && netlimb.TryGetNetBodyAndLimb(out NetBody pb, out Limb limb)) {
 
 List<RectTransform> objects = Traverse.Create(sm).Field("objects").GetValue<List<RectTransform>>();
+if (objects == null) return;
 RectTransform currentlyHeld = Traverse.Create(sm).Field("currentlyHeld").GetValue<RectTransform>();
 
 for (int i = 0; i < shracount; i++) {
 reader.Get(out Vector2 loc);
 
-RectTransform shraobj = objects[i];
-if (currentlyHeld != shraobj) {
+RectTransform shraobj = i < objects.Count ? objects[i] : null;
+if (shraobj != null && currentlyHeld != shraobj) {
 float jump = Vector2.Distance(shraobj.anchoredPosition, loc);
 if (jump > 120f) {
 NoteSlow("shrapnel snap " + i + " by " + Mathf.RoundToInt(jump));
@@ -167,10 +174,13 @@ if (shraobj.anchoredPosition != loc) {
 ShrapnelMinigame_Update_MultiplayerPatch.last_packet_was_a_change = true;
 }
 shraobj.anchoredPosition = loc;
+} else if (shraobj == null) {
+NoteSlow("shrapnel index " + i + " beyond local objects " + objects.Count);
 }
 
 reader.Get(out bool has_owner);
 
+while (client_shrapnel_owners.Count <= i) client_shrapnel_owners.Add(null);
 if (has_owner) {
 reader.Get(out knetid ownerid);
 client_shrapnel_owners[i] = ScavPlayer.GetPlayerFromClientId(ownerid);
@@ -219,20 +229,31 @@ new_pos = new Vector2(new_pos.x, -364f);
 
 sms.shrapnel_locations[shrap_index] = new_pos;
 
+int oldTotal = GameContentExpansionBridge.GetShardTotal(sms.limb);
+bool isRemoved = new_pos.y >= 35f;
+if (isRemoved && !sms.removed[shrap_index]) {
+sms.removed[shrap_index] = true;
+bool addBleed = !sms.bled[shrap_index];
+sms.bled[shrap_index] = true;
+GameContentExpansionBridge.RemoveShard(sms.limb, sms.shrapnel_categories[shrap_index], addBleed);
+} else if (!isRemoved && sms.removed[shrap_index]) {
+sms.removed[shrap_index] = false;
+GameContentExpansionBridge.AddShard(sms.limb, sms.shrapnel_categories[shrap_index]);
+}
 
 int num = 0;
 foreach (Vector2 pos in sms.shrapnel_locations) {
-if (pos.y < 34f) {
+if (pos.y < 35f) {
 num++;
 }
 }
-sms.limb.shrapnel = num;
-
-if (sms.limb.shrapnel != num && sms.limb.TryGetNetBody(out NetBody nb)) {
+if (GameContentExpansionBridge.ShardTotal == null) sms.limb.shrapnel = num;
+int newTotal = GameContentExpansionBridge.GetShardTotal(sms.limb);
+if (oldTotal != newTotal && sms.limb.TryGetNetBody(out NetBody nb)) {
 MedicalSync.Server_QueueSendCharacterHealth(nb);
 }
 
-if (num == 0) {
+if (newTotal == 0) {
 Server_EndMinigame(sess, true);
 }
 
@@ -482,11 +503,13 @@ if (curmg is ShrapnelMinigame sm) {
 
 List<RectTransform> objects = sm.objects;
 
-for (int i = 0; i < 5; i++) {
+for (int i = 0; i < objects.Count; i++) {
 RectTransform shra = objects[i];
+if (shra == null) continue;
 Vector3 pos = shra.position;
 pos = new Vector2(pos.x, Screen.height - pos.y);
-ScavPlayer owner = ShrapnelMinigameSession.client_shrapnel_owners[i];
+ScavPlayer owner = i < ShrapnelMinigameSession.client_shrapnel_owners.Count
+? ShrapnelMinigameSession.client_shrapnel_owners[i] : null;
 GUI.Label(new Rect(pos.x, pos.y, 200, 20), owner.ToSafeString());
 }
 }
@@ -1261,7 +1284,7 @@ return null;
 } else if (realtype == typeof(ShrapnelMinigame) || realtype == typeof(DislocationMinigame)) {
 if (objnet.TryGetNetBodyAndLimb(out NetBody target_pb, out Limb target_limb) && KM.DistanceCheck(pb.body, target_pb.body, 20)) {
 
-if (realtype == typeof(ShrapnelMinigame) && target_limb.shrapnel > 0) {
+if (realtype == typeof(ShrapnelMinigame) && GameContentExpansionBridge.GetShardTotal(target_limb) > 0) {
 mgsess = Server_GetSessionForObject<ShrapnelMinigameSession>(target_limb.gameObject, realtype_id, plr);
 } else if (realtype == typeof(DislocationMinigame) && target_limb.dislocated) {
 mgsess = Server_GetSessionForObject<DislocationMinigameSession>(target_limb.gameObject, realtype_id, plr);
@@ -1657,7 +1680,7 @@ var l = WaterContainerItem_Inject_MultiplayerPatch.listen_to_limb;
 var pb = l.body.GetComponent<NetBody>();
 if (pb == null) return false;
 l.GetCoUtilsInstance().SelectForMPOverride();
-if (l.shrapnel == 1 && l.pain > 20f) {
+if (GameContentExpansionBridge.HasShardNeedle(l) && l.pain > 20f) {
 if (NetObjectRegistry.TryGetSyncInfo(Minigame.game.currentItem.gameObject, out SyncInfo si)) {
 SyringeMinigame_Update_MultiplayerPatch.Client_SendCurrentInjectedAmount(true);
 Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_SyringMinigame_BrokeNeedle, si.syncId, pb.netId, Util.GetLimbIndex(l), true);
@@ -1833,7 +1856,7 @@ reader.Get(out byte limbid);
 if (MedicalSync.Server_CheckCanHealerUseItemForLimb(clientId, targetplr, limbid, needleid, out ScavPlayer plr, out NetBody targetsci, out SyncInfo si)) {
 Limb limb = targetsci.body.limbs[limbid];
 
-if (limb.shrapnel == 1) {//needle was already broken
+if (GameContentExpansionBridge.HasShardNeedle(limb)) {//needle was already broken
 return;
 }
 
@@ -1843,6 +1866,7 @@ DebugHelp.OnNetEvent(plr.body.transform.position, $"S: broke needle oops {plr.pl
 
 if (!plr.IsLocal) {
 //OG: SyringeMinigame.Update   V5t4   it ends mingame
+if (!GameContentExpansionBridge.TryShardNeedle(limb))
 limb.shrapnel = Math.Max(limb.shrapnel, 1);
 limb.pain += 20f;
 }
@@ -2261,13 +2285,23 @@ return;
 
 
 List<RectTransform> objects = shtraverse.Field("objects").GetValue<List<RectTransform>>();
+if (objects == null) return;
+while (MinigameMPManager.ShrapnelMinigameSession.client_shrapnel_owners.Count < objects.Count)
+MinigameMPManager.ShrapnelMinigameSession.client_shrapnel_owners.Add(null);
 RectTransform currentlyHeld = shtraverse.Field("currentlyHeld").GetValue<RectTransform>();
 
 bool forcesend_important = false;
 if (currentlyHeld != null) {
 
-byte shraindex = (byte)objects.IndexOf(currentlyHeld);
-ScavPlayer owner = MinigameMPManager.ShrapnelMinigameSession.client_shrapnel_owners[shraindex];
+int heldIndex = objects.IndexOf(currentlyHeld);
+if (heldIndex < 0 || heldIndex >= MinigameMPManager.ShrapnelMinigameSession.client_shrapnel_owners.Count) {
+currentlyHeld = null;
+Minigame.game.ForceUngrab();
+}
+byte shraindex = (byte)Mathf.Max(0, heldIndex);
+ScavPlayer owner = currentlyHeld != null
+? MinigameMPManager.ShrapnelMinigameSession.client_shrapnel_owners[shraindex]
+: null;
 
 if (owner == null || owner == ScavPlayer.LocalPlayer) {
 
@@ -2300,9 +2334,11 @@ if (synctimer <= 0f && currentlyHeld != null) {
 synctimer = 0.05f;
 if (l.TryGetNetBody(out NetBody target_pb)) {
 
-byte shraindex = (byte)objects.IndexOf(currentlyHeld);
-
+int sendIndex = objects.IndexOf(currentlyHeld);
+if (sendIndex >= 0) {
+byte shraindex = (byte)sendIndex;
 Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_ShrapnelMinigame_MovingShrapnel, shraindex, currentlyHeld.anchoredPosition, forcesend_important);
+}
 
 }
 }
