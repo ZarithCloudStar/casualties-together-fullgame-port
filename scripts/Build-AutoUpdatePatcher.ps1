@@ -4,7 +4,10 @@ $repo = Split-Path $PSScriptRoot -Parent
 Add-Type -Path "$PSHOME\Microsoft.CodeAnalysis.dll"
 Add-Type -Path "$PSHOME\Microsoft.CodeAnalysis.CSharp.dll"
 
-$source = Join-Path $repo 'ScavPrototypeMP-AutoUpdaterPatcher\TogetherAutoUpdaterPatcher.cs'
+$sources = @(
+    (Join-Path $repo 'ScavPrototypeMP-AutoUpdaterPatcher\TogetherAutoUpdaterPatcher.cs'),
+    (Join-Path $repo 'ScavPrototypeMP-AutoUpdaterPatcher\StagedPackageApplier.cs')
+)
 $output = Join-Path $repo "build\autoupdate-patcher-$Configuration"
 New-Item -ItemType Directory -Force $output | Out-Null
 $game = 'F:\cu-port\CU_Fullgame'
@@ -25,12 +28,17 @@ foreach ($path in @(
 $options = [Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions]::new(
     [Microsoft.CodeAnalysis.OutputKind]::DynamicallyLinkedLibrary
 ).WithOptimizationLevel([Microsoft.CodeAnalysis.OptimizationLevel]::Release)
-$tree = [Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree]::ParseText(
-    [IO.File]::ReadAllText($source),
-    [Microsoft.CodeAnalysis.CSharp.CSharpParseOptions]::Default.WithLanguageVersion([Microsoft.CodeAnalysis.CSharp.LanguageVersion]::Latest)
+$parseOptions = [Microsoft.CodeAnalysis.CSharp.CSharpParseOptions]::Default.WithLanguageVersion(
+    [Microsoft.CodeAnalysis.CSharp.LanguageVersion]::Latest
 )
 $trees = [Collections.Generic.List[Microsoft.CodeAnalysis.SyntaxTree]]::new()
-$trees.Add($tree)
+foreach ($source in $sources) {
+    $tree = [Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree]::ParseText(
+        [IO.File]::ReadAllText($source),
+        $parseOptions
+    )
+    $trees.Add($tree)
+}
 $compilation = [Microsoft.CodeAnalysis.CSharp.CSharpCompilation]::Create('TogetherAutoUpdaterPatcher', $trees, $refs, $options)
 $dll = Join-Path $output 'TogetherAutoUpdaterPatcher.dll'
 $stream = [IO.File]::Create($dll)

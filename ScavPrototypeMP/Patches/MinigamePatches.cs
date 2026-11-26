@@ -119,7 +119,10 @@ pos = i switch {
 _ => new Vector2(208f, -316.85f),
 };
 } else {
-pos = new Vector2(-248f + (i % 5) * 104f, -316.85f + (i / 5) * 60f);
+int col = i % 5;
+int row = i / 5;
+float rowShift = (row % 2 == 0) ? -6f : 6f;
+pos = new Vector2(-248f + col * 104f + rowShift, -316.85f + row * 60f);
 }
 pos += Random.insideUnitCircle * 20f;
 if (pos.y >= 35f) pos.y = 30f;
@@ -264,8 +267,14 @@ bool addBleed = !sms.bled[shrap_index];
 sms.bled[shrap_index] = true;
 GameContentExpansionBridge.RemoveShard(sms.limb, sms.shrapnel_categories[shrap_index], addBleed);
 } else if (!isRemoved && sms.removed[shrap_index]) {
+bool hasShardHook = GameContentExpansionBridge.ShardAdded != null;
+bool added = GameContentExpansionBridge.AddShard(sms.limb, sms.shrapnel_categories[shrap_index]);
+if (added || !hasShardHook) {
 sms.removed[shrap_index] = false;
-GameContentExpansionBridge.AddShard(sms.limb, sms.shrapnel_categories[shrap_index]);
+} else {
+// Cap rejected the re-add; keep it marked removed so a later move can retry.
+NoteSlow("shrapnel re-add rejected at cap");
+}
 }
 
 int num = 0;

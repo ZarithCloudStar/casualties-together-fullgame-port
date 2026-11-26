@@ -716,6 +716,14 @@ static void _GUI_RenderServerBrowser(Rect r) {
             // Password entry lives in the centered Join dialog, not here.
 
             {
+                var oldHidePass = SortHidePasswordProtected;
+                SortHidePasswordProtected = GUILayout.Toggle(SortHidePasswordProtected, Lang.Get("mmsb_lobbyhidepass"));
+                if (oldHidePass != SortHidePasswordProtected) {
+                    RefilterList();
+                }
+            }
+
+            {
                 var oldImcomp = SortHideIncompatible;
                 SortHideIncompatible = GUILayout.Toggle(SortHideIncompatible, Lang.Get("mmsb_lobbyhidever"));
                 if (oldImcomp != SortHideIncompatible) {
