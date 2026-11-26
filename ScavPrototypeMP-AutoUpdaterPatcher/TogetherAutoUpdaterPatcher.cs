@@ -75,42 +75,18 @@ public static class TogetherAutoUpdaterPatcher {
         }
 
         WriteLog("Applying staged update from " + StageRoot);
-        // These assemblies are loaded by BepInEx after patchers, so they can
-        // still be replaced here. The patcher itself is already loaded and is
-        // deliberately skipped by CopyTree.
-        DeleteIfExists(Path.Combine(GameRoot, "BepInEx", "plugins", "Together", "CasualtiesMP.dll"));
-        DeleteIfExists(Path.Combine(GameRoot, "BepInEx", "plugins", "Together", "Steamworks.NET.dll"));
-
-        CopyTree(StageRoot, GameRoot);
-        if (!File.Exists(Path.Combine(GameRoot, "BepInEx", "plugins", "Together", "CasualtiesMP.dll"))) {
-            WriteLog("Verification failed: new CasualtiesMP.dll is missing.");
+        var result = StagedPackageApplier.Apply(
+            StageRoot,
+            GameRoot,
+            new[] { PatcherSelf },
+            new[] { "BepInEx/plugins/Together/Steamworks.NET.dll" },
+            WriteLog);
+        if (!result.Success) {
+            WriteLog("Update NOT applied: " + (result.Error ?? "unknown error") + "; stage kept for retry.");
             return;
         }
-        WriteLog("Update applied successfully.");
-        try { Directory.Delete(TempRoot, true); }
-        catch (Exception ex) { WriteLog("Cleanup skipped: " + ex.Message); }
-    }
-
-    static void CopyTree(string source, string destination) {
-        Directory.CreateDirectory(destination);
-        foreach (string file in Directory.GetFiles(source)) {
-            string target = Path.Combine(destination, Path.GetFileName(file));
-            if (string.Equals(Path.GetFullPath(target), Path.GetFullPath(PatcherSelf), StringComparison.OrdinalIgnoreCase))
-                continue;
-            try {
-                Directory.CreateDirectory(Path.GetDirectoryName(target));
-                File.Copy(file, target, true);
-            } catch (Exception ex) { WriteLog("copy failed " + target + ": " + ex.Message); }
-        }
-        foreach (string dir in Directory.GetDirectories(source)) {
-            try { CopyTree(dir, Path.Combine(destination, Path.GetFileName(dir))); }
-            catch (Exception ex) { WriteLog("dir failed " + dir + ": " + ex.Message); }
-        }
-    }
-
-    static void DeleteIfExists(string path) {
-        try { if (File.Exists(path)) File.Delete(path); }
-        catch (Exception ex) { WriteLog("delete failed " + path + ": " + ex.Message); }
+        WriteLog("Update applied successfully (" + result.RequiredVerified + " required file(s) verified, "
+            + result.BestEffortApplied + " optional applied, " + result.BestEffortFailed + " optional skipped).");
     }
 
     static void WriteLog(string text) {

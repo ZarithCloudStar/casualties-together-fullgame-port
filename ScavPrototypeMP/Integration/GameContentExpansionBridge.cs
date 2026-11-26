@@ -24,6 +24,7 @@ public static class GameContentExpansionBridge {
     public const int ShardCatPvP = 4;
     public const int ShardCatGunmine = 5;
     public const int ShardCatTurret = 6;
+    public const int ShardCatBulb = 7;
 
     // GCE shard module hooks. All are optional; null means the module is not
     // installed/enabled and the vanilla shrapnel path must run.
@@ -37,8 +38,14 @@ public static class GameContentExpansionBridge {
     public static Func<Limb, int, bool> ShardAdded;
     public static Func<Limb, bool> ShardHasNeedle;
 
-    public static int GetShardTotal(Limb limb) =>
-        ShardTotal != null ? ShardTotal(limb) : Mathf.Clamp(limb != null ? limb.shrapnel : 0, 0, 5);
+    // A non-null hook that returns false means the hook declined this event;
+    // the caller should run the vanilla path. GCE's glass hook returns true
+    // even at the shard cap, so its vanilla shrapnel = 5 fallback must never
+    // run while the hook is present.
+    public static int GetShardTotal(Limb limb) {
+        var hook = ShardTotal;
+        return hook != null ? hook(limb) : Mathf.Clamp(limb != null ? limb.shrapnel : 0, 0, 5);
+    }
 
     public static int[] GetShardCategories(Limb limb) {
         var hook = ShardCategories;
@@ -49,26 +56,40 @@ public static class GameContentExpansionBridge {
         return result;
     }
 
-    public static bool TryShardHit(Limb limb, int category) =>
-        ShardHit != null && ShardHit(limb, category);
+    public static bool TryShardHit(Limb limb, int category) {
+        var hook = ShardHit;
+        return hook != null && hook(limb, category);
+    }
 
-    public static bool TryShardGlass(Limb limb) =>
-        ShardGlass != null && ShardGlass(limb);
+    public static bool TryShardGlass(Limb limb) {
+        var hook = ShardGlass;
+        return hook != null && hook(limb);
+    }
 
-    public static bool TryShardExplosion(Limb limb, float shrapnelChance, float bleedChance) =>
-        ShardExplosion != null && ShardExplosion(limb, shrapnelChance, bleedChance);
+    public static bool TryShardExplosion(Limb limb, float shrapnelChance, float bleedChance) {
+        var hook = ShardExplosion;
+        return hook != null && hook(limb, shrapnelChance, bleedChance);
+    }
 
-    public static bool TryShardNeedle(Limb limb) =>
-        ShardNeedle != null && ShardNeedle(limb);
+    public static bool TryShardNeedle(Limb limb) {
+        var hook = ShardNeedle;
+        return hook != null && hook(limb);
+    }
 
-    public static bool HasShardNeedle(Limb limb) =>
-        ShardHasNeedle != null ? ShardHasNeedle(limb) : limb != null && limb.shrapnel == 1;
+    public static bool HasShardNeedle(Limb limb) {
+        var hook = ShardHasNeedle;
+        return hook != null ? hook(limb) : limb != null && limb.shrapnel == 1;
+    }
 
-    public static bool RemoveShard(Limb limb, int category, bool addBleed) =>
-        ShardRemoved != null && ShardRemoved(limb, category, addBleed);
+    public static bool RemoveShard(Limb limb, int category, bool addBleed) {
+        var hook = ShardRemoved;
+        return hook != null && hook(limb, category, addBleed);
+    }
 
-    public static bool AddShard(Limb limb, int category) =>
-        ShardAdded != null && ShardAdded(limb, category);
+    public static bool AddShard(Limb limb, int category) {
+        var hook = ShardAdded;
+        return hook != null && hook(limb, category);
+    }
 
     // Assigned by the optional plugin. Called inside the rules scroll view.
     public static Action DrawRulesBottomSection;
@@ -190,6 +211,16 @@ public static class GameContentExpansionBridge {
             player.playerColor = color;
         }
         return true;
+    }
+
+    // GCE team-spawn sites generate a lifepod/background on the host after
+    // world generation. The client's seeded world does not contain it, so
+    // register that exact instance with the live entity stream; the next
+    // world snapshot then captures/restores it normally.
+    public static void RegisterGeneratedBackgrounds(float x, float y, float radius) {
+#if FULLGAME
+        BackgroundSnapshot.RegisterGenerated(new Vector2(x, y), radius);
+#endif
     }
 
     static ScavPlayer FindPlayer(int playerId) {
