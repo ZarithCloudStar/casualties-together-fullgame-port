@@ -1,4 +1,6 @@
 ﻿using CasualtiesTogetherUtils;
+using LiteNetLib;
+using LiteNetLib.Utils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -273,5 +275,93 @@ public static class GameContentExpansionBridge {
         if (!gceItemGesturePushed) return;
         gceItemGesturePushed = false;
         MoveCommit.EndDrag(item);
+    }
+
+    // ---- Generic GCE state messages ---------------------------------------
+    // GCE owns the payload layout. Together only carries a named byte[]:
+    //   client -> host: handler(senderPlayerId, payload), then relayed to the
+    //                   other clients;
+    //   host -> clients: SendState broadcasts to every client.
+    // Keep the key stable and < 64 bytes; payload is capped at 8 KiB.
+    const int GceStateMaxBytes = 8192;
+    static readonly Dictionary<string, Action<int, byte[]>> gceStateHandlers = new();
+
+    public static void RegisterStateHandler(string key, Action<int, byte[]> handler) {
+        if (string.IsNullOrEmpty(key) || key.Length > 64 || handler == null) return;
+        if (gceStateHandlers.ContainsKey(key)) {
+            gceStateHandlers[key] = handler;
+            return;
+        }
+        gceStateHandlers[key] = handler;
+        Multiplayer.RegisterCustomServerReceiver(key, (plr, reader) => {
+            byte[] data = ReadStatePayload(reader);
+            if (data == null) return;
+            int sender = plr != null ? plr.playerId.id : 0;
+            DispatchState(key, sender, data);
+            // Host receives a client's state and fans it out to the others.
+            if (Net.IsServer && Net.IsRunning && plr != null) {
+                var writer = Multiplayer.CreateNamedWriter(key);
+                writer.Put(data);
+                Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer,
+                    ServerMain.GetListOfClientIdsExceptThis(plr.playerId));
+            }
+        });
+        Multiplayer.RegisterCustomClientReceiver(key, reader => {
+            byte[] data = ReadStatePayload(reader);
+            if (data != null) DispatchState(key, 0, data);
+        });
+    }
+
+    public static void SendState(string key, byte[] data) {
+        if (string.IsNullOrEmpty(key) || key.Length > 64 || data == null ||
+            data.Length > GceStateMaxBytes || !Net.IsRunning) return;
+        var writer = Multiplayer.CreateNamedWriter(key);
+        writer.Put(data);
+        if (Net.IsClient) {
+            Net.Client_Send(DeliveryMethod.ReliableOrdered, writer);
+        } else if (Net.IsServer) {
+            Net.Server_SendToClients(DeliveryMethod.ReliableOrdered, writer, ServerMain.AllClientIds);
+        }
+    }
+
+    static byte[] ReadStatePayload(NetDataReader reader) {
+        try {
+            byte[] data = reader.GetBytesWithLength();
+            return data != null && data.Length <= GceStateMaxBytes ? data : null;
+        } catch {
+            return null;
+        }
+    }
+
+    static void DispatchState(string key, int sender, byte[] data) {
+        if (gceStateHandlers.TryGetValue(key, out var handler) && handler != null) {
+            try { handler(sender, data); } catch (Exception ex) {
+                log.warn("[gce-bridge] state handler " + key + " failed: " + ex.Message);
+            }
+        }
+    }
+
+    // GCE firearm state uses the network sync id of the gun item so a client
+    // can find its own copy of the same Item on the other machines.
+    public static int GetItemSyncId(Item item) {
+        if (item == null) return 0;
+        try {
+            return NetObjectRegistry.TryGetSyncInfo(item.gameObject, out SyncInfo si) && si != null
+                ? si.syncId.id
+                : 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    public static Item FindItemBySyncId(int syncId) {
+        if (syncId <= 0 || syncId > ushort.MaxValue) return null;
+        try {
+            if (!NetObjectRegistry.TryGetSyncInfo((knetid)(ushort)syncId, out SyncInfo si) ||
+                si == null || si.go == null) return null;
+            return si.go.GetComponent<Item>();
+        } catch {
+            return null;
+        }
     }
 }
