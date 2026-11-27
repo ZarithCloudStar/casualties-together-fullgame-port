@@ -74,7 +74,6 @@ public readonly List<bool> bled = new();
 
 public readonly List<(double, ScavPlayer)> last_shrapnel_movement = new();
 
-
 public override void Init() {
 base.Init();
 
@@ -109,6 +108,8 @@ int total = GameContentExpansionBridge.GetShardTotal(limb);
 if (total <= 0) return;
 var categories = GameContentExpansionBridge.GetShardCategories(limb) ?? Array.Empty<int>();
 for (int i = 0; i < total; i++) {
+int col = i % 5;
+int row = i / 5;
 Vector2 pos;
 if (i < 5) {
 pos = i switch {
@@ -119,10 +120,8 @@ pos = i switch {
 _ => new Vector2(208f, -316.85f),
 };
 } else {
-int col = i % 5;
-int row = i / 5;
-float rowShift = (row % 2 == 0) ? -6f : 6f;
-pos = new Vector2(-248f + col * 104f + rowShift, -316.85f + row * 60f);
+float rowShift = (row % 2 == 0) ? -26f : 26f;
+pos = new Vector2(-248f + rowShift + col * 104f, -316.85f);
 }
 pos += Random.insideUnitCircle * 20f;
 if (pos.y >= 35f) pos.y = 30f;
@@ -263,9 +262,8 @@ int oldTotal = GameContentExpansionBridge.GetShardTotal(sms.limb);
 bool isRemoved = new_pos.y >= 35f;
 if (isRemoved && !sms.removed[shrap_index]) {
 sms.removed[shrap_index] = true;
-bool addBleed = !sms.bled[shrap_index];
 sms.bled[shrap_index] = true;
-GameContentExpansionBridge.RemoveShard(sms.limb, sms.shrapnel_categories[shrap_index], addBleed);
+GameContentExpansionBridge.RemoveShard(sms.limb, sms.shrapnel_categories[shrap_index], true);
 } else if (!isRemoved && sms.removed[shrap_index]) {
 bool hasShardHook = GameContentExpansionBridge.ShardAdded != null;
 bool added = GameContentExpansionBridge.AddShard(sms.limb, sms.shrapnel_categories[shrap_index]);

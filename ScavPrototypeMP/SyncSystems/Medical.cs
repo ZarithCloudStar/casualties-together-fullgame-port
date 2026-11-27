@@ -271,9 +271,16 @@ MinigameMPManager.NoteSlow("health bandage by " + limb.bandageSlowAmount.ToStrin
 limb.furBloodAmount = furBloodAmount;
 limb.shrapnel = shrapnel;
 // If this peer does not have the shard module, collapse packed source data
-// back to a vanilla-safe count instead of letting the minigame see bit 30.
-if (GameContentExpansionBridge.ShardTotal == null && (shrapnel & (1 << 30)) != 0)
+// back to a vanilla-safe count. The new 4-bit layout has no low-byte total,
+// so use the vanilla maximum; the old 3-bit layout still carries it.
+if (GameContentExpansionBridge.ShardTotal == null) {
+bool oldPacked = (shrapnel & (1 << 30)) != 0;
+bool newPacked = (shrapnel & (1 << 29)) != 0;
+if (oldPacked)
 limb.shrapnel = Mathf.Clamp(shrapnel & 0xFF, 0, 5);
+else if (newPacked)
+limb.shrapnel = 5;
+}
 limb.infected = infected;
 limb.muscleHealth = muscleHealth;
 limb.skinHealth = skinHealth;
