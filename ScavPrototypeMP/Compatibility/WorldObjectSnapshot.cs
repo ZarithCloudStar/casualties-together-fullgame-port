@@ -254,7 +254,9 @@ internal static class WorldObjectSnapshot {
             log.warn("LOAD: world object restore cancelled; world/session changed");
             yield break;
         }
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var ready = new Dictionary<int, GameObject>();
+        long applyMs = 0;
         foreach (var entry in batch.spawned) {
             var go = entry.go;
             try {
@@ -280,6 +282,7 @@ internal static class WorldObjectSnapshot {
                 SkipObject(batch, entry.data, "finish", ex.Message, ex, go);
             }
         }
+        applyMs = stopwatch.ElapsedMilliseconds;
         int registered = 0, registrationFailures = 0;
         foreach (var entry in batch.spawned) {
             if (!ready.TryGetValue(entry.data.id, out var go)) continue;
@@ -293,7 +296,8 @@ internal static class WorldObjectSnapshot {
             } catch (Exception ex) { registrationFailures++; SkipObject(batch, entry.data, "register", ex.Message, ex); }
         }
         BackgroundSnapshot.Finish(batch.backgrounds);
-        log.l($"LOAD: world objects restored={ready.Count} skipped={batch.skipped} criticalFailures={batch.criticalFailures} removed={batch.removed} registered={registered} registrationFailures={registrationFailures} layer={batch.world.biomeDepth} keptDynamic={batch.keptDynamic.Values.Sum()}");
+        long totalMs = stopwatch.ElapsedMilliseconds;
+        log.l($"LOAD: world objects restored={ready.Count} skipped={batch.skipped} criticalFailures={batch.criticalFailures} removed={batch.removed} registered={registered} registrationFailures={registrationFailures} layer={batch.world.biomeDepth} keptDynamic={batch.keptDynamic.Values.Sum()} applyMs={applyMs} registerMs={totalMs - applyMs} totalMs={totalMs}");
         if (Net.IsServer) TraderLoadRecovery.Queue(batch.world, batch.session, batch.traders);
         if (batch.criticalFailures != 0 || ready.Count == 0)
             throw new InvalidDataException($"Critical world object restore failed: restored={ready.Count} skipped={batch.skipped} criticalFailures={batch.criticalFailures}; {batch.firstCriticalFailure ?? "No world objects restored."}");
@@ -446,9 +450,27 @@ internal static class WorldObjectSnapshot {
         return record;
     }
 
-    static IEnumerable<FieldInfo> Fields(Type type) => type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-        .Where(f => !f.IsStatic && !f.IsInitOnly && ((Attribute.IsDefined(type, typeof(Saveable)) && Attribute.IsDefined(f, typeof(JsonPropertyAttribute))) ||
-            (ExtraFields.TryGetValue(type.Name, out var names) && names.Contains(f.Name))));
+    static readonly Dictionary<Type, FieldInfo[]> FieldCache = new();
+    static readonly Dictionary<Type, Dictionary<string, FieldInfo>> FieldMapCache = new();
+
+    static FieldInfo[] Fields(Type type) {
+        if (FieldCache.TryGetValue(type, out var cached))
+            return cached;
+        var fields = type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .Where(f => !f.IsStatic && !f.IsInitOnly && ((Attribute.IsDefined(type, typeof(Saveable)) && Attribute.IsDefined(f, typeof(JsonPropertyAttribute))) ||
+                (ExtraFields.TryGetValue(type.Name, out var names) && names.Contains(f.Name))))
+            .ToArray();
+        FieldCache[type] = fields;
+        return fields;
+    }
+
+    static Dictionary<string, FieldInfo> FieldMap(Type type) {
+        if (FieldMapCache.TryGetValue(type, out var cached))
+            return cached;
+        var map = Fields(type).ToDictionary(f => f.Name);
+        FieldMapCache[type] = map;
+        return map;
+    }
 
     internal static void CaptureFields(Transform transform, string path, List<WorldObjectComponent> components) {
         foreach (var component in transform.GetComponents<MonoBehaviour>()) {
@@ -510,7 +532,7 @@ internal static class WorldObjectSnapshot {
             // Resolve only an existing prefab component; never Type.GetType/AddComponent from disk.
             var component = transform.GetComponents<MonoBehaviour>().FirstOrDefault(x => x != null && x.GetType().FullName == state.type);
             if (component == null) throw new InvalidDataException("Missing prefab component: " + state.type);
-            var allowed = Fields(component.GetType()).ToDictionary(x => x.Name);
+            var allowed = FieldMap(component.GetType());
             foreach (var field in state.fields) {
                 if (!allowed.TryGetValue(field.Key, out var info)) throw new InvalidDataException("Unsupported snapshot field: " + field.Key);
                 object value = component is CustomItemBehaviour && field.Key == "data" && field.Value.Type != JTokenType.Null
@@ -537,7 +559,7 @@ internal static class WorldObjectSnapshot {
             }
             var component = node.GetComponents<MonoBehaviour>().FirstOrDefault(c => c != null && c.GetType().FullName == state.type);
             if (component == null) throw new InvalidDataException("Missing background component: " + state.type);
-            var fields = Fields(component.GetType()).ToDictionary(f => f.Name);
+            var fields = FieldMap(component.GetType());
             foreach (var field in state.fields) {
                 if (!fields.TryGetValue(field.Key, out var info)) throw new InvalidDataException("Unsupported background field: " + field.Key);
                 field.Value.ToObject(info.FieldType);
