@@ -475,7 +475,7 @@ public static class PlayerCheckpoint {
             dict["GAMEVERSION"] = Application.version;
             dict["SAVEID"] = WoundView.view.cInfo[2];
             dict["LEVEL"] = midlevel;
-            dict["RULES"] = Multiplayer.rules;
+            // Rules are live lobby state; never persist them in a checkpoint.
             dict[AchievementBreakSync.SaveHeaderKey] = SteamManager.disableAchievements;
             dict["PLRCHARS"] = ScavPlayer.ClientIdToPlayerDict.Values.Where(p => p != null && p.body != null)
                 .ToDictionary(p => p.GetPersistentId(), p => p.body.charType);

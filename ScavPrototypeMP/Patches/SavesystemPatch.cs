@@ -179,7 +179,7 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
 
                     
 
-                    // save rules
+                    // save session header
                     {
                         var dict = new Dictionary<string, object>();
 
@@ -188,7 +188,8 @@ public static class SaveSystem_SaveGame_MultiplayerPatch {
                         dict["GAMEVERSION"] = Application.version;
                         dict["SAVEID"] = WoundView.view.cInfo[2];
                         dict["LEVEL"] = midlevel;
-                        dict["RULES"] = Multiplayer.rules;
+                        // Deliberately do not persist Multiplayer.rules. The
+                        // current lobby rules are authoritative on every load.
                 dict[AchievementBreakSync.SaveHeaderKey] = SteamManager.disableAchievements;
                         dict["MODIFIER"] = midlevel ? (WorldMP.GetLayerModifier()?.modifierIndex ?? -1) : -1;
                         dict["PLRPOS"] = ScavPlayer.BodyToPlayerDict.ToDictionary(x => x.Value.GetPersistentId(), x => (x.Key.transform.position.x, x.Key.transform.position.y));
@@ -417,7 +418,7 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
                             bool MIDLEVEL = false;
                             Dictionary<string, (float, float)> PLRPOS = new Dictionary<string, (float, float)>();
 
-                            // read rules
+                            // read session header
                             {
                                 var text = File.ReadAllText(rulespath);
 
@@ -463,11 +464,10 @@ public static class SaveSystem_LoadGame_MultiplayerPatch {
 #endif
                                 }
 
-                                if (jObject.TryGetValue("RULES", out var RULES)) {
-                                    Multiplayer.rules = RULES.ToObject<MultiplayerGameRules>();
-                                    if (SavesystemPatch.DebugWorldUsesSave) Multiplayer.rules.DebugWorldSaveSystem = true;
-                    if (jObject.Value<bool?>(AchievementBreakSync.SaveHeaderKey) == true) AchievementBreakSync.ApplyLocal(true);
-                                }
+                                // RULES in older saves is intentionally ignored:
+                                // loading must keep the current lobby/UI rules.
+                                if (SavesystemPatch.DebugWorldUsesSave) Multiplayer.rules.DebugWorldSaveSystem = true;
+                                if (jObject.Value<bool?>(AchievementBreakSync.SaveHeaderKey) == true) AchievementBreakSync.ApplyLocal(true);
                             }
 
 #if FULLGAME

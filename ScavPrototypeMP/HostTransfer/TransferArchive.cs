@@ -53,7 +53,7 @@ namespace Together
         {
             var rules = JObject.Parse(File.ReadAllText(Path.Combine(root, "mp_rules.json")));
             if (rules["LEVEL"]?.Type != JTokenType.Boolean || rules.Value<bool>("LEVEL") ||
-                rules["RULES"]?.Type != JTokenType.Object || rules.Value<int?>("MODIFIER") != -1 ||
+                rules.Value<int?>("MODIFIER") != -1 ||
                 !(rules["PLRPOS"] is JObject positions) || positions.Count != 0)
                 throw new InvalidDataException("Not a next-layer checkpoint.");
             foreach (ulong steam in players)
@@ -128,7 +128,7 @@ namespace Together
         {
             if (target == 0) throw new InvalidDataException("Invalid save recipient.");
             var rules = JObject.Parse(File.ReadAllText(Path.Combine(root, "mp_rules.json")));
-            if (rules["RULES"]?.Type != JTokenType.Object || rules["LEVEL"]?.Type != JTokenType.Boolean)
+            if (rules["LEVEL"]?.Type != JTokenType.Boolean)
                 throw new InvalidDataException("The host has no readable multiplayer expedition.");
             string personal = Path.Combine(root, "STEAM_" + target, "save.sv");
             bool hasCharacter = File.Exists(personal);
@@ -167,7 +167,7 @@ namespace Together
         internal static void ValidateSaved(string root, ulong recipient)
         {
             var header = JObject.Parse(File.ReadAllText(Path.Combine(root, "mp_rules.json")));
-            if (header["RULES"]?.Type != JTokenType.Object || header["LEVEL"]?.Type != JTokenType.Boolean)
+            if (header["LEVEL"]?.Type != JTokenType.Boolean)
                 throw new InvalidDataException("Invalid multiplayer save header.");
             var save = ReadSave(Path.Combine(root, "save.sv"));
             if (save["biome"]?.Type != JTokenType.Integer) throw new InvalidDataException("Saved expedition has no layer.");
