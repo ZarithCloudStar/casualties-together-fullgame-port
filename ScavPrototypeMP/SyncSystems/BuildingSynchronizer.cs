@@ -1121,6 +1121,9 @@ public static class SpiderHandler_CheckForLimbDamage_MultiplayerPatch {
 
             Limb limb = Body.LimbFromObject(collision.gameObject, __instance.transform.position);
             if (limb != null && limb.TryGetNetBody(out var pb)) {
+#if FULLGAME
+                if (JoinSpawnProtection.BlocksDamage(limb.body)) return false;
+#endif
                 if (!pb.IsBodyLocal()) { // wait for the players confirmation that they have been actually bit
                     if (pb.body.conscious) {// if theyre unconscious, server will handle the damage
                         return false;
@@ -1153,6 +1156,9 @@ public static class SpiderHandler_CheckForLimbDamage_MultiplayerPatch {
 
     //OG: SpiderHandler.CheckForLimbDamage V5t4
     public static void Spider_BiteDamage(SpiderHandler spider, Limb limb ) {
+        #if FULLGAME
+        if (JoinSpawnProtection.BlocksDamage(limb.body)) return;
+#endif
         var spoodertracker = spider.GetOrAddComponent<TrackerSpiderHandler>();
 
         if (limb.TryGetNetBody(out var nb)) {

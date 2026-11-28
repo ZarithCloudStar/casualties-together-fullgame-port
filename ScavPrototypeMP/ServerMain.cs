@@ -628,7 +628,8 @@ var spawnSession = Net.ServerEntityManager;
 var spawnWorld = WorldGeneration.world;
 while (!ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out plr, out pb) || !Util.IsWorldGenerated() || !Body_PlaceBody_MultiplayerPatch.has_spawn_location
 #if FULLGAME
-|| (Util.GameIsFull() && Util.IsTutorialWorld() && !SandboxMode.SpawnReady)
+|| (Util.GameIsFull() && (DeferredPlayerSaveRestore.InProgress ||
+(Layer10Spawn.Applies && !Layer10Spawn.Ready) || (Util.IsTutorialWorld() && !SandboxMode.SpawnReady)))
 #endif
 ) { // wait until the world and the authoritative tutorial room are placed
 
@@ -818,6 +819,7 @@ log.l($"[spawn] late-join no living companion player={joining.playerName}; using
 return false;
 }
 var spawn = companion.pos;
+if (Layer10Spawn.IsUnsafeCompanionSpawn(spawn, joining.body)) return false;
 joining.Server_TeleportCharacter(spawn);
 PlayerCheckpoint.ReclaimGear(joining.playerId);
 log.l($"[spawn] companion authoritative player={joining.playerName} companion={companion.bodyName} at={spawn:F3}");
@@ -2103,6 +2105,12 @@ if (Util.IsWorldGenerated()) {
 if (ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out var plr, out var pb)) {
 if (!plr.IsLocal) {
 plr.ServerPlayerState.is_loaded_in = true;
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(pb.body)) {
+if (!plr.ServerPlayerState.spawn_placement_completed || DeferredPlayerSaveRestore.InProgress) return;
+JoinSpawnProtection.OnClientFrame(plr.ServerPlayerState);
+}
+#endif
 if (pb.alive && !plr.Server_HasForcedServerOwnershipOfBody()) {
 {
 

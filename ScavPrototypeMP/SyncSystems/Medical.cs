@@ -2440,6 +2440,9 @@ public static bool last_impact_is_local_body = false;
 static bool Prefix(Limb __instance, float force, Vector2 dir) {
 last_impact_is_local_body = __instance.IsBodyLocal();
 var body = __instance.body;
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(body)) return false;
+#endif
 
 if (!last_impact_is_local_body) body.fallShakeCooldown = 1f;
 if (SharedMain.LocalWorldIsGenerating) return false;

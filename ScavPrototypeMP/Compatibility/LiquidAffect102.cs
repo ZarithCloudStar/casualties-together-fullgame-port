@@ -10,6 +10,9 @@ namespace Together;
 // GetComponent<Body>() only on the root. A limb owns its body via Limb.body.
 [HarmonyPatch(typeof(LiquidAffect), "FixedUpdate")]
 internal static class LiquidAffect102 {
+    static bool Prefix(Body ___body, Limb ___limb) =>
+        !JoinSpawnProtection.BlocksDamage(___limb != null ? ___limb.body : ___body);
+
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
         var codes = new List<CodeInstruction>(instructions);
         var body = AccessTools.Field(typeof(LiquidAffect), "body");

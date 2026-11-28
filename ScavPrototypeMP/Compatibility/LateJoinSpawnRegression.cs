@@ -15,9 +15,10 @@ namespace Together;
 internal static class LateJoinSpawnRegression {
     internal static bool Enabled => EndingTestPreferences.Enabled && Environment.GetCommandLineArgs().Contains("--mp-late-spawn-test");
     static bool Diagnosis => Environment.GetCommandLineArgs().Contains("--mp-diagnosis");
+    static bool Layer10 => Environment.GetCommandLineArgs().Contains("--mp-layer10-spawn-test");
     static string Phase => Environment.GetCommandLineArgs().FirstOrDefault(x => x.StartsWith("--mp-late-phase="))?.Split('=')[1] ?? "initial";
     static string Folder => SavesystemPatch.mpsavefolder;
-    static bool starting, running;
+    static bool starting, running, returningProtected;
     static Vector2 initialSpawn, savedFriend;
     static void Signal(string name) => File.WriteAllText(Path.Combine(Folder, name), "ready");
     static void Check(bool ok, string message) {
@@ -45,8 +46,19 @@ internal static class LateJoinSpawnRegression {
             b.rb.simulated = false;
             foreach (var limb in b.limbs) if (limb?.rb != null) limb.rb.simulated = false;
         }
-        if (Net.IsClient && CharacterLobby.ShouldShowPanel) CharacterLobby.ConfirmPanel();
-        if (Net.IsServer && !starting && PreRunScript.instance != null && !CharacterReadyGate.Blocked && ScavPlayer.ClientIdToPlayerDict.Count >= 2) {
+        if (CharacterLobby.ShouldShowPanel) CharacterLobby.ConfirmPanel();
+        if (Net.IsClient && !Util.IsInWorld() && CharacterLobby.LocalPlayerChosen && !CharacterLobby.LocalPlayerReady)
+            CharacterLobby.ToggleReady();
+        if (Net.IsServer && !Diagnosis && !returningProtected && File.Exists(Path.Combine(Folder, "join-saved"))) {
+            var returning = ScavPlayer.ClientIdToPlayerDict.Values.FirstOrDefault(p => !p.IsLocal && p.playerName == "FRIEND");
+            if (returning?.body != null && !returning.ServerPlayerState.spawn_placement_completed) {
+                Check(JoinSpawnProtection.BlocksDamage(returning.body), "returning body is protected before placement");
+                ProbeDamage(returning.body, protectedBody: true);
+                returningProtected = true;
+            }
+        }
+        if (Net.IsServer && !starting && PreRunScript.instance != null && !CharacterReadyGate.Blocked &&
+            CharacterLobby.HostChosen && CharacterLobby.MissingReadyCount == 0 && ScavPlayer.ClientIdToPlayerDict.Count >= 2) {
             starting = true;
             Multiplayer.rules.SpawnOnPlayer = true;
             Multiplayer.rules.LateJoinSpectate = false;
@@ -54,7 +66,9 @@ internal static class LateJoinSpawnRegression {
             PreRunScript.instance.StartRun();
         }
         if (running || !Util.IsWorldGenerated() || ScavPlayer.LocalPlayer?.body == null) return;
-        running = true; Util.StartCoroutine(Safe(Net.IsServer ? Server() : Client()));
+        running = true;
+        if (Layer10) Util.StartCoroutine(Safe(Net.IsServer ? Layer10Server() : Layer10Client()));
+        else Util.StartCoroutine(Safe(Net.IsServer ? Server() : Client()));
     }
     static IEnumerator Safe(IEnumerator routine) {
         while (true) {
@@ -72,6 +86,100 @@ internal static class LateJoinSpawnRegression {
         world.UpdateWorld();
     }
     static ScavPlayer Guest() => ScavPlayer.ClientIdToPlayerDict.Values.Single(p => !p.IsLocal);
+
+    static void CheckPodClearance(Body body, string player) {
+        var pods = UnityEngine.Object.FindObjectsOfType<BuildingEntity>().Where(build => build.id == Layer10Spawn.PodId).ToArray();
+        Check(pods.Length == 1, $"layer10 {player} sees one synced broken pod (count={pods.Length})");
+        var pod = pods[0].GetComponent<PolygonCollider2D>();
+        Physics2D.SyncTransforms();
+        float feet = body.transform.position.y - body.origColSize.y * 0.5f - body.col.edgeRadius;
+        float nativeFeet = pod.transform.position.y + 6f - body.origColSize.y * 0.5f - body.col.edgeRadius;
+        Check(nativeFeet < pod.bounds.max.y, "vanilla six-unit lift would still overlap the pod's vertical bounds");
+        Check(Mathf.Abs(body.transform.position.x - pod.transform.position.x) < 0.5f &&
+            feet >= pod.bounds.max.y - 0.05f && feet <= pod.bounds.max.y + 2f,
+            $"layer10 {player} cleared the real broken pod collider feet={feet:F3} top={pod.bounds.max.y:F3}");
+    }
+
+    static IEnumerator Layer10Server() {
+        yield return Wait("initial.layer0");
+        Multiplayer.rules.SpawnOnPlayer = false;
+        var world = WorldGeneration.world;
+        world.biomeDepth = 9;
+        EndingFlow.State = new EndingSaveData { phase = EndingPhase.Cargo, cargoTaken = true, hasCargo = true, cargoOwner = Guest().GetPersistentId() };
+        yield return world.RegenerateWorld();
+        yield return Wait("initial.observed");
+        Check(world.biomeDepth == 10 && EndingFlow.State.phase == EndingPhase.Cargo, "real layer10 generation retains cargo phase");
+        CheckPodClearance(ScavPlayer.LocalPlayer.body, "host");
+        CheckPodClearance(Guest().body, "server's connected guest");
+        Signal("initial.leave");
+        yield return Disconnected();
+        Signal("join-new");
+        yield return Wait("new.observed");
+        CheckPodClearance(Guest().body, "server's late-joining guest");
+        Signal("new.leave");
+        yield return Disconnected();
+        Signal("host.done");
+    }
+
+    static IEnumerator Layer10Client() {
+        if (Phase == "initial") Signal("initial.layer0");
+        yield return new WaitUntil(() => WorldGeneration.world.biomeDepth == 10 && !SharedMain.LocalWorldIsGenerating && Util.IsWorldGenerated());
+        yield return new WaitForSecondsRealtime(1f);
+        CheckPodClearance(ScavPlayer.LocalPlayer.body, Phase + " client");
+        Signal(Phase + ".observed");
+        yield return Wait(Phase + ".leave");
+        Signal(Phase + ".done");
+        Multiplayer.ShutdownNetwork();
+    }
+
+    static void ProbeDamage(Body body, bool protectedBody) {
+        var head = body.GetHead();
+        float radiation = body.radiationSickness;
+        float brain = body.brainHealth;
+        var line = RadiationLine.line;
+        var linePosition = line.transform.position;
+        float timeGone = line.timeGone, mpTime = RadiationLine_Update_MultiplayerPatch.timeGone;
+        bool active = line.active, frying = RadiationLine_Update_MultiplayerPatch.someone_is_getting_fried;
+        try {
+            line.active = true;
+            line.timeGone = 1f;
+            line.transform.position = body.transform.position + Vector3.down * 45f;
+            RadiationLine_Update_MultiplayerPatch.Postfix(line);
+            Check(protectedBody ? body.radiationSickness == radiation && body.brainHealth == brain : body.radiationSickness > radiation,
+                protectedBody ? "radiation line leaves provisional body unchanged" : "radiation line damages the placed body after release");
+        } finally {
+            line.active = active;
+            line.timeGone = timeGone;
+            line.transform.position = linePosition;
+            RadiationLine_Update_MultiplayerPatch.timeGone = mpTime;
+            RadiationLine_Update_MultiplayerPatch.someone_is_getting_fried = frying;
+        }
+
+        float brainBeforeImpact = body.brainHealth, muscle = head.muscleHealth;
+        float blood = body.bloodVolume, bleed = head.bleedAmount, skin = head.skinHealth, oxygen = body.bloodOxygen;
+        try {
+            head.skinHealth = 50f;
+            head.bleedAmount = 30f;
+            body.bloodOxygen = 10f;
+            AccessTools.Method(typeof(Limb), "Update").Invoke(head, null);
+            Check(protectedBody ? body.bloodVolume == blood : body.bloodVolume < blood,
+                protectedBody ? "native bleeding is paused before placement" : "native bleeding resumes after release");
+            if (protectedBody) {
+                AccessTools.Method(typeof(Body), "Update").Invoke(body, null);
+                Check(body.bloodOxygen == 10f && body.brainHealth == brainBeforeImpact && body.bloodVolume == blood,
+                    "native low-oxygen and circulation tick leaves protected vitals unchanged");
+            }
+            Limb_ImpactDamage_MultiplayerPatch.Force(head, body.jumpSpeed * 4f, Vector2.up);
+            Check(protectedBody ? head.muscleHealth == muscle && body.brainHealth == brainBeforeImpact : head.muscleHealth < muscle,
+                protectedBody ? "direct impact leaves provisional body unchanged" : "direct impact damages the placed body after release");
+        } finally {
+            if (protectedBody) {
+                head.skinHealth = skin;
+                head.bleedAmount = bleed;
+                body.bloodOxygen = oxygen;
+            }
+        }
+    }
     static void Sample(string side, string phase, ScavPlayer guest, ScavPlayer host) {
         log.l($"[late-spawn-test] SAMPLE {side} phase={phase} player={guest.playerName} lateJoin={guest.LateJoin} spawnOn={Multiplayer.rules.SpawnOnPlayer} guest={guest.pos:F3} host={host.pos:F3} shared={Body_PlaceBody_MultiplayerPatch.SpawnLocation:F3} distance={Vector2.Distance(guest.pos, host.pos):F3}");
     }
@@ -121,6 +229,9 @@ internal static class LateJoinSpawnRegression {
         var returning = Guest(); Sample("server", "saved", returning, host);
         Check(returning.playerName == "FRIEND" && Vector2.Distance(returning.pos, savedFriend) <= 2 && Vector2.Distance(returning.pos, host.pos) > 40,
             $"saved position takes priority on server expected={savedFriend:F3} actual={returning.pos:F3}");
+        Check(returningProtected, "tested protection on the returning identity before authoritative spawn");
+        Check(!JoinSpawnProtection.BlocksDamage(returning.body), "protection released after placement and post-loading settle");
+        ProbeDamage(returning.body, protectedBody: false);
         Signal("saved.leave");
         yield return Disconnected();
         var state = new Server_PlayerState(host) { late_join_spawn_pending = true };

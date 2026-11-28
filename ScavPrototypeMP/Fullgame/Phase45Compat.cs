@@ -325,7 +325,8 @@ static class BloodSuckerScript_OnTriggerEnter2D_HostSim_MultiplayerPatch {
     [CTPostInit]
     static void Init() {
         ServerMain.ServerCustomCommandsDict["bloodsucker_touch"] = (plr, cmd, args) => {
-            if (!Net.IsServer || plr == null || plr.body == null || args == null || args.Length < 2) {
+            if (!Net.IsServer || plr == null || plr.body == null || JoinSpawnProtection.BlocksDamage(plr.body) ||
+                args == null || args.Length < 2) {
                 return;
             }
             if (!ushort.TryParse(args[1], out ushort syncId)) {
@@ -451,7 +452,7 @@ static class Heater_OnWillRenderObject_AllBodies_MultiplayerPatch {
         Vector2 pos = __instance.transform.position;
         foreach (NetBody nb in NetBody.GetBodiesInRadius(pos, reach)) {
             Body body = nb != null ? nb.body : null;
-            if (body == null) {
+            if (body == null || JoinSpawnProtection.BlocksDamage(body)) {
                 continue;
             }
             bool towards = (heating && body.temperature < desired) || (!heating && body.temperature > desired);

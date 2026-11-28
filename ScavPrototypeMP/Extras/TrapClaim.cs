@@ -71,6 +71,9 @@ if (!Net.IsRunning || hit == null)
 return false;
 if (!Util.TryGetBodyFromObject(hit, out var body) || body == null)
 return false;
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(body)) return true;
+#endif
 return !Util.IsBodyLocal(body);
 }
 
@@ -195,6 +198,9 @@ Relay(KindBear, si.syncId, 0f);
 }
 
 static void ApplyBear(BearTrap trap, Limb limb) {
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(limb?.body)) return;
+#endif
 if (trap == null || limb == null)
 return;
 Hurt(trap, limb.body);
@@ -311,6 +317,9 @@ Relay(KindSpike, si.syncId, 0f);
 }
 
 static void ApplySpikeLimb(SpikeStabberScript spike, Limb limb) {
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(limb?.body)) return;
+#endif
 Hurt(spike, limb.body);
 float armor = limb.GetArmorReduction();
 float mult = spike.damageMult;
@@ -378,6 +387,9 @@ Relay(KindCoil, si.syncId, 30f);
 }
 
 static void ApplyCoil(CoilScript coil, Limb limb) {
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(limb?.body)) return;
+#endif
 if (coil == null || limb == null || limb.body == null)
 return;
 Hurt(coil, limb.body);
@@ -606,6 +618,9 @@ return true;
 }
 
 static ushort ApplyBoomLocal(Body body, ExplosionParams param) {
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(body)) return 0;
+#endif
 ushort mask = 0;
 if (body == null || body.limbs == null)
 return 0;
@@ -637,6 +652,9 @@ return mask;
 }
 
 static void ApplyBoomLimb(Limb limb, ExplosionParams param, bool local) {
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(limb?.body)) return;
+#endif
 float armor = limb.GetArmorReduction();
 if (Random.Range(0f, 1f) < param.skinDamageChance)
 limb.skinHealth -= param.skinDamage.RandomFromRange() / armor;
@@ -921,7 +939,7 @@ return;
 bool any = false;
 foreach (var nb in NetBody.GetBodiesInRadius(puffPos, coolRadius)) {
 Body coolBody = nb != null ? nb.body : null;
-if (coolBody == null) {
+if (coolBody == null || JoinSpawnProtection.BlocksDamage(coolBody)) {
 continue;
 }
 any = true;
@@ -1069,6 +1087,9 @@ Publish(nb);
 }
 
 static void ApplyManifestLunge(CrystalEnemy enemy, Body body) {
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(body)) return;
+#endif
 if (enemy == null || body == null || body.limbs == null || body.limbs.Length == 0) {
 return;
 }
@@ -1278,6 +1299,9 @@ Plugin.log.LogInfo($"[cryo-shot] drone={drone.GetInstanceID()} hostTarget={targe
 }
 
 static void ApplyCryoLimbHit(Body body, Vector2 hitPoint, float limbDmg) {
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(body)) return;
+#endif
 if (body == null) {
 return;
 }
@@ -1362,6 +1386,9 @@ reader.Get(out ushort mask);
 reader.Get(out float _);
 if (!ScavPlayer.TryGetPlayerAndNetBodyFromClientId(clientId, out _, out var nb) || nb == null || nb.body == null)
 return;
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(nb.body)) return;
+#endif
 if (kind == KindJump) {
 AcceptJump(id, nb);
 return;
@@ -1454,6 +1481,9 @@ FinishGlass(shard, id, si);
 }
 
 static void ApplyGlassLimb(Limb limb) {
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(limb?.body)) return;
+#endif
 if (limb == null) {
 return;
 }
