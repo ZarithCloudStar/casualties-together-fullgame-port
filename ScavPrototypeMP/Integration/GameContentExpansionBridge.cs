@@ -17,7 +17,7 @@ namespace Together.Integration;
 // UI hooks and primitive player/team access.
 public static class GameContentExpansionBridge {
     public const string ModGuid = "com.cloudawolf.gamecontentexpansion";
-    public const int ApiVersion = 6;
+    public const int ApiVersion = 7;
 
     public const int ShardCatNeedle = 0;
     public const int ShardCatGlass = 1;
@@ -137,6 +137,13 @@ public static class GameContentExpansionBridge {
             Multiplayer.ApplyGameRules();
         }
     }
+
+    // Mixed-session detection for the optional GCE plugin. Clients learn the
+    // host manifest from JoinModNotice; the server keeps each client's manifest.
+    // Unknown peers count as having GCE, so content is not disabled during the
+    // short handshake window.
+    public static bool HostHasGce => PeerMods.HostHas(ModGuid);
+    public static bool AllClientsHaveGce => PeerMods.AllClientsHave(ModGuid);
 
     public static bool TeamSpawnPositions {
         get => Multiplayer.rules.TeamSpawnPositions;
