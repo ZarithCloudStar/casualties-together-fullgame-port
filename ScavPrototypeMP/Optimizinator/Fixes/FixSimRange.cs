@@ -19,6 +19,19 @@ internal static long Grids;
 // vanilla draws about two chunks out and forces the next ring off. four covers that window around a client who is not the host.
 internal const int WindowRadius = 4;
 
+// Loading an existing checkpoint still regenerates the host world. Keep the
+// old, narrow window until the checkpoint is applied; the wider window is for
+// gameplay after spawn, and stamping it during generation multiplies the
+// chunk work on the main thread.
+internal static int Radius(WorldGeneration world) {
+bool checkpointLoading = false;
+#if FULLGAME
+checkpointLoading = WorldSnapshotTransfer.SnapshotMode && !WorldSnapshotTransfer.Applied;
+#endif
+return world != null && !world.generatingWorld && !checkpointLoading
+? WindowRadius : 1;
+}
+
 static FieldInfo _table;
 static bool _gateMiss;
 
@@ -41,15 +54,16 @@ table[x, y] = false;
 if (world == null || !world.worldExists)
 return false;
 int players = 0;
+int radius = Radius(world);
 foreach (KeyValuePair<Body, ScavPlayer> pair in ScavPlayer.BodyToPlayerDict) {
 if (pair.Value == null)
 continue;
-Mark(table, world, pair.Value.pos);
+Mark(table, world, pair.Value.pos, radius);
 players++;
 }
 // menu or a tick with no bodies yet. stamp the camera so the local world still simulates.
 if (players == 0 && Camera.main != null)
-Mark(table, world, Camera.main.transform.position);
+Mark(table, world, Camera.main.transform.position, radius);
 // thrown stuff, a fired hook, and a lit stick of dynamite stamp the same 3x3 a player would.
 SimKeep.Stamp(table, world);
 Grids++;
@@ -108,14 +122,15 @@ return _table != null ? _table.GetValue(null) as bool[,] : null;
 }
 
 // chunk under pos, plus one chunk each way. out of range indexes are skipped.
-internal static void Mark(bool[,] table, WorldGeneration world, Vector2 pos) {
+internal static void Mark(bool[,] table, WorldGeneration world, Vector2 pos, int radius = -1) {
+if (radius < 0) radius = Radius(world);
 Vector2Int chunk = world.BlockToChunkPos(world.WorldToBlockPos(pos));
 int maxX = table.GetLength(0) - 1;
 int maxY = table.GetLength(1) - 1;
-for (int y = chunk.y - WindowRadius; y <= chunk.y + WindowRadius; y++) {
+for (int y = chunk.y - radius; y <= chunk.y + radius; y++) {
 if ((uint)y > (uint)maxY)
 continue;
-for (int x = chunk.x - WindowRadius; x <= chunk.x + WindowRadius; x++) {
+for (int x = chunk.x - radius; x <= chunk.x + radius; x++) {
 if ((uint)x > (uint)maxX)
 continue;
 table[x, y] = true;
@@ -211,6 +226,10 @@ static HashSet<long> Prev = new HashSet<long>();
 static void Postfix(WorldGeneration __instance) {
 if (!Net.IsRunning || !Net.IsServer || __instance == null || __instance.generatingWorld)
 return;
+#if FULLGAME
+if (WorldSnapshotTransfer.SnapshotMode && !WorldSnapshotTransfer.Applied)
+return;
+#endif
 TilemapRenderer[,] chunks = __instance.renderChunks;
 if (chunks == null)
 return;
