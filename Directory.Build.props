@@ -8,7 +8,7 @@
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Wire/protocol identity; intentionally separate from the package version. -->
 		<!-- 5.5.5 base + in-tree shard optimization wire layout. -->
-		<NetworkVersion>5.5.5-cu-port-bugfix1</NetworkVersion>
+		<NetworkVersion>5.5.5-cu-port-fix1</NetworkVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
 		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.5-cu-port-bugfix1</UpdateReleaseVersion>
 
