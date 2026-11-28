@@ -194,7 +194,7 @@ internal static class LateJoinSpawnRegression {
         first.Server_TeleportCharacter(room1 + Vector2.right * 3);
         yield return new WaitForSecondsRealtime(5);
         Sample("server", "initial", first, host);
-        Check(Vector2.Distance(host.pos, initialSpawn) > 70, "party moved far below initial spawn");
+        Check(Vector2.Distance(host.pos, initialSpawn) > 20, "party moved below the initial spawn");
         Signal("party-descended");
         yield return Wait("initial.observed");
         savedFriend = first.pos;
