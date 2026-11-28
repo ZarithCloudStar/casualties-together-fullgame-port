@@ -257,6 +257,7 @@ internal static class WorldObjectSnapshot {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var ready = new Dictionary<int, GameObject>();
         long applyMs = 0;
+        int applied = 0;
         foreach (var entry in batch.spawned) {
             var go = entry.go;
             try {
@@ -281,6 +282,9 @@ internal static class WorldObjectSnapshot {
             } catch (Exception ex) {
                 SkipObject(batch, entry.data, "finish", ex.Message, ex, go);
             }
+            // This pass can touch thousands of objects and Start callbacks. Let
+            // the loading screen breathe instead of holding one frame for 20s.
+            if ((++applied & 63) == 0) yield return null;
         }
         applyMs = stopwatch.ElapsedMilliseconds;
         int registered = 0, registrationFailures = 0;
@@ -294,6 +298,7 @@ internal static class WorldObjectSnapshot {
                 sync.WriteObjectIntoPacket();
                 registered++;
             } catch (Exception ex) { registrationFailures++; SkipObject(batch, entry.data, "register", ex.Message, ex); }
+            if ((++applied & 63) == 0) yield return null;
         }
         BackgroundSnapshot.Finish(batch.backgrounds);
         long totalMs = stopwatch.ElapsedMilliseconds;
@@ -472,6 +477,8 @@ internal static class WorldObjectSnapshot {
         return map;
     }
 
+    static bool Cacheable(object value) => value == null || value is string || value.GetType().IsValueType;
+
     internal static void CaptureFields(Transform transform, string path, List<WorldObjectComponent> components) {
         foreach (var component in transform.GetComponents<MonoBehaviour>()) {
             if (component == null) continue;
@@ -495,7 +502,7 @@ internal static class WorldObjectSnapshot {
     static void ApplyState(GameObject go, WorldObjectRecord record, bool final) {
         go.transform.SetPositionAndRotation(Position(record), Rotation(record));
         go.transform.localScale = new Vector3(record.scale[0], record.scale[1], record.scale[2]);
-        ApplyFields(go, record.components);
+        ApplyFields(go, record.components, final);
         if (final && go.TryGetComponent<DrillPod>(out var drill) && drill.working) {
             if (go.TryGetComponent<UsableObject>(out var use)) Object.DestroyImmediate(use);
             go.GetComponent<BuildingEntity>().description = Locale.GetBuilding("drillpoddscfixed");
@@ -519,7 +526,7 @@ internal static class WorldObjectSnapshot {
         }
         ApplyPresentation(go, record, final);
     }
-    internal static void ApplyFields(GameObject go, List<WorldObjectComponent> components) {
+    internal static void ApplyFields(GameObject go, List<WorldObjectComponent> components, bool final) {
         if (components == null) return;
         foreach (var state in components) {
             if (state.type == typeof(Heater).FullName && go.GetComponent<CrystalBehaviour>() != null) {
@@ -535,8 +542,20 @@ internal static class WorldObjectSnapshot {
             var allowed = FieldMap(component.GetType());
             foreach (var field in state.fields) {
                 if (!allowed.TryGetValue(field.Key, out var info)) throw new InvalidDataException("Unsupported snapshot field: " + field.Key);
-                object value = component is CustomItemBehaviour && field.Key == "data" && field.Value.Type != JTokenType.Null
-                    ? field.Value.ToObject<float[]>().Cast<object>().ToArray() : field.Value.ToObject(info.FieldType);
+                object value;
+                if (final && state.decodedFields != null && state.decodedFields.TryGetValue(field.Key, out var cached)) {
+                    value = cached;
+                } else {
+                    value = component is CustomItemBehaviour && field.Key == "data" && field.Value.Type != JTokenType.Null
+                        ? field.Value.ToObject<float[]>().Cast<object>().ToArray() : field.Value.ToObject(info.FieldType);
+                    // The same JSON value is applied twice (before and after Start).
+                    // Cache only immutable values; arrays/classes may be mutated by
+                    // Start and must be decoded again for the final pass.
+                    if (!final && Cacheable(value)) {
+                        state.decodedFields ??= new Dictionary<string, object>();
+                        state.decodedFields[field.Key] = value;
+                    }
+                }
                 info.SetValue(component, value);
             }
             if (component is WaterContainerItem water)
