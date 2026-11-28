@@ -282,7 +282,7 @@ internal static class BackgroundSnapshot {
         if (record.backgroundified) building.Backgroundify();
         go.GetComponent<Tilemap>().color = new Color(record.color[0], record.color[1], record.color[2], record.color[3]);
         if (go.TryGetComponent<TilemapRenderer>(out var renderer)) renderer.enabled = record.visible;
-        WorldObjectSnapshot.ApplyFields(go, record.components);
+        WorldObjectSnapshot.ApplyFields(go, record.components, final);
         if (final && record.hasPump == false) foreach (var pump in go.GetComponentsInChildren<LifepodPump>(true)) Object.DestroyImmediate(pump.gameObject);
         if (final && record.components != null && go.GetComponentInChildren<LifepodController>(true) is var pod && pod != null) {
             pod.heatState--; pod.ToggleHeatState();

@@ -97,6 +97,8 @@ internal sealed class WorldObjectComponent {
     // Child-index path inside the resource prefab (empty means the root).
     public string path, type;
     public JObject fields;
+    // First-pass decoded immutable values; never part of the on-disk snapshot.
+    [JsonIgnore] internal Dictionary<string, object> decodedFields;
 }
 
 internal static class WorldObjectSnapshotData {
