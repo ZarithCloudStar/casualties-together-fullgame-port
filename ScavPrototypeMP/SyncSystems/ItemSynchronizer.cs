@@ -2011,18 +2011,36 @@ internal class ItemSync : CasualtiesTogetherSingleton {
     }
 
 
-    public static void Body_ForceWearWearable(Body body, Item item) {
+    public static bool Body_ForceWearWearable(Body body, Item item) {
+
+        if (body == null || item == null || item.Stats == null || !item.Stats.wearable) {
+            return false;
+        }
+
+        // A malformed sync record can resolve to a world turret/building. Those
+        // are never wearable, and attaching one to a limb turns it into a
+        // client-local turret that keeps tracking and beeping from FootF.
+        if (item.GetComponent<BuildingEntity>() != null ||
+            item.GetComponentInChildren<TurretScript>(true) != null ||
+            item.GetComponentInChildren<CeilingTurret>(true) != null) {
+            log.warn($"[wear] reject non-wearable building id={item.id} go={item.name}");
+            return false;
+        }
 
         Limb limb = body.LimbByName(item.Stats.desiredWearLimb);
+        if (limb == null) {
+            log.warn($"[wear] reject missing limb={item.Stats.desiredWearLimb} id={item.id}");
+            return false;
+        }
 
         if (limb.dismembered) {
-            return;
+            return false;
         }
 
         Item wearableBySlotID = body.GetWearableBySlotID(item.Stats.wearSlotId);
         if (wearableBySlotID != null ) {
             if (wearableBySlotID == item) { //its already equipped
-                return;
+                return true;
             }
             body.DropWearable(wearableBySlotID);
         }
@@ -2046,6 +2064,7 @@ internal class ItemSync : CasualtiesTogetherSingleton {
             component.CreateSprites(body);
         }
 
+        return item.transform.parent == limb.transform;
     }
 
 	public static void Container_ForceLoadItem(Item item, Container container) {
@@ -2174,7 +2193,8 @@ public static void RefreshWearableSpeciesSprites(Body body) {
 public static void BetterUseItem( Body body, Item item) {
         ItemSync.SetBodyOverride(item, body);
         if (item.Stats.wearable) {
-            ItemSync.Body_ForceWearWearable(body, item);
+            if (!ItemSync.Body_ForceWearWearable(body, item))
+                return;
             if (item.transform.parent != null) {
                 if (body.IsBodyLocal())
                     PlayerCamera.main.UpdateWearables();
@@ -3313,7 +3333,10 @@ public static void BetterUseItem( Body body, Item item) {
                                 SafeUnloadItem(item);
                                 item.transform.position = body.transform.position;
 
-                                ItemSync.Body_ForceWearWearable(body,item);
+                                if (!ItemSync.Body_ForceWearWearable(body, item)) {
+                                    log.warn($"[wear] reject server force-wear sync={syncid} id={item.id}");
+                                    return;
+                                }
 
                             }
                         }

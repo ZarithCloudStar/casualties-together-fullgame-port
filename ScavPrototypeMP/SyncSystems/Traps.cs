@@ -306,6 +306,9 @@ public class TrackerTurret : BaseComponentTracker<TurretScript> {
 
     bool last_didBeep = false;
     bool last_didShoot = false;
+    float straySince;
+    bool strayLogged;
+    static float lastMissLog;
 
     public float timeSinceFired {
         [MethodImpl(MethodImplOptions.AggressiveInlining)] get { return og.timeSinceFired; }
@@ -377,6 +380,24 @@ public class TrackerTurret : BaseComponentTracker<TurretScript> {
             }
         }
 
+        if (Net.IsClient && si == null && GetComponentInParent<Body>() != null) {
+            if (!strayLogged) {
+                strayLogged = true;
+                straySince = Time.unscaledTime;
+                Plugin.log.LogWarning($"[turret] client-only turret at {transform.position} parent={transform.parent?.name}; disabling");
+            }
+            og.enabled = false;
+            var building = GetComponent<BuildingEntity>();
+            if (building != null) building.cantHit = true;
+            if (Time.unscaledTime - straySince > 2f)
+                Destroy(gameObject);
+            return;
+        }
+        if (strayLogged && si != null) {
+            strayLogged = false;
+            og.enabled = true;
+        }
+
 
 
 
@@ -384,6 +405,7 @@ public class TrackerTurret : BaseComponentTracker<TurretScript> {
             if (Net.IsClient) {
 
                 var writer = Net.CreateWriter(NetmsgId.SERVER_TurretDoBeep);
+                writer.Put(si.syncId);
                 writer.Put((Vector2)transform.position);
                 writer.Put(og.spr.isVisible);
                 Net.Client_Send(DeliveryMethod.ReliableUnordered, writer);
@@ -432,6 +454,7 @@ public class TrackerTurret : BaseComponentTracker<TurretScript> {
 #if DEBUG
         //log.l($"TurretDoBeep actually works lol {clientId} ");
 #endif
+        reader.Get(out knetid turretId);
         reader.Get(out Vector2 turretpos);
         reader.Get(out bool isVisible);
 
@@ -452,21 +475,39 @@ public class TrackerTurret : BaseComponentTracker<TurretScript> {
                     return;
                 }
 
-
-                var touching = Physics2D.OverlapCircleAll(turretpos, 1f);
-
-                foreach (var item2 in touching) {
-
-                    if (item2.TryGetComponent<TurretScript>(out var i) && (Vector2)i.transform.position == turretpos) {
-                        var tst = i.GetOrAddComponent<TrackerTurret>();
-                        tst.NudgeBeep(isVisible);
-
-                        if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(turretpos, $"S: TurretDoBeep {plr} ");
-                        return;
-                    } 
+                // Prefer the registered identity. This avoids the old exact
+                // position comparison, which almost never matches quantized
+                // network positions and cannot distinguish a client ghost.
+                if (NetObjectRegistry.TryGetSyncInfo(turretId, out var turretSi) &&
+                    turretSi != null && turretSi.go != null &&
+                    turretSi.go.TryGetComponent(out TurretScript owned)) {
+                    owned.GetOrAddComponent<TrackerTurret>().NudgeBeep(isVisible);
+                    return;
                 }
 
-                log.l($"TurretDoBeep  turret was not found !!!!!!!!!!!!!!!!!!!!!!!! ");
+                var touching = Physics2D.OverlapCircleAll(turretpos, 1f);
+                TurretScript best = null;
+                float bestSqr = 0.04f; // 0.2 world units
+                foreach (var item2 in touching) {
+                    if (!item2.TryGetComponent<TurretScript>(out var i))
+                        continue;
+                    float sqr = ((Vector2)i.transform.position - turretpos).sqrMagnitude;
+                    if (sqr <= bestSqr) {
+                        best = i;
+                        bestSqr = sqr;
+                    }
+                }
+
+                if (best != null) {
+                    best.GetOrAddComponent<TrackerTurret>().NudgeBeep(isVisible);
+                    if (DebugHelp._DEV_VISUALISE_NET_EVENTS) DebugHelp.OnNetEvent(turretpos, $"S: TurretDoBeep {plr} ");
+                    return;
+                }
+
+                if (Time.unscaledTime - lastMissLog > 5f) {
+                    lastMissLog = Time.unscaledTime;
+                    log.l($"TurretDoBeep  turret was not found client={clientId} id={turretId} pos={turretpos} ");
+                }
 
             }
         }

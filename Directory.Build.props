@@ -1,4 +1,4 @@
-﻿<Project>
+<Project>
 	<Import Project="CasualtiesTogether.Local.props" Condition="Exists('CasualtiesTogether.Local.props')" />
   
 	<PropertyGroup>
@@ -7,8 +7,8 @@
 		<ModVersion>5.5.5-cu-port</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Wire/protocol identity; intentionally separate from the package version. -->
-		<!-- 5.5.5 base + shard-optimization wire change, shipped as fix1. -->
-		<NetworkVersion>5.5.5-cu-port-fix1</NetworkVersion>
+		<!-- 5.5.5 base + in-tree shard optimization wire layout. -->
+		<NetworkVersion>5.5.5-cu-port</NetworkVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
 		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.5-cu-port</UpdateReleaseVersion>
 
