@@ -341,8 +341,11 @@ internal static class MP3MultiLibrary {
         }
         if (SyncEnabled) foreach (var menu in UnityEngine.Object.FindObjectsOfType<MP3MultiMenu>()) menu.RestoreHostNow();
     }
-    internal static void Reset() {
-        Sources.Clear(); LocalTracks.Clear(); Sessions.Clear(); Playback.Clear(); Revision++;
+    // A layer transition destroys the old world objects, but the custom-music
+    // metadata and clips are session-scoped. Keep them so the host does not
+    // synchronously reload every track at the start of every layer.
+    internal static void ResetWorld() {
+        Sources.Clear(); Sessions.Clear(); Playback.Clear(); Revision++;
         MP3PlayerServerAudioStreamer.client_host_list_ready = false;
         if (MP3PlayerServerAudioStreamer.temp_loader_mp3menu_instance != null) {
             UnityEngine.Object.Destroy(MP3PlayerServerAudioStreamer.temp_loader_mp3menu_instance);
@@ -350,24 +353,41 @@ internal static class MP3MultiLibrary {
         }
         MP3PlayerServerAudioStreamer.unprivated_MP3Menu_loadingMusic = false;
         foreach (var menu in UnityEngine.Object.FindObjectsOfType<MP3Menu>()) menu.StopAllCoroutines();
-        MP3Menu.clips = null;
-        MP3Menu.dropdownList = null;
         foreach (var s in UnityEngine.Object.FindObjectsOfType<MP3PlayerClientAudioStreamer>()) { s.Cancel(); UnityEngine.Object.Destroy(s); }
         foreach (var s in UnityEngine.Object.FindObjectsOfType<MP3PlayerAudioStreamPlayer_ClientOnly>()) { s.Silence(); UnityEngine.Object.Destroy(s); }
         foreach (var s in UnityEngine.Object.FindObjectsOfType<MP3PlayerServerAudioStreamer>()) { s.StopMusic(); UnityEngine.Object.Destroy(s); }
+    }
+    internal static void Reset() {
+        ResetWorld();
+        LocalTracks.Clear();
+        MP3Menu.clips = null;
+        MP3Menu.dropdownList = null;
     }
 }
 
 // The persistent singleton starts scanning only after the local world/player is ready.
 internal sealed class MP3MultiLibraryLifecycle : CasualtiesTogetherSingleton {
-    bool active, reported, worldActive;
+    bool active, reported, worldActive, sessionGone;
     int epoch;
     float nextRoster;
     string roster;
     void Update() {
+        if (!Net.IsRunning) {
+            if (!sessionGone) {
+                sessionGone = true;
+                epoch++; active = reported = worldActive = false;
+                roster = null;
+                MP3MultiLibrary.Reset();
+            }
+            return;
+        }
+        sessionGone = false;
         bool ready = MP3MultiLibrary.SyncEnabled && Util.IsWorldGenerated() && !SharedMain.LocalWorldIsGenerating && ScavPlayer.LocalPlayer != null;
         if (!ready) {
-            if (worldActive) { epoch++; active = reported = worldActive = false; roster = null; MP3MultiLibrary.Reset(); }
+            if (worldActive) {
+                epoch++; active = reported = worldActive = false; roster = null;
+                MP3MultiLibrary.ResetWorld();
+            }
             return;
         }
         worldActive = true;
@@ -377,7 +397,16 @@ internal sealed class MP3MultiLibraryLifecycle : CasualtiesTogetherSingleton {
             return;
         }
         if (!active) {
-            active = true; StartCoroutine(Scan(epoch));
+            active = true;
+            if (MP3MultiLibrary.LocalTracks.Count == 0) {
+                StartCoroutine(Scan(epoch));
+            } else {
+                // Metadata and clips survived the layer transition. Reuse them
+                // instead of hashing/reloading the custommusic folder again.
+                reported = true;
+                MP3MultiLibrary.Report();
+                if (Net.IsServer && MP3Menu.dropdownList == null) MP3PlayerServerAudioStreamer.Server_ForceLoadMusic();
+            }
             foreach (var menu in UnityEngine.Object.FindObjectsOfType<MP3Menu>()) {
                 if (menu.dropdown.enabled && menu.GetComponent<MP3MultiMenu>() == null) menu.gameObject.AddComponent<MP3MultiMenu>();
             }
@@ -407,6 +436,10 @@ internal sealed class MP3MultiLibraryLifecycle : CasualtiesTogetherSingleton {
         reported = true; MP3MultiLibrary.Report();
         if (Net.IsServer && MP3Menu.dropdownList == null) MP3PlayerServerAudioStreamer.Server_ForceLoadMusic();
     }
-    void KrokoshaSingletonEvent_OnSceneChange() { epoch++; active = reported = worldActive = false; roster = null; MP3MultiLibrary.Reset(); }
+    void KrokoshaSingletonEvent_OnSceneChange() {
+        epoch++; active = reported = worldActive = false; roster = null;
+        if (Net.IsRunning && MP3MultiLibrary.SyncEnabled) MP3MultiLibrary.ResetWorld();
+        else MP3MultiLibrary.Reset();
+    }
 }
 

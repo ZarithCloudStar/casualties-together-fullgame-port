@@ -154,10 +154,10 @@ internal static class SaveSlots {
     }
     internal static void ApplyPreparedSettings() {
         var settings = ReadRunSettings(ReadRoot(DirectoryPath));
-        var header = JObject.Parse(File.ReadAllText(Path.Combine(DirectoryPath, SavesystemPatch.mpsaveheaderfile)));
-        Multiplayer.rules = header["RULES"].ToObject<MultiplayerGameRules>();
+        // Do not restore RULES from mp_rules.json. Rules are a live lobby
+        // setting and the current UI values must survive a load.
         WorldMP.ApplyRunSettings(settings);
-        log.l($"SLOTS: applied saved run settings and multiplayer rules before starting slot={loading}");
+        log.l($"SLOTS: applied saved run settings; kept current multiplayer rules before starting slot={loading}");
     }
 
     internal static Dictionary<string, object> ReadRunSettings(JObject root) {
@@ -248,7 +248,7 @@ internal static class SaveSlots {
         var root = ReadRoot(folder);
         if (root.Value<int?>("biome") == null || root["body"] == null || root["items"] == null) throw new InvalidDataException("主机存档数据不完整。");
         var rules = JObject.Parse(File.ReadAllText(Path.Combine(folder, SavesystemPatch.mpsaveheaderfile)));
-        if (rules["RULES"] == null || rules["LEVEL"] == null) throw new InvalidDataException("多人规则数据不完整。");
+        if (rules["LEVEL"] == null) throw new InvalidDataException("多人存档头数据不完整。");
         // 旧版本从不要求这两个 id 相等（SavesystemPatch 旧加载路径只 warn 不拒绝），而玩家的历史存档
         // 经常由不同时间点的两次存档拼成。保持旧版本的兼容语义：不一致只告警，快照按它自己写入时的
         // id 校验，否则老进度永远迁不进槽位。

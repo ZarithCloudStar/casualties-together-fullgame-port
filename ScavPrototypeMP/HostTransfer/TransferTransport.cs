@@ -57,12 +57,8 @@ internal static class TransferTransport {
             if (includesSave) PlayerCheckpoint.ResetSaveCaches();
 #endif
             if (Net.CurrentServerInfo != null) Net.MyServerInfo = Net.CurrentServerInfo;
-            // Apply before opening the listener: reconnecting players must see the
-            // transferred rules, not the recipient's previous lobby defaults.
-            if (includesSave) {
-                var header = JObject.Parse(File.ReadAllText(Path.Combine(SavesystemPatch.mpsavefolder, "mp_rules.json")));
-                Multiplayer.rules = header["RULES"].ToObject<MultiplayerGameRules>();
-            }
+            // Keep the live lobby rules on host transfer as well. mp_rules.json
+            // no longer carries RULES, and old values must not override the UI.
             WorldMP.ApplyRunSettings(in runSettings);
         }
         Net.TransportCreated(host ? Net.NetType.Host : Net.NetType.Client, false);
