@@ -35,6 +35,7 @@ public bool did_give_spawn_location_from_a_save = false;
 public bool late_join_spawn_pending = false;
 #if FULLGAME
 internal bool spawn_placement_completed;
+internal JoinSpawnProtection joinSpawnProtection;
 internal Vector2? last_client_position;
 #endif
 public bool finished_worldgen = false;
@@ -813,6 +814,9 @@ if (Util.IsInWorld()) {
 LateJoin = true;
 if (Net.IsServer && ServerPlayerState != null)
 ServerPlayerState.late_join_spawn_pending = true;
+#if FULLGAME
+JoinSpawnProtection.Begin(this);
+#endif
 }
 
 if (IsLocal) {
@@ -1343,6 +1347,9 @@ void Test(ScavPlayer plr) {
 
 }
 public void OnDestroy() {
+#if FULLGAME
+JoinSpawnProtection.Cancel(this);
+#endif
 
 try {
 // Only the host decides whether a departing player's inventory is stored or dropped.

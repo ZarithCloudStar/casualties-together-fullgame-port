@@ -65,6 +65,9 @@ internal static class PlayerPlacementCheckpoint {
         // A pose already used in this generation should not supersede a later disconnect.
         if (applied.Remove(player)) saved.Remove(id);
     }
+    internal static bool HasAppliedPose(ScavPlayer player) =>
+        applied.TryGetValue(player, out var body) && ReferenceEquals(body, player.body);
+
     internal static bool TryApply(ScavPlayer p, bool force = false) {
         if (!Net.IsServer || p == null || p.body == null || !ReferenceEquals(session, Net.ServerEntityManager) ||
             !ReferenceEquals(world, WorldGeneration.world) || generation != WorldSnapshotTransfer.Token ||

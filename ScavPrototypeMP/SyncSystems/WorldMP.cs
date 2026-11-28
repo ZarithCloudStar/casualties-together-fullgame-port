@@ -522,6 +522,8 @@ public class WorldMP : CasualtiesTogetherSingleton {
             ServerMain.ClearDisconnectPositions();
             PlayerPlacementCheckpoint.BeginGeneration();
         }
+        JoinSpawnProtection.BeginGeneration();
+        Layer10Spawn.Reset();
 #endif
         world.loadingObject.SetActive(value: true);
         world.generatingWorld = true;
@@ -888,6 +890,7 @@ public class WorldMP : CasualtiesTogetherSingleton {
 
         yield return WorldGeneration_FinishWorldGeneration_MultiplayerPatch.FinishWorldGeneration(world);
 #if FULLGAME
+        Layer10Spawn.PlaceConnectedPlayers();
         if (WorldSnapshotTransfer.SnapshotMode) {
             // Vanilla finish clears liquid above each local spawn. Retain the
             // checkpoint on both peers; future deltas use the regular stream.

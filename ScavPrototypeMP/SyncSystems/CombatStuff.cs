@@ -409,6 +409,12 @@ public static class Body_Attack_MultiplayerPatch {
     // returns the damage dealt, kinda
     public static float DoPVPMeleeDamage(Body attacker, Limb target, AttackInfo atk, float armstrength, Item used_tool, out Vector2 knockback) {
 
+#if FULLGAME
+        if (JoinSpawnProtection.BlocksDamage(target.body)) {
+            knockback = Vector2.zero;
+            return 0f;
+        }
+#endif
         var attack_dir = KM.NormalTo(attacker.limbs[1].transform.position, attacker.targetLookPos);
 
         knockback = new Vector2(attack_dir.x, 0.4f);
@@ -2413,6 +2419,9 @@ return true; // the og code is not gona get triggered anyway
 } else {
 body = limb.body;
 }
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(body)) return true;
+#endif
 limb = body.GetClosestLimb(hit2D.point); // original code does it like that, i do the same because it brings very specific results
 
 #if DEBUG
@@ -2618,6 +2627,9 @@ return damage;
 
 //OG: TurretScript.Shoot V5t4  the part where it applies damage to body // TODO TS IS OUTDATED  FireInfo.playerDamageMultiplier WAS ADDED, BUT IS IT USED THO?
 public static float Stolen_ShootApplyDamageLimb(Limb limb, TrackerGunScript gst, bool use_pvp_damage_model, int shardCategory = GameContentExpansionBridge.ShardCatPvP) {
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(limb.body)) return 0f;
+#endif
 bool gce = GameContentExpansionBridge.ShardHit != null;
 if (!gce) limb.body.adrenaline = 100f;
 
@@ -3139,6 +3151,9 @@ return limb;
 
 
 public static void BetterDismember(Limb limb, bool do_checks_to_not_break_the_game = true) {
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(limb.body)) return;
+#endif
 if (limb.dismembered) {
 return;
 }

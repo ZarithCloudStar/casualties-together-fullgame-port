@@ -1116,6 +1116,9 @@ return nb;
 internal static NetBody CreateNewPlayerCharacter(ScavPlayer plr, SyncBody sb = null) {
 if (plr.body == null) {
 var had_sb = sb != null;
+#if FULLGAME
+JoinSpawnProtection.Begin(plr);
+#endif
 _Internal_RegisterLiteNetLib(null, plr, ref sb);
 
 if (sb.nb == null) {
@@ -1158,6 +1161,9 @@ string why = endLab && !hasSuitcase
 : "late-joined and LateJoinSpectate is on";
 if (log.verbose) log.l($"Killing {plr} cuz {why}.");
 
+#if FULLGAME
+JoinSpawnProtection.Cancel(plr);
+#endif
 plr.body.GetHead().Dismember();
 plr.body.GetLowerTorso().Dismember();
 plr.body.brainHealth = 0;
@@ -2271,6 +2277,9 @@ syncBody.WriteBodyData();
 
 if (body.IsBodyLocal()) return;
 
+#if FULLGAME
+if (IsPlayer && Layer10Spawn.Applies && !Layer10Spawn.Ready) return; // hold the WorldPlacePlayer barrier
+#endif
 var writer = Net.CreateWriter(NetmsgId.CLIENT_BodyTeleportPacket);
 writer.Put(IsPlayer ? plr.playerId : ushort.MaxValue);
 writer.Put(netId);
@@ -2784,6 +2793,9 @@ if (dune == null || victim == null || dune.body == null || victim.body == null) 
 return;
 }
 Body bitten = victim.body;
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(bitten)) return;
+#endif
 List<Limb> limbs = bitten.limbs.Skip(3).Where(x => x != null && !x.dismembered).ToList();
 if (limbs.Count == 0) {
 return;

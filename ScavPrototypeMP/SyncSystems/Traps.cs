@@ -29,6 +29,9 @@ static class RadioactiveObject_Update_MultiplayerPatch {
             // the entire function is remade for multiplayer heree !
             foreach (var bodynpc in NetBody.all_instances) {
                 var body = bodynpc.body;
+#if FULLGAME
+                if (JoinSpawnProtection.BlocksDamage(body)) continue;
+#endif
                 
 
                 //OG: RadioactiveObject.Update V5t4 
@@ -65,7 +68,11 @@ public static class XalorisScript_OnWillRenderObject_MultiplayerPatch {
             if (Time.time - lastTime > 0.5f) {
                 lastTime = Time.time;
                 foreach (var obj in ScavPlayer.GetPlayerBodiesInRadius(transform.position, 5.5f)) {
-                    if (obj != null && obj.body != null) obj.body.septicShock += 0.074f;
+                    if (obj != null && obj.body != null
+#if FULLGAME
+                        && !JoinSpawnProtection.BlocksDamage(obj.body)
+#endif
+                    ) obj.body.septicShock += 0.074f;
                 }
             }
         }
@@ -770,6 +777,9 @@ public class TrackerSoundCannon : BaseComponentTracker<SoundCannon> {
         foreach (var plr in ScavPlayer.AllLivingPlayers) {
 
             var body = plr.body;
+#if FULLGAME
+            if (JoinSpawnProtection.BlocksDamage(body)) continue;
+#endif
             var headpos = plr.netBody.GetHeadPos();
 
 
@@ -1026,6 +1036,9 @@ public class ScavTraps : CasualtiesTogetherSingleton {
 
     //OG: DamagingCrate.OnCollisionEnter2D V5t5 
     public static void DamagingCrate_OnCollisionEnter2D_TheDamagingPartStolen(DamagingCrate dmgcrate, Limb limb, float prevspeed) {
+#if FULLGAME
+        if (JoinSpawnProtection.BlocksDamage(limb.body)) return;
+#endif
         
         var islocal = Util.IsBodyLocal(limb.body);
 

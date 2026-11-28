@@ -373,6 +373,13 @@ public static bool ShouldKeepLayerXOffset() => !Util.GameIsFull() && Multiplayer
 #endif
                 has_spawn_location = true;
                 MapPoses.TryApply(body);
+#if FULLGAME
+                if (Layer10Spawn.Applies) {
+                    // The native finish still has to create the pod at this point.
+                    if (!Layer10Spawn.Ready) SpawnLocation = body.transform.position;
+                    return;
+                }
+#endif
                 foreach (var item in NetBody.all_instances) {
                     if (item.IsPlayer && !item.IsBodyLocal()) {
 #if FULLGAME

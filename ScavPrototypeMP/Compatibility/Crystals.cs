@@ -57,7 +57,7 @@ internal static class CrystalBurning_Burn_MultiplayerPatch {
         // An explicit touched body wins; Hit's camera singleton is replaced only
         // inside the scoped dispatch. Never fall back to this peer's camera.
         if (CrystalSync.TriggerBody != null) body = CrystalSync.TriggerBody;
-        return body != null && Net.IsServer;
+        return body != null && !JoinSpawnProtection.BlocksDamage(body);
     }
 }
 
@@ -104,7 +104,7 @@ internal static class CrystalElectric_Shock_MultiplayerPatch {
         // An explicit touched body wins; Hit's camera singleton is replaced only
         // inside the scoped dispatch. Never fall back to this peer's camera.
         if (CrystalSync.TriggerBody != null) body = CrystalSync.TriggerBody;
-        return body != null && Net.IsServer;
+        return body != null && !JoinSpawnProtection.BlocksDamage(body);
     }
 }
 

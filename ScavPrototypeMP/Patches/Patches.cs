@@ -86,6 +86,9 @@ line.timeGone = (timeGone);
 
 foreach (var bodynpc in NetBody.all_instances) {
 var body = bodynpc.body;
+#if FULLGAME
+if (JoinSpawnProtection.BlocksDamage(body)) continue;
+#endif
 if (body.alive && body.transform.position.y > line.transform.position.y) {
 real_frying = true;
 
@@ -622,14 +625,21 @@ NetBody.ApplyPiggybackCarryPose(__instance);
 
 [HarmonyPatch(typeof(Body), nameof(Body.Update))]
 public static class Body_Update_MultiplayerPatch {
-static void Prefix(Body __instance) {
-if (!Net.IsRunning) return;
+static bool Prefix(Body __instance, out bool __state) {
+__state = false;
+#if FULLGAME
+__state = JoinSpawnProtection.BlocksDamage(__instance);
+if (__state) return false;
+#endif
+if (!Net.IsRunning) return true;
 SpeechCharContext.scope++;
 __instance.GetCoUtilsInstance().SelectForMPOverride();
+return true;
 }
 
 static float lastgunangle = 0.0f;
-static void Postfix(Body __instance) {
+static void Postfix(Body __instance, bool __state) {
+if (__state) return;
 if (Net.IsRunning && SpeechCharContext.scope > 0) {
 SpeechCharContext.scope--;
 }
