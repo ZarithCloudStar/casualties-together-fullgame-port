@@ -415,6 +415,28 @@ static class TraderScript_OnWillRender_PinLog {
     }
 }
 
+// Vanilla moves traders only from OnWillRenderObject. A host camera that cannot
+// see the trader therefore never advances it, while the client keeps receiving
+// the old SyncInfo pose; the result is the client-side jitter. Move on the host
+// even when off-screen, and let the visible path keep owning the visible case.
+[HarmonyPatch(typeof(TraderScript), nameof(TraderScript.Update))]
+static class TraderScript_Update_HostMovePatch {
+    private static void Postfix(TraderScript __instance) {
+        if (!Net.IsServer || __instance == null)
+            return;
+
+        SpriteRenderer renderer = __instance.GetComponentInChildren<SpriteRenderer>(true);
+        if (renderer != null && renderer.isVisible)
+            return;
+
+        Vector2 desired = Traverse.Create(__instance).Field("desiredPos").GetValue<Vector2>();
+        __instance.transform.position = Vector2.Lerp(
+            __instance.transform.position,
+            desired,
+            Time.deltaTime * 6f);
+    }
+}
+
 // currentTrader is cleared every LateUpdate, then any nearby trader can write it.
 // these lines are which sync id landed, and which null the menu rebuild is about to hit.
 static class TraderPinLog {
