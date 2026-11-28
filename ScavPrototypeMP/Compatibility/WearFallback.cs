@@ -137,7 +137,10 @@ internal sealed class WearFallback : CasualtiesTogetherSingleton {
                 Reply(player, syncId, false, "too-far");
                 return;
             }
-            ItemSync.Body_ForceWearWearable(body, item);
+            if (!ItemSync.Body_ForceWearWearable(body, item)) {
+                Reply(player, syncId, false, "non-wearable");
+                return;
+            }
             bool worn = body.GetWearable(item.id) == item;
             if (worn) {
                 adopted++;
