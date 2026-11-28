@@ -83,14 +83,6 @@ public static class RuleCategories {
     public const string OtherId = "other";
     static readonly Category OtherCategory = new Category(OtherId, "Other");
 
-    // Rules owned by the optional Game Content Expansion plugin through its
-    // bridge. They stay in the struct (wire layout unchanged) but are not part
-    // of Together's automatic rule list; GCE draws the row itself.
-    public static readonly HashSet<string> HiddenRuleNames = new(StringComparer.Ordinal) {
-        nameof(MultiplayerGameRules.TeamSpawnPositions),
-        nameof(MultiplayerGameRules.GCEModules),
-    };
-
     // The defaults the struct's field initializers give; what a rule's reset button restores.
     static readonly MultiplayerGameRules Defaults = new MultiplayerGameRules();
 
@@ -116,7 +108,7 @@ public static class RuleCategories {
 
     // Every field appears in exactly one group: listed ones in their category, the rest under Other.
     public static List<(Category category, List<FieldInfo> fields)> Group(IEnumerable<FieldInfo> fields) {
-        var visible = fields.Where(f => !HiddenRuleNames.Contains(f.Name)).ToList();
+        var visible = fields.ToList();
         var byName = visible.ToDictionary(f => f.Name);
         var result = new List<(Category, List<FieldInfo>)>();
         var placed = new HashSet<string>();

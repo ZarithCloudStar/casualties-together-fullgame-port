@@ -28,7 +28,6 @@ internal static class JoinModNotice {
     internal static void Reset() {
         requested = false;
         notified.Clear();
-        PeerMods.Clear();
         Close();
     }
 
@@ -78,7 +77,6 @@ internal static class JoinModNotice {
         try {
             var ids = ReadDescriptor(reader, out var details, out bool truncated, out _);
             if (!reader.EndOfData) throw new ArgumentException("Unexpected diagnostic payload.");
-            PeerMods.SetClient(clientId, ids);
             notified[clientId] = player;
             var host = Multiplayer.GetModGUIDs();
             if (truncated || !new HashSet<string>(host, StringComparer.Ordinal).SetEquals(ids)) {
@@ -103,7 +101,6 @@ internal static class JoinModNotice {
             bool enforced = reader.GetBool();
             var host = ReadDescriptor(reader, out var hostDetails, out bool truncated, out var manifest);
             if (!reader.EndOfData) throw new ArgumentException("Unexpected diagnostic payload.");
-            PeerMods.SetHost(host);
             ModSyncUI.SetHostManifest(manifest);
 
             var client = Multiplayer.GetModGUIDs();

@@ -1748,13 +1748,8 @@ if (groups.Count == 0) {
         var category = group.category;
         var fields = group.fields;
         bool open = searching || RuleCategories.IsExpanded(category);
-        // GCE draws an extra native-looking row after Teams; include it in the
-        // category count while the row hook is registered (module 1 on).
-        bool hasGceTeamRow = category.ruleNames.Contains(nameof(MultiplayerGameRules.Teams))
-            && Together.Integration.GameContentExpansionBridge.DrawRuleRowAfter != null;
-        int ruleCount = fields.Count + (hasGceTeamRow ? 1 : 0);
-        int changed = fields.Count(f => !RuleCategories.IsDefault(f, f.GetValue(Multiplayer.rules)))
-            + (hasGceTeamRow && Together.Integration.GameContentExpansionBridge.TeamSpawnPositions ? 1 : 0);
+        int ruleCount = fields.Count;
+        int changed = fields.Count(f => !RuleCategories.IsDefault(f, f.GetValue(Multiplayer.rules)));
         string header = string.Format("{0} {1} ({2}{3})", open ? "[-]" : "[+]", category.Title, ruleCount,
             changed > 0 ? ", " + (Lang.Get("mmct_rules_changed", true) ?? "changed") + ": " + changed : "");
         if (GUILayout.Button(header) && !searching) {
@@ -1770,24 +1765,9 @@ if (groups.Count == 0) {
                 log.error($"_GUI___ConnectionSecondPanel_ContentRender_RenderRulesList: {fld}\n{e}");
             }
             GUILayout.EndHorizontal();
-            if (!searching) {
-                try {
-                    Together.Integration.GameContentExpansionBridge.DrawRuleRowAfter?.Invoke(
-                        fld.Name, _GUI____RenderRuleField_last_max_width, can_edit);
-                } catch (Exception e) {
-                    log.error("GameContentExpansion rule row: " + e);
-                }
-            }
         }
     }
     _GUI____RenderRuleField_last_max_width = Mathf.Min(r2.width * 0.5f, _GUI____RenderRuleField_cur_max_width);
-}
-if (!searching) {
-    try {
-        Together.Integration.GameContentExpansionBridge.DrawRulesBottomSection?.Invoke();
-    } catch (Exception e) {
-        log.error("GameContentExpansion rules section: " + e);
-    }
 }
 GUILayout.EndScrollView();
 
@@ -1822,13 +1802,6 @@ internal static int _GUI____RenderRuleField_PresetChosen = 0;
 internal static string _GUI____RenderRuleField_PresetName = "";
 static float _GUI____RenderRuleField_last_max_width = 300;
 static float _GUI____RenderRuleField_cur_max_width = 0;
-
-// GCE's native-looking extra row reports its label width here so the whole
-// rules list aligns on the next frame.
-internal static void ReportExternalRuleLabelWidth(float width) {
-    if (width > _GUI____RenderRuleField_cur_max_width)
-        _GUI____RenderRuleField_cur_max_width = width;
-}
 
 static void _GUI____RenderRuleField(FieldInfo fld, bool can_edit, in Rect r2) {
 

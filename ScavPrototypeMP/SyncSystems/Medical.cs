@@ -15,7 +15,6 @@ using UnityEngine.PlayerLoop;
 using UnityEngine.UI;
 using static Mono.Security.X509.X520;
 using static WoundView;
-using Together.Integration;
 
 namespace Together;
 
@@ -53,7 +52,7 @@ set => pb1[5] = value;
 }
 
 
-private int shrapnel;
+private byte shrapnel;
 
 private byte compressednumfurBloodAmount;
 public float furBloodAmount { get { return compressednumfurBloodAmount / 25.5f; } set { compressednumfurBloodAmount = (byte)(Mathf.Clamp(value, 0f, 10f) * 25.5f); } }
@@ -94,7 +93,7 @@ prosthetic = new ProstheticHealthState(limb.prostheticInfo);
 #endif
 dismembered = limb.dismembered;
 
-shrapnel = limb.shrapnel;
+shrapnel = (byte)Mathf.Clamp(limb.shrapnel, 0, 5);
 infected = limb.infected;
 muscleHealth = limb.muscleHealth;
 skinHealth = limb.skinHealth;
@@ -270,17 +269,6 @@ MinigameMPManager.NoteSlow("health bandage by " + limb.bandageSlowAmount.ToStrin
 
 limb.furBloodAmount = furBloodAmount;
 limb.shrapnel = shrapnel;
-// If this peer does not have the shard module, collapse packed source data
-// back to a vanilla-safe count. The new 4-bit layout has no low-byte total,
-// so use the vanilla maximum; the old 3-bit layout still carries it.
-if (GameContentExpansionBridge.ShardTotal == null) {
-bool oldPacked = (shrapnel & (1 << 30)) != 0;
-bool newPacked = (shrapnel & (1 << 29)) != 0;
-if (oldPacked)
-limb.shrapnel = Mathf.Clamp(shrapnel & 0xFF, 0, 5);
-else if (newPacked)
-limb.shrapnel = 5;
-}
 limb.infected = infected;
 limb.muscleHealth = muscleHealth;
 limb.skinHealth = skinHealth;

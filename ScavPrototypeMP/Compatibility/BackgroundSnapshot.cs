@@ -12,10 +12,6 @@ using Object = UnityEngine.Object;
 
 namespace Together;
 
-// Marks a runtime-generated background whose live entity packet was already
-// sent. The marker dies with the instance, so a reloaded world re-sends.
-internal sealed class GeneratedBackgroundLiveSynced : MonoBehaviour { }
-
 internal static class BackgroundSnapshot {
     const string Tag = BuildingEntity_Start_MultiplayerPatch.identified_bg_prefix + "SNAP:";
     static readonly HashSet<string> loggedTemplates = new();
@@ -133,32 +129,6 @@ internal static class BackgroundSnapshot {
         }
         log.l($"SAVE-EXIT: backgrounds captured count={document.backgrounds.Count} skipped={skipped} sleeping={sleeping} logicalActive={document.backgrounds.Count(b => b.active)} layer={document.biome}");
         if (skipped != 0) throw new InvalidDataException($"Cannot save the complete layer: {skipped} background structures could not be captured. Staying in the world.");
-    }
-
-    // Runtime-generated backgrounds (GCE team-spawn lifepods) are not part of
-    // the client's seeded world. Register the exact instance with the live
-    // entity stream so the client resolves the same SNAP resource at the same
-    // pose; the normal checkpoint capture then saves/restores it.
-    internal static void RegisterGenerated(Vector2 around, float radius) {
-        if (!Net.IsRunning || !Net.IsServer || WorldGeneration.world == null) return;
-        float maxDistance = radius * radius;
-        foreach (var map in SceneBackgrounds()) {
-            if (map == null) continue;
-            if (((Vector2)map.transform.position - around).sqrMagnitude > maxDistance) continue;
-            var building = map.GetComponent<BuildingEntity>();
-            if (building == null || !IsResourceId(building.id)) continue;
-            if (map.GetComponent<GeneratedBackgroundLiveSynced>() != null) continue;
-            try {
-                var sync = NetObjectRegistry.Server_EnsureItemIsNetworkRegistered(map.gameObject);
-                if (sync != null && !sync.IsDestroyed) {
-                    sync.WriteObjectIntoPacket();
-                    map.gameObject.AddComponent<GeneratedBackgroundLiveSynced>();
-                    log.l($"LIVE: background registered id={building.id} pos=({map.transform.position.x:F3},{map.transform.position.y:F3})");
-                }
-            } catch (Exception ex) {
-                log.warn($"LIVE: background registration failed id={building.id} pos={map.transform.position}: {ex.Message}");
-            }
-        }
     }
 
     internal static void ValidateForRestore(WorldObjectDocument document) {

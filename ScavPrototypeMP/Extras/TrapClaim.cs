@@ -4,7 +4,6 @@ using LiteNetLib;
 using LiteNetLib.Utils;
 using System.Collections.Generic;
 using UnityEngine;
-using Together.Integration;
 using Random = UnityEngine.Random;
 
 namespace Together;
@@ -664,15 +663,13 @@ if (local) {
 limb.body.lastTimeStepVelocity = ((Vector2)limb.body.transform.position - param.position).normalized * param.velocity;
 limb.body.Ragdoll();
 }
-if (!GameContentExpansionBridge.TryShardExplosion(limb, param.shrapnelChance, param.bleedChance)) {
 if (!limb.hasShrapnel)
 limb.shrapnel = Random.value < param.shrapnelChance ? 5 : 0;
-if (Random.Range(0f, 1f) < param.bleedChance)
-limb.bleedAmount += param.bleedAmount.RandomFromRange() / armor;
-}
 limb.DamageWearables(param.shrapnelChance);
 if (limb.isVital && Random.value < 0.5f)
 limb.body.internalBleeding += param.muscleDamage.RandomFromRange() * 0.4f / armor;
+if (Random.Range(0f, 1f) < param.bleedChance)
+limb.bleedAmount += param.bleedAmount.RandomFromRange() / armor;
 if (Random.Range(0f, 1f) < param.boneBreakChance / armor)
 limb.BreakBone();
 if (Random.Range(0f, 1f) < param.dislocationChance / armor)
@@ -1487,20 +1484,12 @@ if (JoinSpawnProtection.BlocksDamage(limb?.body)) return;
 if (limb == null) {
 return;
 }
-// GCE owns the glass path whenever its hook is installed. Do not use the
-// hook's return value here: older builds return false at the shard cap, and
-// the vanilla branch below writes limb.shrapnel = 5, wiping packed shards.
-var glassHook = GameContentExpansionBridge.ShardGlass;
-if (glassHook == null) {
 limb.skinHealth -= Random.Range(25f, 40f);
 limb.muscleHealth -= 20f;
 limb.bleedAmount += Random.Range(5f, 20f);
 limb.pain += 80f;
 limb.shrapnel = 5;
 limb.body.adrenaline = 70f;
-} else {
-glassHook(limb);
-}
 limb.CreateTemporarySprite(Resources.Load<Sprite>("Special/footglass"), 0f, null, scaleLimb: false, 60f, (Limb x) => !x.hasShrapnel);
 if (WoundView.view != null) {
 WoundView.view.AddImageToLimb(limb, Resources.Load<Sprite>("Special/footglasshealthpanel"), flip: false, (Limb x) => !x.hasShrapnel || x.dismembered);
@@ -1523,7 +1512,7 @@ FinishGlass(si.go != null ? si.go.GetComponentInChildren<GroundGlass>(true) : nu
 } else glassGone.Add(id.id);
 if (!fresh || mask == 0) return true;
 } else if (!TakeWindow(KindGlass, nb.netId, nb.netId, false, GlassWindow)) return false;
-Each(nb.body, mask, limb => { if (limb != null && (GameContentExpansionBridge.ShardGlass != null || !limb.hasShrapnel)) ApplyGlassLimb(limb); });
+Each(nb.body, mask, limb => { if (limb != null && !limb.hasShrapnel) ApplyGlassLimb(limb); });
 Publish(nb);
 return true;
 }
@@ -1696,7 +1685,7 @@ return false;
 turretNext[key] = now + 0.15f;
 if (turretNext.Count > 400)
 turretNext.Clear();
-Each(nb.body, mask, limb => TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(limb, null, false, GameContentExpansionBridge.ShardCatTurret));
+Each(nb.body, mask, limb => TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(limb, null, false));
 Publish(nb);
 return true;
 }
@@ -1712,7 +1701,7 @@ gun.cooldown = 6f;
 gun.didReload = false;
 PlayGun(gun);
 Relay(KindGun, id, 6f);
-Each(nb.body, mask, limb => TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(limb, null, false, GameContentExpansionBridge.ShardCatGunmine));
+Each(nb.body, mask, limb => TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(limb, null, false));
 Publish(nb);
 return true;
 }

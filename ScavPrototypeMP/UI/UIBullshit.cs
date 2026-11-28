@@ -2379,7 +2379,7 @@ if (Net.IsRunning && locplr != null) {
 
 
 if (Util.IsWorldGenerated()) {
-if (!Con.IsConsoleOpen() && !(Integration.GameContentExpansionBridge.SuppressPointFinger && Integration.GameContentExpansionBridge.SuppressPointFingerFrame == Time.frameCount) && UnityEngine.Input.GetKeyDown(KeyBinds.GetBind(CoopKeybinds.pointfingerat))) {
+if (!Con.IsConsoleOpen() && UnityEngine.Input.GetKeyDown(KeyBinds.GetBind(CoopKeybinds.pointfingerat))) {
 
 Vector2 pos = (Vector2)Camera.main.ScreenToWorldPoint(Input.mousePosition);
 

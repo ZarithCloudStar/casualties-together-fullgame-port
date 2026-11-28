@@ -18,11 +18,6 @@ namespace Together.UI.TeammateList {
         // lost connection uses 3x wound-open distance; click-to-open still uses 1x.
         private const float RangeMult = 3f;
 
-        // GCE quick slots use Shift+digit while the cursor is over an item.
-        // Resolve the dependency softly so Together still works without GCE.
-        private static Type gceQuickSlotsType;
-        private static MethodInfo gceQuickSlotsHover;
-
         private static string LostConnection => SkinLocale.T("Lost Connection", "信号丢失");
 
         private static string ChipNotDetected => SkinLocale.T("Chip Not Detected", "未检测到芯片");
@@ -321,9 +316,6 @@ namespace Together.UI.TeammateList {
                 num = 3;
             }
             if (num < 0) return;
-            // When the cursor is on an item, GCE's Shift+digit binding owns the
-            // gesture. Without an item, the original teammate shortcut runs.
-            if (GceQuickSlotsHoveringItem()) return;
             OpenAt(_page * 4 + num);
         }
 
@@ -1013,25 +1005,6 @@ namespace Together.UI.TeammateList {
                 return line;
             }
             return line.Substring(0, num);
-        }
-
-        private static bool GceQuickSlotsHoveringItem() {
-            try {
-                if (gceQuickSlotsType == null) {
-                    foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies()) {
-                        var type = assembly.GetType("GameContentExpansion.Compatibility.QuickSlots", false);
-                        if (type == null) continue;
-                        gceQuickSlotsType = type;
-                        gceQuickSlotsHover = type.GetMethod("IsHoveringItemForHotkey",
-                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-                        break;
-                    }
-                }
-                if (gceQuickSlotsHover == null) return false;
-                return gceQuickSlotsHover.Invoke(null, null) is bool hovering && hovering;
-            } catch {
-                return false;
-            }
         }
 
         private static bool Typing() {

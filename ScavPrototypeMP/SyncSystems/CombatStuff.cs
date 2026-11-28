@@ -11,7 +11,6 @@ using System.Reflection;
 using System.Reflection.Emit;
 using Unity.VisualScripting;
 using UnityEngine;
-using Together.Integration;
 using static GunScript;
 using Random = UnityEngine.Random;
 
@@ -2107,7 +2106,7 @@ if (suicide && Net.IsServer) {
 if (!hitLimbs.Contains(npc.head)) {
 //log.l($"suicide gunshot didnt hit the head lol, forcing it. ");
 
-TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(npc.head, gst, false, GameContentExpansionBridge.ShardCatPvP);
+TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(npc.head, gst, false);
 }
 }
 
@@ -2509,7 +2508,7 @@ var hitLimbsDuplicateCount = hitLimbs.GroupBy(x => x, ReferenceEqualityComparer.
 
 Dictionary<NetBody, float> plrdamages = new();
 foreach (var limb in hitLimbs) {
-var dmg = TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(limb, gst, true, GameContentExpansionBridge.ShardCatPvP);
+var dmg = TurretScript_Shoot_MultiplayerPatch.Stolen_ShootApplyDamageLimb(limb, gst, true);
 
 if (limb.TryGetNetBody(out var nb)) {
 if (!plrdamages.ContainsKey(nb)) {
@@ -2626,12 +2625,11 @@ return damage;
 
 
 //OG: TurretScript.Shoot V5t4  the part where it applies damage to body // TODO TS IS OUTDATED  FireInfo.playerDamageMultiplier WAS ADDED, BUT IS IT USED THO?
-public static float Stolen_ShootApplyDamageLimb(Limb limb, TrackerGunScript gst, bool use_pvp_damage_model, int shardCategory = GameContentExpansionBridge.ShardCatPvP) {
+public static float Stolen_ShootApplyDamageLimb(Limb limb, TrackerGunScript gst, bool use_pvp_damage_model) {
 #if FULLGAME
 if (JoinSpawnProtection.BlocksDamage(limb.body)) return 0f;
 #endif
-bool gce = GameContentExpansionBridge.ShardHit != null;
-if (!gce) limb.body.adrenaline = 100f;
+limb.body.adrenaline = 100f;
 
 var armor = limb.GetArmorReduction();
 
@@ -2645,44 +2643,35 @@ if (use_pvp_damage_model) { // SLIGHTLY NERFED DAMAGE FOR MP FRIENDLY FIRE
 armor /= (rule_mult == 0 ? 0.00001f : rule_mult);
 
 if (rule_mult != 0) {
+limb.pain += Random.Range(50f, 70f) / armor;
+
 damage = gst.og.animalDamage / armor * 0.5f;
 
-if (!gce) {
-limb.pain += Random.Range(50f, 70f) / armor;
 limb.skinHealth -= damage;
 limb.muscleHealth -= damage;
 limb.bleedAmount += Random.Range(30f, 40f) / armor;
 limb.shrapnel = Math.Max(limb.shrapnel, Random.Range(0, (int)Mathf.Clamp(5f * rule_mult, 1, 5)));
-}
 
 limb.DamageWearables(0.8f * rule_mult);
 }
 
 } else {// ORIGINAL TURRET DAMAGE
 rule_mult = 1;
+limb.pain += Random.Range(80f, 100f) / armor;
+
 damage = Random.Range(70f, 100f) / armor; // for completeness
 
-if (!gce) {
-limb.pain += Random.Range(80f, 100f) / armor;
 limb.skinHealth -= damage;
 limb.muscleHealth -= Random.Range(70f, 100f) / armor;
 limb.bleedAmount += Random.Range(30f, 40f) / armor;
 limb.shrapnel = 5;
-}
 
 limb.DamageWearables(1f);
 }
 if (limb.isVital || limb.isHead) {
 limb.body.internalBleeding += Random.Range(18f, 22f) / armor;
 }
-// GCE owns the new bullet totals. Apply them before the native fracture/head
-// rolls so BreakBone/Dislocate can add their pain and adrenaline afterwards.
-if (gce && (use_pvp_damage_model == false || rule_mult != 0)) {
-GameContentExpansionBridge.TryShardHit(limb, shardCategory);
-}
-float breakChance = 0.3f * rule_mult;
-if (gce) breakChance /= Mathf.Max(1f, limb.GetArmorReduction());
-if (Random.Range(0f, 1f) < breakChance) {
+if (Random.Range(0f, 1f) < 0.3f * rule_mult) {
 limb.BreakBone();
 }
 if (limb.isHead) {

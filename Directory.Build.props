@@ -4,13 +4,13 @@
 	<PropertyGroup>
 
 		<!-- Single-player / multiplayer split, separate save pages, room leave flow. -->
-		<ModVersion>5.5.5-cu-port-bugfix1</ModVersion>
+		<ModVersion>5.5.5-cu-port-bugfix1-nogce</ModVersion>
 		<FullModVersion>$(ModVersion)</FullModVersion>
 		<!-- Wire/protocol identity; intentionally separate from the package version. -->
-		<!-- 5.5.5 base + in-tree shard optimization wire layout. -->
-		<NetworkVersion>5.5.5-cu-port-fix1</NetworkVersion>
+		<!-- 5.5.5 base + ze bugfix1, GCE bridge and GCE wire fields removed. -->
+		<NetworkVersion>5.5.5-cu-port-fix1-nogce</NetworkVersion>
 		<!-- Release identity for the local update checker only; never changes the wire version. -->
-		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.5-cu-port-bugfix1</UpdateReleaseVersion>
+		<UpdateReleaseVersion Condition="'$(UpdateReleaseVersion)' == ''">5.5.5-cu-port-bugfix1-nogce</UpdateReleaseVersion>
 
 		<!-- VS/solution builds set SolutionDir; direct `dotnet build <project>` does not. -->
 		<SlnRoot Condition="'$(SlnRoot)' == '' and '$(SolutionDir)' != ''">$(SolutionDir)</SlnRoot>

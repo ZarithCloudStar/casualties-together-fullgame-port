@@ -15,7 +15,6 @@ using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using static BandageMinigame;
 using static Together.MinigameMPManager;
-using Together.Integration;
 using Random = UnityEngine.Random;
 
 
@@ -68,19 +67,13 @@ maxdist = SharedMain.max_player_interaction_distance * 1.7f;
 
 public class ShrapnelMinigameSession : _LimbMedicalMinigameSession {
 public readonly List<Vector2> shrapnel_locations = new();
-public readonly List<int> shrapnel_categories = new();
-public readonly List<bool> removed = new();
-public readonly List<bool> bled = new();
 
 public readonly List<(double, ScavPlayer)> last_shrapnel_movement = new();
 
 public override void Init() {
 base.Init();
 
-// If the shard module is not active, keep the old five-slot protocol:
-// native clients have exactly five UI objects and hide the unused ones.
-if (GameContentExpansionBridge.ShardTotal == null) {
-int visible = Mathf.Clamp(GameContentExpansionBridge.GetShardTotal(limb), 0, 5);
+int visible = Mathf.Clamp(limb.shrapnel, 0, 5);
 int hidden = 5 - visible;
 for (int i = 0; i < 5; i++) {
 Vector2 pos = i switch {
@@ -96,39 +89,6 @@ hidden--;
 pos += Vector2.up * 2500f;
 }
 shrapnel_locations.Add(pos);
-shrapnel_categories.Add(4);
-removed.Add(false);
-bled.Add(false);
-last_shrapnel_movement.Add((0.0, null));
-}
-return;
-}
-
-int total = GameContentExpansionBridge.GetShardTotal(limb);
-if (total <= 0) return;
-var categories = GameContentExpansionBridge.GetShardCategories(limb) ?? Array.Empty<int>();
-for (int i = 0; i < total; i++) {
-int col = i % 5;
-int row = i / 5;
-Vector2 pos;
-if (i < 5) {
-pos = i switch {
-0 => new Vector2(-248f, -316.85f),
-1 => new Vector2(-143f, -316.85f),
-2 => new Vector2(0f, -316.85004f),
-3 => new Vector2(116f, -316.85004f),
-_ => new Vector2(208f, -316.85f),
-};
-} else {
-float rowShift = (row % 2 == 0) ? -26f : 26f;
-pos = new Vector2(-248f + rowShift + col * 104f, -316.85f);
-}
-pos += Random.insideUnitCircle * 20f;
-if (pos.y >= 35f) pos.y = 30f;
-shrapnel_locations.Add(pos);
-shrapnel_categories.Add(i < categories.Length ? categories[i] : 4);
-removed.Add(false);
-bled.Add(false);
 last_shrapnel_movement.Add((0.0, null));
 }
 }
@@ -258,31 +218,15 @@ new_pos = new Vector2(new_pos.x, -364f);
 
 sms.shrapnel_locations[shrap_index] = new_pos;
 
-int oldTotal = GameContentExpansionBridge.GetShardTotal(sms.limb);
-bool isRemoved = new_pos.y >= 35f;
-if (isRemoved && !sms.removed[shrap_index]) {
-sms.removed[shrap_index] = true;
-sms.bled[shrap_index] = true;
-GameContentExpansionBridge.RemoveShard(sms.limb, sms.shrapnel_categories[shrap_index], true);
-} else if (!isRemoved && sms.removed[shrap_index]) {
-bool hasShardHook = GameContentExpansionBridge.ShardAdded != null;
-bool added = GameContentExpansionBridge.AddShard(sms.limb, sms.shrapnel_categories[shrap_index]);
-if (added || !hasShardHook) {
-sms.removed[shrap_index] = false;
-} else {
-// Cap rejected the re-add; keep it marked removed so a later move can retry.
-NoteSlow("shrapnel re-add rejected at cap");
-}
-}
-
+int oldTotal = sms.limb.shrapnel;
 int num = 0;
 foreach (Vector2 pos in sms.shrapnel_locations) {
 if (pos.y < 35f) {
 num++;
 }
 }
-if (GameContentExpansionBridge.ShardTotal == null) sms.limb.shrapnel = num;
-int newTotal = GameContentExpansionBridge.GetShardTotal(sms.limb);
+sms.limb.shrapnel = num;
+int newTotal = sms.limb.shrapnel;
 if (oldTotal != newTotal && sms.limb.TryGetNetBody(out NetBody nb)) {
 MedicalSync.Server_QueueSendCharacterHealth(nb);
 }
@@ -1318,7 +1262,7 @@ return null;
 } else if (realtype == typeof(ShrapnelMinigame) || realtype == typeof(DislocationMinigame)) {
 if (objnet.TryGetNetBodyAndLimb(out NetBody target_pb, out Limb target_limb) && KM.DistanceCheck(pb.body, target_pb.body, 20)) {
 
-if (realtype == typeof(ShrapnelMinigame) && GameContentExpansionBridge.GetShardTotal(target_limb) > 0) {
+if (realtype == typeof(ShrapnelMinigame) && target_limb.shrapnel > 0) {
 mgsess = Server_GetSessionForObject<ShrapnelMinigameSession>(target_limb.gameObject, realtype_id, plr);
 } else if (realtype == typeof(DislocationMinigame) && target_limb.dislocated) {
 mgsess = Server_GetSessionForObject<DislocationMinigameSession>(target_limb.gameObject, realtype_id, plr);
@@ -1714,7 +1658,7 @@ var l = WaterContainerItem_Inject_MultiplayerPatch.listen_to_limb;
 var pb = l.body.GetComponent<NetBody>();
 if (pb == null) return false;
 l.GetCoUtilsInstance().SelectForMPOverride();
-if (GameContentExpansionBridge.HasShardNeedle(l) && l.pain > 20f) {
+if (l.shrapnel > 0 && l.pain > 20f) {
 if (NetObjectRegistry.TryGetSyncInfo(Minigame.game.currentItem.gameObject, out SyncInfo si)) {
 SyringeMinigame_Update_MultiplayerPatch.Client_SendCurrentInjectedAmount(true);
 Multiplayer.Client_SendSimpleMessageToServer((byte)NetmsgId.SERVER_SyringMinigame_BrokeNeedle, si.syncId, pb.netId, Util.GetLimbIndex(l), true);
@@ -1890,7 +1834,7 @@ reader.Get(out byte limbid);
 if (MedicalSync.Server_CheckCanHealerUseItemForLimb(clientId, targetplr, limbid, needleid, out ScavPlayer plr, out NetBody targetsci, out SyncInfo si)) {
 Limb limb = targetsci.body.limbs[limbid];
 
-if (GameContentExpansionBridge.HasShardNeedle(limb)) {//needle was already broken
+if (limb.shrapnel == 1) {//needle was already broken
 return;
 }
 
@@ -1900,7 +1844,6 @@ DebugHelp.OnNetEvent(plr.body.transform.position, $"S: broke needle oops {plr.pl
 
 if (!plr.IsLocal) {
 //OG: SyringeMinigame.Update   V5t4   it ends mingame
-if (!GameContentExpansionBridge.TryShardNeedle(limb))
 limb.shrapnel = Math.Max(limb.shrapnel, 1);
 limb.pain += 20f;
 }
